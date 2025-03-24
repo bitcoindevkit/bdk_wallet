@@ -2166,8 +2166,12 @@ impl Wallet {
 
         let prev_output = utxo.outpoint;
         if let Some(prev_tx) = self.indexed_graph.graph().get_tx(prev_output.txid) {
+            // We want to check that the prevout actually exists in the tx before continuing.
+            let prevout = prev_tx.output.get(prev_output.vout as usize).ok_or(
+                MiniscriptPsbtError::UtxoUpdate(miniscript::psbt::UtxoUpdateError::UtxoCheck),
+            )?;
             if desc.is_witness() || desc.is_taproot() {
-                psbt_input.witness_utxo = Some(prev_tx.output[prev_output.vout as usize].clone());
+                psbt_input.witness_utxo = Some(prevout.clone());
             }
             if !desc.is_taproot() && (!desc.is_witness() || !only_witness_utxo) {
                 psbt_input.non_witness_utxo = Some(prev_tx.as_ref().clone());
