@@ -8,8 +8,8 @@ use bdk_wallet::{
     KeychainKind, Wallet,
 };
 use clap::{self, Parser};
-use std::{path::PathBuf, sync::mpsc::sync_channel, thread::spawn, time::Instant};
 use serde_json::json;
+use std::{path::PathBuf, sync::mpsc::sync_channel, thread::spawn, time::Instant};
 
 const DB_MAGIC: &str = "bdk-rpc-wallet-example";
 
@@ -192,7 +192,7 @@ fn main() -> anyhow::Result<()> {
             }
         }
     }
-    
+
     let wallet_tip_end = wallet.latest_checkpoint();
     let balance = wallet.balance();
     println!(
