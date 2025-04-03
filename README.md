@@ -35,15 +35,15 @@ It is built upon the excellent [`rust-bitcoin`] and [`rust-miniscript`] crates.
 
 There is currently only one published crate in this repository:
 
-- [`wallet`](./crates/wallet): Contains the central high level `Wallet` type that is built from the low-level mechanisms provided by the other components.
+- [`wallet`](./wallet): Contains the central high level `Wallet` type that is built from the low-level mechanisms provided by the other components.
   
 Crates that `bdk_wallet` depends on are found in the [`bdk`] repository.
 
-Fully working examples of how to use these components are in `/example-crates`:
+Fully working examples of how to use these components are in `/examples`:
 
-- [`example_wallet_esplora_blocking`](./example-crates/example_wallet_esplora_blocking): Uses the `Wallet` to sync and spend using the Esplora blocking interface.
-- [`example_wallet_esplora_async`](./example-crates/example_wallet_esplora_async): Uses the `Wallet` to sync and spend using the Esplora asynchronous interface.
-- [`example_wallet_electrum`](./example-crates/example_wallet_electrum): Uses the `Wallet` to sync and spend using Electrum.
+- [`example_wallet_esplora_blocking`](examples/example_wallet_esplora_blocking): Uses the `Wallet` to sync and spend using the Esplora blocking interface.
+- [`example_wallet_esplora_async`](examples/example_wallet_esplora_async): Uses the `Wallet` to sync and spend using the Esplora asynchronous interface.
+- [`example_wallet_electrum`](examples/example_wallet_electrum): Uses the `Wallet` to sync and spend using Electrum.
 
 [`bdk`]: https://github.com/bitcoindevkit/bdk
 [`rust-miniscript`]: https://github.com/rust-bitcoin/rust-miniscript

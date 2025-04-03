@@ -50,10 +50,10 @@ that the `Wallet` can use to update its view of the chain.
 
 **Examples**
 
-* [`example-crates/example_wallet_esplora_async`](https://github.com/bitcoindevkit/bdk/tree/master/example-crates/example_wallet_esplora_async)
-* [`example-crates/example_wallet_esplora_blocking`](https://github.com/bitcoindevkit/bdk/tree/master/example-crates/example_wallet_esplora_blocking)
-* [`example-crates/example_wallet_electrum`](https://github.com/bitcoindevkit/bdk/tree/master/example-crates/example_wallet_electrum)
-* [`example-crates/example_wallet_rpc`](https://github.com/bitcoindevkit/bdk/tree/master/example-crates/example_wallet_rpc)
+* [`examples/example_wallet_esplora_async`](https://github.com/bitcoindevkit/bdk/tree/master/examples/example_wallet_esplora_async)
+* [`examples/example_wallet_esplora_blocking`](https://github.com/bitcoindevkit/bdk/tree/master/examples/example_wallet_esplora_blocking)
+* [`examples/example_wallet_electrum`](https://github.com/bitcoindevkit/bdk/tree/master/examples/example_wallet_electrum)
+* [`examples/example_wallet_rpc`](https://github.com/bitcoindevkit/bdk/tree/master/examples/example_wallet_rpc)
 
 ## Persistence
 

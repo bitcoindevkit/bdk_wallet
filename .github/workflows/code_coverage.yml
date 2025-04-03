@@ -34,7 +34,7 @@ jobs:
       - name: Make coverage directory
         run: mkdir coverage
       - name: Run grcov
-        run: grcov . --binary-path ./target/debug/ -s . -t lcov --branch --ignore-not-existing --keep-only '**/crates/**' --ignore '**/tests/**' --ignore '**/examples/**' -o ./coverage/lcov.info
+        run: grcov . --binary-path ./target/debug/ -s . -t lcov --branch --ignore-not-existing --keep-only '**/wallet/**' --ignore '**/tests/**' --ignore '**/examples/**' -o ./coverage/lcov.info
       - name: Generate HTML coverage report
         run: genhtml -o coverage-report.html --ignore-errors unmapped ./coverage/lcov.info
       - name: Coveralls upload

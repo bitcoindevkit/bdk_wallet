@@ -1,11 +1,11 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/wallet",
-    "example-crates/example_wallet_electrum",
-    "example-crates/example_wallet_esplora_blocking",
-    "example-crates/example_wallet_esplora_async",
-    "example-crates/example_wallet_rpc",
+    "wallet",
+    "examples/example_wallet_electrum",
+    "examples/example_wallet_esplora_blocking",
+    "examples/example_wallet_esplora_async",
+    "examples/example_wallet_rpc",
 ]
 
 [workspace.package]
