@@ -2,6 +2,8 @@ on: [push, pull_request]
 
 name: CI
 
+permissions: {}
+
 jobs:
 
   prepare:
@@ -27,7 +29,6 @@ jobs:
           - version: ${{ needs.prepare.outputs.rust_version }}
             clippy: true
           - version: 1.63.0 # Overall MSRV
-          - version: 1.75.0 # Specific MSRV for `bdk_electrum`
         features:
           - --no-default-features --features miniscript/no-std,bdk_chain/hashbrown
           - --all-features
@@ -44,14 +45,6 @@ jobs:
             profile: minimal
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2.7.7
-      - name: Pin dependencies for 1.75
-        if: matrix.rust.version == '1.75.0'
-        run: |
-          cargo update -p home --precise "0.5.9"
-          cargo update -p native-tls --precise "0.2.13"
-          cargo update -p idna_adapter --precise "1.1.0"
-          cargo update -p base64ct --precise "1.6.0"
-          cargo update -p minreq --precise "2.13.2"
       - name: Pin dependencies for MSRV
         if: matrix.rust.version == '1.63.0'
         run: ./ci/pin-msrv.sh
@@ -59,13 +52,8 @@ jobs:
         env:
           MATRIX_RUST_VERSION: ${{ matrix.rust.version }}
         run: |
-          if [ $MATRIX_RUST_VERSION = '1.63.0' ]; then
-            cargo build --workspace --exclude 'example_*' --exclude 'bdk_electrum' ${{ matrix.features }}
-            cargo test --workspace --exclude 'example_*' --exclude 'bdk_electrum' ${{ matrix.features }}
-          else
-            cargo build --workspace --exclude 'example_*' ${{ matrix.features }}
-            cargo test --workspace --exclude 'example_*' ${{ matrix.features }}
-          fi
+          cargo build --workspace --exclude 'example_*' ${{ matrix.features }}
+          cargo test --workspace --exclude 'example_*' ${{ matrix.features }}
 
   check-no-std:
     needs: prepare
@@ -85,18 +73,10 @@ jobs:
           # target: "thumbv6m-none-eabi"
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2.7.7
-      - name: Check bdk_chain
-        working-directory: ./crates/chain
-        # TODO "--target thumbv6m-none-eabi" should work but currently does not
-        run: cargo check --no-default-features --features miniscript/no-std,hashbrown
       - name: Check bdk wallet
-        working-directory: ./crates/wallet
+        working-directory: ./wallet
         # TODO "--target thumbv6m-none-eabi" should work but currently does not
         run: cargo check --no-default-features --features miniscript/no-std,bdk_chain/hashbrown
-      - name: Check esplora
-        working-directory: ./crates/esplora
-        # TODO "--target thumbv6m-none-eabi" should work but currently does not
-        run: cargo check --no-default-features --features bdk_chain/hashbrown
 
   check-wasm:
     needs: prepare
@@ -124,11 +104,8 @@ jobs:
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2.7.7
       - name: Check bdk wallet
-        working-directory: ./crates/wallet
+        working-directory: ./wallet
         run: cargo check --target wasm32-unknown-unknown --no-default-features --features miniscript/no-std,bdk_chain/hashbrown
-      - name: Check esplora
-        working-directory: ./crates/esplora
-        run: cargo check --target wasm32-unknown-unknown --no-default-features --features bdk_core/hashbrown,async
 
   fmt:
     needs: prepare
@@ -179,10 +156,6 @@ jobs:
     strategy:
       matrix:
         example-dir:
-          - example_cli
-          - example_bitcoind_rpc_polling
-          - example_electrum
-          - example_esplora
           - example_wallet_electrum
           - example_wallet_esplora_async
           - example_wallet_esplora_blocking
@@ -201,5 +174,5 @@ jobs:
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2.7.7
       - name: Build
-        working-directory: example-crates/${{ matrix.example-dir }}
+        working-directory: examples/${{ matrix.example-dir }}
         run: cargo build
