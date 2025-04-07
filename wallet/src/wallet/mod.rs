@@ -19,8 +19,6 @@ use alloc::{
     sync::Arc,
     vec::Vec,
 };
-use core::{cmp::Ordering, fmt, mem, ops::Deref};
-
 use bdk_chain::{
     indexed_tx_graph,
     indexer::keychain_txout::KeychainTxOutIndex,
@@ -43,11 +41,13 @@ use bitcoin::{
     transaction, Address, Amount, Block, BlockHash, FeeRate, Network, OutPoint, Psbt, ScriptBuf,
     Sequence, Transaction, TxOut, Txid, Weight, Witness,
 };
+use core::{cmp::Ordering, fmt, mem, ops::Deref};
 use miniscript::{
     descriptor::KeyMap,
     psbt::{PsbtExt, PsbtInputExt, PsbtInputSatisfier},
 };
 use rand_core::RngCore;
+use std::collections::BTreeSet;
 
 mod changeset;
 pub mod coin_selection;
@@ -77,7 +77,13 @@ use crate::wallet::{
 
 // re-exports
 pub use bdk_chain::Balance;
+use bdk_tx::{
+    create_psbt, create_selection, CreatePsbtParams, CreateSelectionParams, InputCandidates,
+    InputGroup, Output,
+};
+use chain::KeychainIndexed;
 pub use changeset::ChangeSet;
+use miniscript::plan::Assets;
 pub use params::*;
 pub use persisted::*;
 pub use utils::IsDust;
@@ -2423,6 +2429,131 @@ impl Wallet {
             .chain_tip(self.chain.tip())
             .spks_from_indexer(&self.indexed_graph.index)
     }
+}
+
+pub struct TransactionParams {
+    pub outputs: Vec<(ScriptBuf, Amount)>,
+    pub target_feerate: FeeRate,
+    pub must_spend: Vec<LocalOutput>,
+    // cannot_spend: Vec<LocalOutput>,
+}
+
+/// Methods that use the bdk_tx crate to build transactions
+impl Wallet {
+    pub fn create_transaction(
+        &mut self,
+        outputs: Vec<(ScriptBuf, Amount)>,
+        target_feerate: FeeRate,
+    ) -> Result<Psbt, CreateBdkTxError> {
+        let local_outputs: Vec<LocalOutput> = self.list_unspent().collect();
+        let outpoints: Vec<KeychainIndexed<KeychainKind, OutPoint>> = local_outputs
+            .into_iter()
+            .map(|o| ((o.keychain, o.derivation_index), o.outpoint.clone()))
+            .collect();
+        // let descriptors = self.keychains();
+        let descriptors: Vec<(KeychainKind, &ExtendedDescriptor)> = self.keychains().collect();
+
+        let mut descriptors_map = BTreeMap::new();
+        let _ = descriptors.into_iter().for_each(|(kind, desc)| {
+            descriptors_map.insert(kind, desc.clone());
+        });
+        dbg!(&descriptors_map);
+
+        let input_candidates: Vec<InputGroup> = InputCandidates::new(
+            &self.tx_graph(),                            // tx_graph
+            &self.local_chain(),                         // chain
+            self.local_chain().tip().block_id().clone(), // chain_tip
+            outpoints,                                   // outpoints
+            descriptors_map,                             // descriptors
+            BTreeSet::default(),                         // allow_malleable
+            Assets::new(),                               // additional_assets
+        )
+        .unwrap()
+        .into_single_groups(|_| true);
+
+        let next_change_index: u32 = self.reveal_next_address(KeychainKind::Internal).index;
+        let public_change_descriptor = self.public_descriptor(KeychainKind::Internal);
+
+        let outputs_vector = outputs
+            .into_iter()
+            .map(|o| Output::with_script(o.0, o.1))
+            .collect::<Vec<_>>();
+
+        let (selection, metrics) = create_selection(CreateSelectionParams::new(
+            input_candidates,
+            public_change_descriptor
+                .at_derivation_index(next_change_index)
+                .map_err(|_| CreateBdkTxError::CannotCreateTx)?,
+            outputs_vector,
+            target_feerate,
+        ))
+        .map_err(|_| CreateBdkTxError::CannotCreateTx)?;
+
+        let (psbt, _) = create_psbt(CreatePsbtParams::new(selection))
+            .map_err(|_| CreateBdkTxError::CannotCreateTx)?;
+
+        Ok(psbt)
+    }
+
+    pub fn create_complex_transaction(
+        &mut self,
+        transaction_params: TransactionParams,
+    ) -> Result<Psbt, CreateBdkTxError> {
+        let local_outputs: Vec<LocalOutput> = self.list_unspent().collect();
+        let outpoints: Vec<KeychainIndexed<KeychainKind, OutPoint>> = local_outputs
+            .into_iter()
+            .map(|o| ((o.keychain, o.derivation_index), o.outpoint.clone()))
+            .collect();
+        // let descriptors = self.keychains();
+        let descriptors: Vec<(KeychainKind, &ExtendedDescriptor)> = self.keychains().collect();
+
+        let mut descriptors_map = BTreeMap::new();
+        let _ = descriptors.into_iter().for_each(|(kind, desc)| {
+            descriptors_map.insert(kind, desc.clone());
+        });
+        dbg!(&descriptors_map);
+
+        let input_candidates: Vec<InputGroup> = InputCandidates::new(
+            &self.tx_graph(),                            // tx_graph
+            &self.local_chain(),                         // chain
+            self.local_chain().tip().block_id().clone(), // chain_tip
+            outpoints,                                   // outpoints
+            descriptors_map,                             // descriptors
+            BTreeSet::default(),                         // allow_malleable
+            Assets::new(),                               // additional_assets
+        )
+        .unwrap()
+        .into_single_groups(|_| true);
+
+        let next_change_index: u32 = self.reveal_next_address(KeychainKind::Internal).index;
+        let public_change_descriptor = self.public_descriptor(KeychainKind::Internal);
+
+        let outputs_vector = transaction_params
+            .outputs
+            .into_iter()
+            .map(|o| Output::with_script(o.0, o.1))
+            .collect::<Vec<_>>();
+
+        let (selection, metrics) = create_selection(CreateSelectionParams::new(
+            input_candidates,
+            public_change_descriptor
+                .at_derivation_index(next_change_index)
+                .map_err(|_| CreateBdkTxError::CannotCreateTx)?,
+            outputs_vector,
+            transaction_params.target_feerate,
+        ))
+        .map_err(|_| CreateBdkTxError::CannotCreateTx)?;
+
+        let (psbt, _) = create_psbt(CreatePsbtParams::new(selection))
+            .map_err(|_| CreateBdkTxError::CannotCreateTx)?;
+
+        Ok(psbt)
+    }
+}
+
+#[derive(Debug)]
+pub enum CreateBdkTxError {
+    CannotCreateTx,
 }
 
 impl AsRef<bdk_chain::tx_graph::TxGraph<ConfirmationBlockTime>> for Wallet {

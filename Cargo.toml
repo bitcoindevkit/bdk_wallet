@@ -6,6 +6,7 @@ members = [
     "examples/example_wallet_esplora_blocking",
     "examples/example_wallet_esplora_async",
     "examples/example_wallet_rpc",
+    "examples/example_wallet_bdk_tx",
 ]
 
 [workspace.package]
