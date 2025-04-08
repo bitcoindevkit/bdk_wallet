@@ -72,7 +72,7 @@ use crate::wallet::{
     error::{BuildFeeBumpError, CreateTxError, MiniscriptPsbtError},
     signer::{SignOptions, SignerError, SignerOrdering, SignersContainer, TransactionSigner},
     tx_builder::{FeePolicy, TxBuilder, TxParams},
-    utils::{check_nsequence_rbf, After, Older, SecpCtx},
+    utils::{check_nsequence_rbf, After, Older, SecpCtx, TxDetails},
 };
 
 // re-exports
@@ -819,6 +819,45 @@ impl Wallet {
                 self.indexed_graph.index.outpoints().iter().cloned(),
             )
             .map(|((k, i), full_txo)| new_local_utxo(k, i, full_txo))
+    }
+
+    /// Build a [`TxDetails`] struct for a given transaction.
+    ///
+    /// If the transaction with txid [`Txid`] cannot be found in the wallet's transaction graph,
+    /// None is returned.
+    // #[cfg(feature = "std")]
+    pub fn get_tx_details(&self, txid: Txid) -> Option<TxDetails> {
+        let tx_graph = self.indexed_graph.graph();
+        let tx_index = &self.indexed_graph.index;
+
+        // It should be impossible to have more than 1 right? In which case I can use the `find()`
+        // method on the collection instead of collecting into a vector.
+
+        // This relies on the impossibility of having 2 transactions with the same Txid in the list
+        // canonical transactions but let me know if this is wrong!
+        let optional_tx: Option<CanonicalTx<Arc<Transaction>, ConfirmationBlockTime>> = tx_graph
+            .list_canonical_txs(&self.chain, self.chain.tip().block_id())
+            .filter(|c_tx| tx_index.is_tx_relevant(&c_tx.tx_node.tx))
+            .find(|tx| tx.tx_node.compute_txid() == txid);
+
+        let tx = optional_tx?;
+
+        let (sent, received) = self.sent_and_received(&tx.tx_node.tx);
+        let fee = self.calculate_fee(&tx.tx_node.tx).unwrap();
+        let fee_rate = self.calculate_fee_rate(&tx.tx_node.tx).unwrap();
+        let chain_position = tx.chain_position;
+
+        let tx_details: TxDetails = TxDetails {
+            txid,
+            received,
+            sent,
+            fee,
+            fee_rate,
+            chain_position,
+            tx: tx.tx_node.tx,
+        };
+
+        Some(tx_details)
     }
 
     /// List all relevant outputs (includes both spent and unspent, confirmed and unconfirmed).

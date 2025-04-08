@@ -4306,3 +4306,17 @@ fn test_wallet_transactions_relevant() {
     assert!(full_tx_count_before < full_tx_count_after);
     assert!(canonical_tx_count_before < canonical_tx_count_after);
 }
+
+#[test]
+fn test_tx_details_method() {
+    let (test_wallet, txid_1) = get_funded_wallet_wpkh();
+    let tx_details_1 = test_wallet.get_tx_details(txid_1);
+    // dbg!(&tx_details);
+
+    // Transaction id not part of the TxGraph
+    let txid_2 = Txid::from_raw_hash(Hash::all_zeros());
+    let tx_details_2 = test_wallet.get_tx_details(txid_2);
+
+    assert!(tx_details_1.is_some());
+    assert!(tx_details_2.is_none());
+}
