@@ -9,9 +9,12 @@
 // You may not use this file except in accordance with one or both of these
 // licenses.
 
+use alloc::sync::Arc;
 use bitcoin::secp256k1::{All, Secp256k1};
-use bitcoin::{absolute, relative, Amount, Script, Sequence};
-
+use bitcoin::{
+    absolute, relative, Amount, FeeRate, Script, Sequence, SignedAmount, Transaction, Txid,
+};
+use chain::{ChainPosition, ConfirmationBlockTime};
 use miniscript::{MiniscriptKey, Satisfier, ToPublicKey};
 
 use rand_core::RngCore;
@@ -132,6 +135,19 @@ pub(crate) fn shuffle_slice<T>(list: &mut [T], rng: &mut impl RngCore) {
 }
 
 pub(crate) type SecpCtx = Secp256k1<All>;
+
+/// Details about a transaction the wallet knows about.
+#[derive(Debug)]
+pub struct TxDetails {
+    pub txid: Txid,
+    pub received: Amount,
+    pub sent: Amount,
+    pub fee: Option<Amount>,
+    pub fee_rate: Option<FeeRate>,
+    pub balance_delta: SignedAmount,
+    pub chain_position: ChainPosition<ConfirmationBlockTime>,
+    pub tx: Arc<Transaction>,
+}
 
 #[cfg(test)]
 mod test {

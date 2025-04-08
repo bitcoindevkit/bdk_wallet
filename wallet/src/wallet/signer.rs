@@ -577,7 +577,7 @@ fn sign_psbt_schnorr(
     let keypair = match leaf_hash {
         None => keypair
             .tap_tweak(secp, psbt_input.tap_merkle_root)
-            .to_inner(),
+            .to_keypair(),
         Some(_) => keypair, // no tweak for script spend
     };
 

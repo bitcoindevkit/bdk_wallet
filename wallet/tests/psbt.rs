@@ -214,7 +214,7 @@ fn test_psbt_multiple_internalkey_signers() {
     let message = Message::from(sighash);
 
     // add tweak. this was taken from `signer::sign_psbt_schnorr`
-    let keypair = keypair.tap_tweak(&secp, None).to_inner();
+    let keypair = keypair.tap_tweak(&secp, None).to_keypair();
     let (xonlykey, _parity) = XOnlyPublicKey::from_keypair(&keypair);
 
     // Must verify if we used the correct key to sign

@@ -41,7 +41,7 @@ use bitcoin::{
     secp256k1::Secp256k1,
     sighash::{EcdsaSighashType, TapSighashType},
     transaction, Address, Amount, Block, BlockHash, FeeRate, Network, OutPoint, Psbt, ScriptBuf,
-    Sequence, Transaction, TxOut, Txid, Weight, Witness,
+    Sequence, SignedAmount, Transaction, TxOut, Txid, Weight, Witness,
 };
 use miniscript::{
     descriptor::KeyMap,
@@ -72,7 +72,7 @@ use crate::wallet::{
     error::{BuildFeeBumpError, CreateTxError, MiniscriptPsbtError},
     signer::{SignOptions, SignerError, SignerOrdering, SignersContainer, TransactionSigner},
     tx_builder::{FeePolicy, TxBuilder, TxParams},
-    utils::{check_nsequence_rbf, After, Older, SecpCtx},
+    utils::{check_nsequence_rbf, After, Older, SecpCtx, TxDetails},
 };
 
 // re-exports
@@ -820,6 +820,33 @@ impl Wallet {
                 self.indexed_graph.index.outpoints().iter().cloned(),
             )
             .map(|((k, i), full_txo)| new_local_utxo(k, i, full_txo))
+    }
+
+    /// Build a [`TxDetails`] struct for a given transaction.
+    ///
+    /// If the transaction with txid [`Txid`] cannot be found in the wallet's transaction graph,
+    /// `None` is returned.
+    pub fn get_tx_details(&self, txid: Txid) -> Option<TxDetails> {
+        let tx: WalletTx = self.transactions().find(|c| c.tx_node.txid == txid)?;
+
+        let (sent, received) = self.sent_and_received(&tx.tx_node.tx);
+        let fee: Option<Amount> = self.calculate_fee(&tx.tx_node.tx).ok();
+        let fee_rate: Option<FeeRate> = self.calculate_fee_rate(&tx.tx_node.tx).ok();
+        let balance_delta: SignedAmount = self.indexed_graph.index.net_value(&tx.tx_node.tx, ..);
+        let chain_position = tx.chain_position;
+
+        let tx_details: TxDetails = TxDetails {
+            txid,
+            received,
+            sent,
+            fee,
+            fee_rate,
+            balance_delta,
+            chain_position,
+            tx: tx.tx_node.tx,
+        };
+
+        Some(tx_details)
     }
 
     /// List all relevant outputs (includes both spent and unspent, confirmed and unconfirmed).
