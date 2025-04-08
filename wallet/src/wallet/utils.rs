@@ -9,9 +9,12 @@
 // You may not use this file except in accordance with one or both of these
 // licenses.
 
+use alloc::sync::Arc;
 use bitcoin::secp256k1::{All, Secp256k1};
-use bitcoin::{absolute, relative, Amount, Script, Sequence};
-
+use bitcoin::{
+    absolute, relative, Amount, FeeRate, Script, Sequence, SignedAmount, Transaction, Txid,
+};
+use chain::{ChainPosition, ConfirmationBlockTime};
 use miniscript::{MiniscriptKey, Satisfier, ToPublicKey};
 
 use rand_core::RngCore;
@@ -132,6 +135,33 @@ pub(crate) fn shuffle_slice<T>(list: &mut [T], rng: &mut impl RngCore) {
 }
 
 pub(crate) type SecpCtx = Secp256k1<All>;
+
+/// Details about a transaction affecting the wallet (relevant and canonical).
+#[derive(Debug)]
+pub struct TxDetails {
+    /// The transaction id.
+    pub txid: Txid,
+    /// The sum of the transaction input amounts that spend from previous outputs tracked by this
+    /// wallet.
+    pub sent: Amount,
+    /// The sum of the transaction outputs that send to script pubkeys tracked by this wallet.
+    pub received: Amount,
+    /// The fee paid for the transaction. Note that to calculate the fee for a transaction with
+    /// inputs not owned by this wallet you must manually insert the TxOut(s) into the tx graph
+    /// using the insert_txout function. If those are not available, the field will be `None`.
+    pub fee: Option<Amount>,
+    /// The fee rate paid for the transaction. Note that to calculate the fee rate for a
+    /// transaction with inputs not owned by this wallet you must manually insert the TxOut(s) into
+    /// the tx graph using the insert_txout function. If those are not available, the field will be
+    /// `None`.
+    pub fee_rate: Option<FeeRate>,
+    /// The net effect of the transaction on the balance of the wallet.
+    pub balance_delta: SignedAmount,
+    /// The position of the transaction in the chain.
+    pub chain_position: ChainPosition<ConfirmationBlockTime>,
+    /// The complete [`Transaction`].
+    pub tx: Arc<Transaction>,
+}
 
 #[cfg(test)]
 mod test {
