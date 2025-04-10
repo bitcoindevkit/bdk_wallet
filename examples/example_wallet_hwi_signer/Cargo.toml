@@ -1,0 +1,13 @@
+[package]
+name = "example_wallet_hwi_signer"
+version = "0.1.0"
+edition = "2021"
+authors.workspace = true
+
+[dependencies]
+bdk_wallet = { path = "../../wallet", features = ["file_store"] }
+bdk_bitcoind_rpc = { version = "0.18" }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros"] }
+
+async-hwi = "0.0.27"
+anyhow = "1"
