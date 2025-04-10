@@ -39,6 +39,7 @@ keys-bip39 = ["bip39"]
 rusqlite = ["bdk_chain/rusqlite"]
 file_store = ["bdk_file_store"]
 test-utils = ["std", "anyhow", "tempfile"]
+simulator = []
 
 [dev-dependencies]
 anyhow = "1"
@@ -52,6 +53,7 @@ ctrlc = "3.4.6"
 rand = "0.8"
 tempfile = "3"
 tokio = { version = "1.38.1", features = ["rt", "rt-multi-thread", "macros"] }
+async-hwi = { git = "https://github.com/wizardsardine/async-hwi", branch = "master"}
 
 [[example]]
 name = "mnemonic_to_descriptors"
@@ -74,3 +76,6 @@ name = "esplora_blocking"
 
 [[example]]
 name = "bitcoind_rpc"
+
+[[example]]
+name = "hwi_signer"
