@@ -65,6 +65,8 @@ that the `Wallet` can use to update its view of the chain.
 * [`examples/esplora_blocking`](https://github.com/bitcoindevkit/bdk_wallet/tree/master/examples/esplora_blocking)
 * [`examples/electrum`](https://github.com/bitcoindevkit/bdk_wallet/tree/master/examples/electrum)
 * [`examples/bitcoind_rpc`](https://github.com/bitcoindevkit/bdk_wallet/tree/master/examples/bitcoind_rpc)
+* [`examples/hwi_signer`](https://github.com/bitcoindevkit/bdk_wallet/tree/master/examples/hwi_signer)
+
 
 ## Persistence
 
