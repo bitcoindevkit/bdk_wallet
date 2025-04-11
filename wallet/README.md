@@ -65,13 +65,12 @@ To persist `Wallet` state data use a data store crate that reads and writes [`Ch
 
 **Example**
 
-<!-- compile_fail because outpoint and txout are fake variables -->
 ```rust,no_run
 use bdk_wallet::{bitcoin::Network, KeychainKind, ChangeSet, Wallet};
 
 // Open or create a new file store for wallet data.
-let mut db =
-    bdk_file_store::Store::<ChangeSet>::open_or_create_new(b"magic_bytes", "/tmp/my_wallet.db")
+let (mut db, _changeset) =
+    bdk_file_store::Store::<ChangeSet>::load_or_create(b"magic_bytes", "/tmp/my_wallet.db")
         .expect("create store");
 
 // Create a wallet with initial wallet data read from the file store.

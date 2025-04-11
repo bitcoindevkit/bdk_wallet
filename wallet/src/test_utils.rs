@@ -4,7 +4,7 @@ use alloc::string::ToString;
 use alloc::sync::Arc;
 use core::str::FromStr;
 
-use bdk_chain::{tx_graph, BlockId, ConfirmationBlockTime};
+use bdk_chain::{BlockId, ConfirmationBlockTime};
 use bitcoin::{
     absolute, hashes::Hash, transaction, Address, Amount, BlockHash, FeeRate, Network, OutPoint,
     Transaction, TxIn, TxOut, Txid,
@@ -312,43 +312,43 @@ pub fn insert_checkpoint(wallet: &mut Wallet, block: BlockId) {
         .unwrap();
 }
 
-/// Insert transaction
+/// Insert a transaction at the current system time.
 pub fn insert_tx(wallet: &mut Wallet, tx: Transaction) {
+    let txid = tx.compute_txid();
+    let seen_at = std::time::UNIX_EPOCH.elapsed().unwrap().as_secs();
+    let mut tx_update = chain::TxUpdate::default();
+    tx_update.txs = vec![Arc::new(tx)];
+    tx_update.seen_ats = [(txid, seen_at)].into();
     wallet
         .apply_update(Update {
-            tx_update: bdk_chain::TxUpdate {
-                txs: vec![Arc::new(tx)],
-                ..Default::default()
-            },
+            tx_update,
             ..Default::default()
         })
-        .unwrap();
+        .expect("failed to apply update");
 }
 
 /// Simulates confirming a tx with `txid` by applying an update to the wallet containing
 /// the given `anchor`. Note: to be considered confirmed the anchor block must exist in
 /// the current active chain.
 pub fn insert_anchor(wallet: &mut Wallet, txid: Txid, anchor: ConfirmationBlockTime) {
+    let mut tx_update = chain::TxUpdate::default();
+    tx_update.anchors = [(anchor, txid)].into();
     wallet
         .apply_update(Update {
-            tx_update: tx_graph::TxUpdate {
-                anchors: [(anchor, txid)].into(),
-                ..Default::default()
-            },
+            tx_update,
             ..Default::default()
         })
-        .unwrap();
+        .expect("failed to apply update");
 }
 
 /// Marks the given `txid` seen as unconfirmed at `seen_at`
 pub fn insert_seen_at(wallet: &mut Wallet, txid: Txid, seen_at: u64) {
+    let mut tx_update = chain::TxUpdate::default();
+    tx_update.seen_ats = [(txid, seen_at)].into();
     wallet
-        .apply_update(crate::Update {
-            tx_update: tx_graph::TxUpdate {
-                seen_ats: [(txid, seen_at)].into_iter().collect(),
-                ..Default::default()
-            },
+        .apply_update(Update {
+            tx_update,
             ..Default::default()
         })
-        .unwrap();
+        .expect("failed to apply update");
 }
