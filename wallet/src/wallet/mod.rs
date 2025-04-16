@@ -2373,7 +2373,10 @@ impl Wallet {
     ///
     /// The `start_time` is used to record the time that a mempool transaction was last seen
     /// (or evicted). See [`Wallet::start_sync_with_revealed_spks`] for more.
-    pub fn start_sync_at(&self, start_time: u64) -> SyncRequestBuilder<(KeychainKind, u32)> {
+    pub fn start_sync_with_revealed_spks_at(
+        &self,
+        start_time: u64,
+    ) -> SyncRequestBuilder<(KeychainKind, u32)> {
         use bdk_chain::keychain_txout::SyncRequestBuilderExt;
         SyncRequest::builder_at(start_time)
             .chain_tip(self.chain.tip())

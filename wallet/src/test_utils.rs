@@ -312,7 +312,9 @@ pub fn insert_checkpoint(wallet: &mut Wallet, block: BlockId) {
         .unwrap();
 }
 
-/// Insert a transaction at the current system time.
+/// Inserts a transaction into the local view, assuming it is currently present in the mempool.
+///
+/// This can be used, for example, to track a transaction immediately after it is broadcast.
 pub fn insert_tx(wallet: &mut Wallet, tx: Transaction) {
     let txid = tx.compute_txid();
     let seen_at = std::time::UNIX_EPOCH.elapsed().unwrap().as_secs();
