@@ -3,6 +3,8 @@ use bdk_chain::{
 };
 use miniscript::{Descriptor, DescriptorPublicKey};
 
+use super::unbroadcasted;
+
 type IndexedTxGraphChangeSet =
     indexed_tx_graph::ChangeSet<ConfirmationBlockTime, keychain_txout::ChangeSet>;
 
@@ -21,6 +23,8 @@ pub struct ChangeSet {
     pub tx_graph: tx_graph::ChangeSet<ConfirmationBlockTime>,
     /// Changes to [`KeychainTxOutIndex`](keychain_txout::KeychainTxOutIndex).
     pub indexer: keychain_txout::ChangeSet,
+    /// Changes to [`Unbroadcasted`](crate::unbroadcasted::Unbroadcasted).
+    pub unbroadcasted: unbroadcasted::ChangeSet,
 }
 
 impl Merge for ChangeSet {

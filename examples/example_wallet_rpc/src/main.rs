@@ -110,7 +110,7 @@ fn main() -> anyhow::Result<()> {
         start_load_wallet.elapsed().as_secs_f32()
     );
 
-    let balance = wallet.balance();
+    let balance = wallet.balance(wallet.include_unbroadcasted());
     println!("Wallet balance before syncing: {}", balance.total());
 
     let wallet_tip = wallet.latest_checkpoint();
@@ -173,7 +173,7 @@ fn main() -> anyhow::Result<()> {
         }
     }
     let wallet_tip_end = wallet.latest_checkpoint();
-    let balance = wallet.balance();
+    let balance = wallet.balance(wallet.include_unbroadcasted());
     println!(
         "Synced {} blocks in {}s",
         blocks_received,
@@ -187,8 +187,8 @@ fn main() -> anyhow::Result<()> {
     println!("Wallet balance is {}", balance.total());
     println!(
         "Wallet has {} transactions and {} utxos",
-        wallet.transactions().count(),
-        wallet.list_unspent().count()
+        wallet.transactions(wallet.include_unbroadcasted()).count(),
+        wallet.list_unspent(wallet.include_unbroadcasted()).count()
     );
 
     Ok(())

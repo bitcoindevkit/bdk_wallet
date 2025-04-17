@@ -128,12 +128,15 @@ impl FullyNodedExport {
         Self::is_compatible_with_core(&descriptor)?;
 
         let blockheight = if include_blockheight {
-            wallet.transactions().next().map_or(0, |canonical_tx| {
-                canonical_tx
-                    .chain_position
-                    .confirmation_height_upper_bound()
-                    .unwrap_or(0)
-            })
+            wallet
+                .transactions(wallet.include_unbroadcasted())
+                .next()
+                .map_or(0, |canonical_tx| {
+                    canonical_tx
+                        .chain_position
+                        .confirmation_height_upper_bound()
+                        .unwrap_or(0)
+                })
         } else {
             0
         };

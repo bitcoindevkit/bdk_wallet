@@ -8,7 +8,7 @@ edition = "2021"
 [dependencies]
 bdk_wallet = { path = "../../wallet", features = ["rusqlite"] }
 #bdk_esplora = { version = "0.20", features = ["async-https", "tokio"] }
-bdk_esplora = { git = "https://github.com/bitcoindevkit/bdk", rev = "b70758652d1c819c88d92765905d09e26b951ee2", features = ["async-https", "tokio"] }
-bdk_testenv = { git = "https://github.com/bitcoindevkit/bdk", rev = "b70758652d1c819c88d92765905d09e26b951ee2" }
+bdk_esplora = { git = "https://github.com/evanlinjin/bdk", branch = "superimposed_canonicalization", features = ["async-https", "tokio"] }
+bdk_testenv = { git = "https://github.com/evanlinjin/bdk", branch = "superimposed_canonicalization" }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros"] }
 anyhow = "1"

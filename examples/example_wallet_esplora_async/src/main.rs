@@ -154,8 +154,14 @@ async fn main() -> Result<(), anyhow::Error> {
     wallet.apply_update(resp)?;
     wallet.persist(&mut conn)?;
 
-    assert_eq!(wallet.balance().total(), Amount::ONE_BTC);
-    println!("Balance after send tx1: {}", wallet.balance().total());
+    assert_eq!(
+        wallet.balance(wallet.include_unbroadcasted()).total(),
+        Amount::ONE_BTC
+    );
+    println!(
+        "Balance after send tx1: {}",
+        wallet.balance(wallet.include_unbroadcasted()).total()
+    );
     // We should expect tx1 to occur in a future sync
     let exp_spk_txids = wallet
         .tx_graph()
@@ -189,8 +195,14 @@ async fn main() -> Result<(), anyhow::Error> {
     wallet.apply_update(resp)?;
     wallet.persist(&mut conn)?;
 
-    println!("Balance after send tx2: {}", wallet.balance().total());
-    assert_eq!(wallet.balance().total(), Amount::ZERO);
+    println!(
+        "Balance after send tx2: {}",
+        wallet.balance(wallet.include_unbroadcasted()).total()
+    );
+    assert_eq!(
+        wallet.balance(wallet.include_unbroadcasted()).total(),
+        Amount::ZERO
+    );
 
     // Load the persisted wallet
     {
@@ -201,13 +213,21 @@ async fn main() -> Result<(), anyhow::Error> {
         // tx1 is there, but is not canonical
         assert!(wallet.tx_graph().full_txs().any(|node| node.txid == txid1));
         assert!(wallet
-            .tx_graph()
-            .list_canonical_txs(wallet.local_chain(), wallet.local_chain().tip().block_id())
+            .transactions(wallet.include_unbroadcasted())
             .next()
             .is_none());
-        assert!(wallet.list_unspent().next().is_none());
-        assert_eq!(wallet.balance().total(), Amount::ZERO);
-        println!("Balance after load wallet: {}", wallet.balance().total());
+        assert!(wallet
+            .list_unspent(wallet.include_unbroadcasted())
+            .next()
+            .is_none());
+        assert_eq!(
+            wallet.balance(wallet.include_unbroadcasted()).total(),
+            Amount::ZERO
+        );
+        println!(
+            "Balance after load wallet: {}",
+            wallet.balance(wallet.include_unbroadcasted()).total()
+        );
     }
 
     Ok(())

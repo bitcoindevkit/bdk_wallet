@@ -28,14 +28,14 @@ serde_json = { version = "^1.0" }
 bip39 = { version = "2.0", optional = true }
 
 [dependencies.bdk_chain]
-git = "https://github.com/bitcoindevkit/bdk"
-rev = "b70758652d1c819c88d92765905d09e26b951ee2"
+git = "https://github.com/evanlinjin/bdk"
+branch = "superimposed_canonicalization"
 default-features = false
 features = ["miniscript", "serde"]
 
 [dependencies.bdk_file_store]
-git = "https://github.com/bitcoindevkit/bdk"
-rev = "b70758652d1c819c88d92765905d09e26b951ee2"
+git = "https://github.com/evanlinjin/bdk"
+branch = "superimposed_canonicalization"
 optional = true
 
 [features]
@@ -59,8 +59,8 @@ anyhow = "1"
 rand = "^0.8"
 
 [dev-dependencies.bdk_chain]
-git = "https://github.com/bitcoindevkit/bdk"
-rev = "b70758652d1c819c88d92765905d09e26b951ee2"
+git = "https://github.com/evanlinjin/bdk"
+branch = "superimposed_canonicalization"
 features = ["rusqlite"]
 
 [package.metadata.docs.rs]

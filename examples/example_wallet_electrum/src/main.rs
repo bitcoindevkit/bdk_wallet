@@ -41,7 +41,7 @@ fn main() -> Result<(), anyhow::Error> {
     wallet.persist(&mut db)?;
     println!("Generated Address: {}", address);
 
-    let balance = wallet.balance();
+    let balance = wallet.balance(wallet.include_unbroadcasted());
     println!("Wallet balance before syncing: {}", balance.total());
 
     print!("Syncing...");
@@ -70,7 +70,7 @@ fn main() -> Result<(), anyhow::Error> {
     wallet.apply_update(update)?;
     wallet.persist(&mut db)?;
 
-    let balance = wallet.balance();
+    let balance = wallet.balance(wallet.include_unbroadcasted());
     println!("Wallet balance after syncing: {}", balance.total());
 
     if balance.total() < SEND_AMOUNT {
@@ -81,7 +81,8 @@ fn main() -> Result<(), anyhow::Error> {
         std::process::exit(0);
     }
 
-    let mut tx_builder = wallet.build_tx();
+    let canonicalization_params = wallet.include_unbroadcasted();
+    let mut tx_builder = wallet.build_tx(canonicalization_params);
     tx_builder.add_recipient(address.script_pubkey(), SEND_AMOUNT);
 
     let mut psbt = tx_builder.finish()?;
@@ -89,6 +90,8 @@ fn main() -> Result<(), anyhow::Error> {
     assert!(finalized);
 
     let tx = psbt.extract_tx()?;
+    wallet.insert_unbroadcasted(tx.clone());
+
     client.transaction_broadcast(&tx)?;
     println!("Tx broadcasted! Txid: {}", tx.compute_txid());
 
