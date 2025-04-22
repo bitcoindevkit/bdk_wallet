@@ -2516,8 +2516,134 @@ fn test_bump_fee_add_input() {
 }
 
 #[test]
+fn test_legacy_bump_fee_add_input() {
+    let (mut wallet, _) = get_funded_wallet_single(get_test_pkh());
+    let init_tx = Transaction {
+        version: transaction::Version::ONE,
+        lock_time: absolute::LockTime::ZERO,
+        input: vec![],
+        output: vec![TxOut {
+            script_pubkey: wallet
+                .next_unused_address(KeychainKind::External)
+                .script_pubkey(),
+            value: Amount::from_sat(25_000),
+        }],
+    };
+    let txid = init_tx.compute_txid();
+    let pos: ChainPosition<ConfirmationBlockTime> =
+        wallet.transactions().last().unwrap().chain_position;
+    insert_tx(&mut wallet, init_tx);
+    match pos {
+        ChainPosition::Confirmed { anchor, .. } => insert_anchor(&mut wallet, txid, anchor),
+        other => panic!("all wallet txs must be confirmed: {:?}", other),
+    }
+
+    let addr = Address::from_str("2N1Ffz3WaNzbeLFBb51xyFMHYSEUXcbiSoX")
+        .unwrap()
+        .assume_checked();
+    let mut builder = wallet.build_tx().coin_selection(LargestFirstCoinSelection);
+    builder.add_recipient(addr.script_pubkey(), Amount::from_sat(45_000));
+    let psbt = builder.finish().unwrap();
+    let tx = psbt.extract_tx().expect("failed to extract tx");
+    let original_details = wallet.sent_and_received(&tx);
+    let txid = tx.compute_txid();
+    insert_tx(&mut wallet, tx);
+
+    let mut builder = wallet.build_fee_bump(txid).unwrap();
+    builder.fee_rate(FeeRate::from_sat_per_vb_unchecked(50));
+    let psbt = builder.finish().unwrap();
+    let sent_received =
+        wallet.sent_and_received(&psbt.clone().extract_tx().expect("failed to extract tx"));
+    let fee = check_fee!(wallet, psbt);
+    assert_eq!(
+        sent_received.0,
+        original_details.0 + Amount::from_sat(25_000)
+    );
+    assert_eq!(
+        fee.unwrap_or(Amount::ZERO) + sent_received.1,
+        Amount::from_sat(30_000)
+    );
+
+    let tx = &psbt.unsigned_tx;
+    assert_eq!(tx.input.len(), 2);
+    assert_eq!(tx.output.len(), 2);
+    assert_eq!(
+        tx.output
+            .iter()
+            .find(|txout| txout.script_pubkey == addr.script_pubkey())
+            .unwrap()
+            .value,
+        Amount::from_sat(45_000)
+    );
+    assert_eq!(
+        tx.output
+            .iter()
+            .find(|txout| txout.script_pubkey != addr.script_pubkey())
+            .unwrap()
+            .value,
+        sent_received.1
+    );
+
+    assert_fee_rate_legacy!(psbt, fee.unwrap_or(Amount::ZERO), FeeRate::from_sat_per_vb_unchecked(50), @add_signature);
+}
+
+#[test]
 fn test_bump_fee_absolute_add_input() {
     let (mut wallet, _) = get_funded_wallet_wpkh();
+    receive_output_in_latest_block(&mut wallet, 25_000);
+    let addr = Address::from_str("2N1Ffz3WaNzbeLFBb51xyFMHYSEUXcbiSoX")
+        .unwrap()
+        .assume_checked();
+    let mut builder = wallet.build_tx().coin_selection(LargestFirstCoinSelection);
+    builder.add_recipient(addr.script_pubkey(), Amount::from_sat(45_000));
+    let psbt = builder.finish().unwrap();
+    let tx = psbt.extract_tx().expect("failed to extract tx");
+    let original_sent_received = wallet.sent_and_received(&tx);
+    let txid = tx.compute_txid();
+    insert_tx(&mut wallet, tx);
+
+    let mut builder = wallet.build_fee_bump(txid).unwrap();
+    builder.fee_absolute(Amount::from_sat(6_000));
+    let psbt = builder.finish().unwrap();
+    let sent_received =
+        wallet.sent_and_received(&psbt.clone().extract_tx().expect("failed to extract tx"));
+    let fee = check_fee!(wallet, psbt);
+
+    assert_eq!(
+        sent_received.0,
+        original_sent_received.0 + Amount::from_sat(25_000)
+    );
+    assert_eq!(
+        fee.unwrap_or(Amount::ZERO) + sent_received.1,
+        Amount::from_sat(30_000)
+    );
+
+    let tx = &psbt.unsigned_tx;
+    assert_eq!(tx.input.len(), 2);
+    assert_eq!(tx.output.len(), 2);
+    assert_eq!(
+        tx.output
+            .iter()
+            .find(|txout| txout.script_pubkey == addr.script_pubkey())
+            .unwrap()
+            .value,
+        Amount::from_sat(45_000)
+    );
+    assert_eq!(
+        tx.output
+            .iter()
+            .find(|txout| txout.script_pubkey != addr.script_pubkey())
+            .unwrap()
+            .value,
+        sent_received.1
+    );
+
+    assert_eq!(fee.unwrap_or(Amount::ZERO), Amount::from_sat(6_000));
+}
+
+#[test]
+fn test_legacy_bump_fee_absolute_add_input() {
+    let (mut wallet, _) = get_funded_wallet_single(get_test_pkh());
     receive_output_in_latest_block(&mut wallet, 25_000);
     let addr = Address::from_str("2N1Ffz3WaNzbeLFBb51xyFMHYSEUXcbiSoX")
         .unwrap()
