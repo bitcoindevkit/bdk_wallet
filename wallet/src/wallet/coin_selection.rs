@@ -204,12 +204,12 @@ pub trait CoinSelectionAlgorithm: core::fmt::Debug {
     /// Perform the coin selection
     ///
     /// - `required_utxos`: the utxos that must be spent regardless of `target_amount` with their
-    ///                     weight cost
+    ///   weight cost
     /// - `optional_utxos`: the remaining available utxos to satisfy `target_amount` with their
-    ///                     weight cost
+    ///   weight cost
     /// - `fee_rate`: fee rate to use
     /// - `target_amount`: the outgoing amount and the fees already accumulated from adding
-    ///                    outputs and transaction’s header.
+    ///   outputs and transaction’s header.
     /// - `drain_script`: the script to use in case of change
     /// - `rand`: random number generated used by some coin selection algorithms such as [`SingleRandomDraw`]
     fn coin_select<R: RngCore>(
