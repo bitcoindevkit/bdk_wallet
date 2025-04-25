@@ -19,6 +19,7 @@ use alloc::{
     sync::Arc,
     vec::Vec,
 };
+use chain::CanonicalizationParams;
 use core::{cmp::Ordering, fmt, mem, ops::Deref};
 
 use bdk_chain::{
@@ -57,6 +58,7 @@ mod params;
 mod persisted;
 pub mod signer;
 pub mod tx_builder;
+pub mod unbroadcasted;
 pub(crate) mod utils;
 
 use crate::collections::{BTreeMap, HashMap, HashSet};
@@ -80,6 +82,7 @@ pub use bdk_chain::Balance;
 pub use changeset::ChangeSet;
 pub use params::*;
 pub use persisted::*;
+pub use unbroadcasted::Unbroadcasted;
 pub use utils::IsDust;
 
 /// A Bitcoin wallet
@@ -105,6 +108,7 @@ pub struct Wallet {
     change_signers: Arc<SignersContainer>,
     chain: LocalChain,
     indexed_graph: IndexedTxGraph<ConfirmationBlockTime, KeychainTxOutIndex<KeychainKind>>,
+    unbroadcasted: Unbroadcasted,
     stage: ChangeSet,
     network: Network,
     secp: SecpCtx,
@@ -405,6 +409,7 @@ impl Wallet {
         let change_descriptor = index.get_descriptor(KeychainKind::Internal).cloned();
         let indexed_graph = IndexedTxGraph::new(index);
         let indexed_graph_changeset = indexed_graph.initial_changeset();
+        let unbroadcasted = Unbroadcasted::default();
 
         let stage = ChangeSet {
             descriptor,
@@ -412,6 +417,7 @@ impl Wallet {
             local_chain: chain_changeset,
             tx_graph: indexed_graph_changeset.tx_graph,
             indexer: indexed_graph_changeset.indexer,
+            unbroadcasted: Default::default(),
             network: Some(network),
         };
 
@@ -421,6 +427,7 @@ impl Wallet {
             network,
             chain,
             indexed_graph,
+            unbroadcasted,
             stage,
             secp,
         })
@@ -605,6 +612,8 @@ impl Wallet {
         indexed_graph.apply_changeset(changeset.indexer.into());
         indexed_graph.apply_changeset(changeset.tx_graph.into());
 
+        let unbroadcasted = Unbroadcasted::from_changeset(changeset.unbroadcasted);
+
         let stage = ChangeSet::default();
 
         Ok(Some(Wallet {
@@ -612,6 +621,7 @@ impl Wallet {
             change_signers,
             chain,
             indexed_graph,
+            unbroadcasted,
             stage,
             network,
             secp,
@@ -809,13 +819,60 @@ impl Wallet {
         self.indexed_graph.index.index_of_spk(spk).cloned()
     }
 
+    /// Modifies canonicalization by assuming that all unbroadcasted transactions are canonical.
+    pub fn include_unbroadcasted(&self) -> CanonicalizationParams {
+        CanonicalizationParams {
+            assume_canonical: self.unbroadcasted.txids().collect(),
+        }
+    }
+
+    /// Returns unbroadcasted transactions that are still eligible for broadcast.
+    ///
+    /// A transaction is no longer broadcastable if it conflicts with another transaction
+    /// that has been confirmed. For example, if another transaction spending the same inputs
+    /// gets mined, this one becomes invalid for broadcast.
+    ///
+    /// This method filters out such transactions and returns only the ones that are still
+    /// considered valid in the current chain state.
+    pub fn eligible_unbroadcasted(&self) -> impl Iterator<Item = (Txid, Arc<Transaction>)> + '_ {
+        let mut canonical_txs = self
+            .tx_graph()
+            .canonical_iter(
+                &self.chain,
+                self.chain.tip().block_id(),
+                self.include_unbroadcasted(),
+            )
+            .map(|r| r.expect("infallible"))
+            .map(|(txid, tx, _)| (txid, tx))
+            .collect::<HashMap<Txid, Arc<Transaction>>>();
+        self.unbroadcasted
+            .txids()
+            .filter_map(move |txid| canonical_txs.remove(&txid).map(|tx| (txid, tx)))
+    }
+
+    /// Inserts an unbroadcasted transaction `tx`.
+    pub fn insert_unbroadcasted(&mut self, tx: impl Into<Arc<Transaction>>) {
+        let tx: Arc<Transaction> = tx.into();
+        let txid = tx.compute_txid();
+        self.stage
+            .unbroadcasted
+            .merge(self.unbroadcasted.insert(txid));
+        let changeset = self.indexed_graph.insert_tx(tx);
+        self.stage.tx_graph.merge(changeset.tx_graph);
+        self.stage.indexer.merge(changeset.indexer);
+    }
+
     /// Return the list of unspent outputs of this wallet
-    pub fn list_unspent(&self) -> impl Iterator<Item = LocalOutput> + '_ {
+    pub fn list_unspent(
+        &self,
+        params: CanonicalizationParams,
+    ) -> impl Iterator<Item = LocalOutput> + '_ {
         self.indexed_graph
             .graph()
             .filter_chain_unspents(
                 &self.chain,
                 self.chain.tip().block_id(),
+                params,
                 self.indexed_graph.index.outpoints().iter().cloned(),
             )
             .map(|((k, i), full_txo)| new_local_utxo(k, i, full_txo))
@@ -824,12 +881,16 @@ impl Wallet {
     /// List all relevant outputs (includes both spent and unspent, confirmed and unconfirmed).
     ///
     /// To list only unspent outputs (UTXOs), use [`Wallet::list_unspent`] instead.
-    pub fn list_output(&self) -> impl Iterator<Item = LocalOutput> + '_ {
+    pub fn list_output(
+        &self,
+        params: CanonicalizationParams,
+    ) -> impl Iterator<Item = LocalOutput> + '_ {
         self.indexed_graph
             .graph()
             .filter_chain_txouts(
                 &self.chain,
                 self.chain.tip().block_id(),
+                params,
                 self.indexed_graph.index.outpoints().iter().cloned(),
             )
             .map(|((k, i), full_txo)| new_local_utxo(k, i, full_txo))
@@ -876,13 +937,14 @@ impl Wallet {
 
     /// Returns the utxo owned by this wallet corresponding to `outpoint` if it exists in the
     /// wallet's database.
-    pub fn get_utxo(&self, op: OutPoint) -> Option<LocalOutput> {
+    pub fn get_utxo(&self, params: CanonicalizationParams, op: OutPoint) -> Option<LocalOutput> {
         let ((keychain, index), _) = self.indexed_graph.index.txout(op)?;
         self.indexed_graph
             .graph()
             .filter_chain_unspents(
                 &self.chain,
                 self.chain.tip().block_id(),
+                params,
                 core::iter::once(((), op)),
             )
             .map(|(_, full_txo)| new_local_utxo(keychain, index, full_txo))
@@ -925,7 +987,11 @@ impl Wallet {
     /// # use bdk_wallet::Wallet;
     /// # let mut wallet: Wallet = todo!();
     /// # let txid:Txid = todo!();
-    /// let tx = wallet.get_tx(txid).expect("transaction").tx_node.tx;
+    /// let tx = wallet
+    ///     .get_tx(wallet.include_unbroadcasted(), txid)
+    ///     .expect("transaction")
+    ///     .tx_node
+    ///     .tx;
     /// let fee = wallet.calculate_fee(&tx).expect("fee");
     /// ```
     ///
@@ -956,7 +1022,11 @@ impl Wallet {
     /// # use bdk_wallet::Wallet;
     /// # let mut wallet: Wallet = todo!();
     /// # let txid:Txid = todo!();
-    /// let tx = wallet.get_tx(txid).expect("transaction").tx_node.tx;
+    /// let tx = wallet
+    ///     .get_tx(wallet.include_unbroadcasted(), txid)
+    ///     .expect("transaction")
+    ///     .tx_node
+    ///     .tx;
     /// let fee_rate = wallet.calculate_fee_rate(&tx).expect("fee rate");
     /// ```
     ///
@@ -986,7 +1056,11 @@ impl Wallet {
     /// # use bdk_wallet::Wallet;
     /// # let mut wallet: Wallet = todo!();
     /// # let txid:Txid = todo!();
-    /// let tx = wallet.get_tx(txid).expect("tx exists").tx_node.tx;
+    /// let tx = wallet
+    ///     .get_tx(wallet.include_unbroadcasted(), txid)
+    ///     .expect("tx exists")
+    ///     .tx_node
+    ///     .tx;
     /// let (sent, received) = wallet.sent_and_received(&tx);
     /// ```
     ///
@@ -1018,7 +1092,9 @@ impl Wallet {
     /// # let wallet: Wallet = todo!();
     /// # let my_txid: bitcoin::Txid = todo!();
     ///
-    /// let wallet_tx = wallet.get_tx(my_txid).expect("panic if tx does not exist");
+    /// let wallet_tx = wallet
+    ///     .get_tx(wallet.include_unbroadcasted(), my_txid)
+    ///     .expect("panic if tx does not exist");
     ///
     /// // get reference to full transaction
     /// println!("my tx: {:#?}", wallet_tx.tx_node.tx);
@@ -1055,10 +1131,10 @@ impl Wallet {
     /// ```
     ///
     /// [`Anchor`]: bdk_chain::Anchor
-    pub fn get_tx(&self, txid: Txid) -> Option<WalletTx> {
+    pub fn get_tx(&self, params: CanonicalizationParams, txid: Txid) -> Option<WalletTx> {
         let graph = self.indexed_graph.graph();
         graph
-            .list_canonical_txs(&self.chain, self.chain.tip().block_id())
+            .list_canonical_txs(&self.chain, self.chain.tip().block_id(), params)
             .find(|tx| tx.tx_node.txid == txid)
     }
 
@@ -1073,11 +1149,14 @@ impl Wallet {
     ///
     /// To iterate over all canonical transactions, including those that are irrelevant, use
     /// [`TxGraph::list_canonical_txs`].
-    pub fn transactions(&self) -> impl Iterator<Item = WalletTx> + '_ {
+    pub fn transactions(
+        &self,
+        params: CanonicalizationParams,
+    ) -> impl Iterator<Item = WalletTx> + '_ {
         let tx_graph = self.indexed_graph.graph();
         let tx_index = &self.indexed_graph.index;
         tx_graph
-            .list_canonical_txs(&self.chain, self.chain.tip().block_id())
+            .list_canonical_txs(&self.chain, self.chain.tip().block_id(), params)
             .filter(|c_tx| tx_index.is_tx_relevant(&c_tx.tx_node.tx))
     }
 
@@ -1093,25 +1172,32 @@ impl Wallet {
     /// # use bdk_wallet::{LoadParams, Wallet, WalletTx};
     /// # let mut wallet:Wallet = todo!();
     /// // Transactions by chain position: first unconfirmed then descending by confirmed height.
-    /// let sorted_txs: Vec<WalletTx> =
-    ///     wallet.transactions_sort_by(|tx1, tx2| tx2.chain_position.cmp(&tx1.chain_position));
+    /// let sorted_txs: Vec<WalletTx> = wallet
+    ///     .transactions_sort_by(wallet.include_unbroadcasted(), |tx1, tx2| {
+    ///         tx2.chain_position.cmp(&tx1.chain_position)
+    ///     });
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    pub fn transactions_sort_by<F>(&self, compare: F) -> Vec<WalletTx>
+    pub fn transactions_sort_by<F>(
+        &self,
+        params: CanonicalizationParams,
+        compare: F,
+    ) -> Vec<WalletTx>
     where
         F: FnMut(&WalletTx, &WalletTx) -> Ordering,
     {
-        let mut txs: Vec<WalletTx> = self.transactions().collect();
+        let mut txs: Vec<WalletTx> = self.transactions(params).collect();
         txs.sort_unstable_by(compare);
         txs
     }
 
     /// Return the balance, separated into available, trusted-pending, untrusted-pending and immature
     /// values.
-    pub fn balance(&self) -> Balance {
+    pub fn balance(&self, params: CanonicalizationParams) -> Balance {
         self.indexed_graph.graph().balance(
             &self.chain,
             self.chain.tip().block_id(),
+            params,
             self.indexed_graph.index.outpoints().iter().cloned(),
             |&(k, _), _| k == KeychainKind::Internal,
         )
@@ -1198,7 +1284,8 @@ impl Wallet {
     /// # let mut wallet = doctest_wallet!();
     /// # let to_address = Address::from_str("2N4eQYCbKUHCCTUjBJeHcJp9ok6J2GZsTDt").unwrap().assume_checked();
     /// let psbt = {
-    ///    let mut builder =  wallet.build_tx();
+    ///    let params = wallet.include_unbroadcasted();
+    ///    let mut builder =  wallet.build_tx(params);
     ///    builder
     ///        .add_recipient(to_address.script_pubkey(), Amount::from_sat(50_000));
     ///    builder.finish()?
@@ -1209,10 +1296,16 @@ impl Wallet {
     /// ```
     ///
     /// [`TxBuilder`]: crate::TxBuilder
-    pub fn build_tx(&mut self) -> TxBuilder<'_, DefaultCoinSelectionAlgorithm> {
+    pub fn build_tx(
+        &mut self,
+        params: CanonicalizationParams,
+    ) -> TxBuilder<'_, DefaultCoinSelectionAlgorithm> {
         TxBuilder {
             wallet: self,
-            params: TxParams::default(),
+            params: TxParams {
+                canonicalization_params: params,
+                ..Default::default()
+            },
             coin_selection: DefaultCoinSelectionAlgorithm::default(),
         }
     }
@@ -1561,7 +1654,8 @@ impl Wallet {
     /// # let mut wallet = doctest_wallet!();
     /// # let to_address = Address::from_str("2N4eQYCbKUHCCTUjBJeHcJp9ok6J2GZsTDt").unwrap().assume_checked();
     /// let mut psbt = {
-    ///     let mut builder = wallet.build_tx();
+    ///     let params = wallet.include_unbroadcasted();
+    ///     let mut builder = wallet.build_tx(params);
     ///     builder
     ///         .add_recipient(to_address.script_pubkey(), Amount::from_sat(50_000));
     ///     builder.finish()?
@@ -1590,7 +1684,7 @@ impl Wallet {
         let txout_index = &self.indexed_graph.index;
         let chain_tip = self.chain.tip().block_id();
         let chain_positions = graph
-            .list_canonical_txs(&self.chain, chain_tip)
+            .list_canonical_txs(&self.chain, chain_tip, CanonicalizationParams::default())
             .map(|canon_tx| (canon_tx.tx_node.txid, canon_tx.chain_position))
             .collect::<HashMap<Txid, _>>();
 
@@ -1752,7 +1846,8 @@ impl Wallet {
     /// # let mut wallet = doctest_wallet!();
     /// # let to_address = Address::from_str("2N4eQYCbKUHCCTUjBJeHcJp9ok6J2GZsTDt").unwrap().assume_checked();
     /// let mut psbt = {
-    ///     let mut builder = wallet.build_tx();
+    ///     let params = wallet.include_unbroadcasted();
+    ///     let mut builder = wallet.build_tx(params);
     ///     builder.add_recipient(to_address.script_pubkey(), Amount::from_sat(50_000));
     ///     builder.finish()?
     /// };
@@ -1858,7 +1953,13 @@ impl Wallet {
         let confirmation_heights = self
             .indexed_graph
             .graph()
-            .list_canonical_txs(&self.chain, chain_tip)
+            .list_canonical_txs(
+                &self.chain,
+                chain_tip,
+                CanonicalizationParams {
+                    assume_canonical: prev_txids.iter().copied().collect(),
+                },
+            )
             .filter(|canon_tx| prev_txids.contains(&canon_tx.tx_node.txid))
             // This is for a small performance gain. Although `.filter` filters out excess txs, it
             // will still consume the internal `CanonicalIter` entirely. Having a `.take` here
@@ -2010,6 +2111,7 @@ impl Wallet {
                 .filter_chain_unspents(
                     &self.chain,
                     self.chain.tip().block_id(),
+                    params.canonicalization_params.clone(),
                     self.indexed_graph.index.outpoints().iter().cloned(),
                 )
                 // only create LocalOutput if UTxO is mature
@@ -2219,32 +2321,8 @@ impl Wallet {
     ///
     /// After applying updates you should persist the staged wallet changes. For an example of how
     /// to persist staged wallet changes see [`Wallet::reveal_next_address`].
-    #[cfg(feature = "std")]
-    #[cfg_attr(docsrs, doc(cfg(feature = "std")))]
     pub fn apply_update(&mut self, update: impl Into<Update>) -> Result<(), CannotConnectError> {
-        use std::time::*;
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("time now must surpass epoch anchor");
-        self.apply_update_at(update, now.as_secs())
-    }
-
-    /// Applies an `update` alongside a `seen_at` timestamp and stages the changes.
-    ///
-    /// `seen_at` represents when the update is seen (in unix seconds). It is used to determine the
-    /// `last_seen`s for all transactions in the update which have no corresponding anchor(s). The
-    /// `last_seen` value is used internally to determine precedence of conflicting unconfirmed
-    /// transactions (where the transaction with the lower `last_seen` value is omitted from the
-    /// canonical history).
-    ///
-    /// Use [`apply_update`](Wallet::apply_update) to have the `seen_at` value automatically set to
-    /// the current time.
-    pub fn apply_update_at(
-        &mut self,
-        update: impl Into<Update>,
-        seen_at: u64,
-    ) -> Result<(), CannotConnectError> {
-        let update = update.into();
+        let update: Update = update.into();
         let mut changeset = match update.chain {
             Some(chain_update) => ChangeSet::from(self.chain.apply_update(chain_update)?),
             None => ChangeSet::default(),
@@ -2255,11 +2333,10 @@ impl Wallet {
             .index
             .reveal_to_target_multi(&update.last_active_indices);
         changeset.merge(index_changeset.into());
-        changeset.merge(
-            self.indexed_graph
-                .apply_update_at(update.tx_update, Some(seen_at))
-                .into(),
-        );
+        changeset
+            .unbroadcasted
+            .merge(self.unbroadcasted.update(&update.tx_update));
+        changeset.merge(self.indexed_graph.apply_update(update.tx_update).into());
         self.stage.merge(changeset);
         Ok(())
     }
@@ -2397,16 +2474,47 @@ impl Wallet {
 
 /// Methods to construct sync/full-scan requests for spk-based chain sources.
 impl Wallet {
+    /// Create a partial [`SyncRequest`] for all revealed spks at `start_time`.
+    ///
+    /// The `start_time` is used to record the time that a mempool transaction was last seen
+    /// (or evicted). See [`Wallet::start_sync_with_revealed_spks`] for more.
+    pub fn start_sync_with_revealed_spks_at(
+        &self,
+        start_time: u64,
+    ) -> SyncRequestBuilder<(KeychainKind, u32)> {
+        use bdk_chain::keychain_txout::SyncRequestBuilderExt;
+        SyncRequest::builder_at(start_time)
+            .chain_tip(self.chain.tip())
+            .revealed_spks_from_indexer(&self.indexed_graph.index, ..)
+            .expected_spk_txids(self.indexed_graph.list_expected_spk_txids(
+                &self.chain,
+                self.chain.tip().block_id(),
+                ..,
+            ))
+    }
+
     /// Create a partial [`SyncRequest`] for this wallet for all revealed spks.
     ///
     /// This is the first step when performing a spk-based wallet partial sync, the returned
     /// [`SyncRequest`] collects all revealed script pubkeys from the wallet keychain needed to
     /// start a blockchain sync with a spk based blockchain client.
+    ///
+    /// The time of the sync is the current system time and is used to record the
+    /// tx last-seen for mempool transactions. Or if an expected transaction is missing
+    /// or evicted, it is the time of the eviction. Note that timestamps may only increase
+    /// to be counted by the tx graph. To supply your own start time see [`Wallet::start_sync_at`].
+    #[cfg_attr(docsrs, doc(cfg(feature = "std")))]
+    #[cfg(feature = "std")]
     pub fn start_sync_with_revealed_spks(&self) -> SyncRequestBuilder<(KeychainKind, u32)> {
         use bdk_chain::keychain_txout::SyncRequestBuilderExt;
         SyncRequest::builder()
             .chain_tip(self.chain.tip())
             .revealed_spks_from_indexer(&self.indexed_graph.index, ..)
+            .expected_spk_txids(self.indexed_graph.list_expected_spk_txids(
+                &self.chain,
+                self.chain.tip().block_id(),
+                ..,
+            ))
     }
 
     /// Create a [`FullScanRequest] for this wallet.
@@ -2417,9 +2525,19 @@ impl Wallet {
     ///
     /// This operation is generally only used when importing or restoring a previously used wallet
     /// in which the list of used scripts is not known.
+    #[cfg_attr(docsrs, doc(cfg(feature = "std")))]
+    #[cfg(feature = "std")]
     pub fn start_full_scan(&self) -> FullScanRequestBuilder<KeychainKind> {
         use bdk_chain::keychain_txout::FullScanRequestBuilderExt;
         FullScanRequest::builder()
+            .chain_tip(self.chain.tip())
+            .spks_from_indexer(&self.indexed_graph.index)
+    }
+
+    /// Create a [`FullScanRequest`] builder at `start_time`.
+    pub fn start_full_scan_at(&self, start_time: u64) -> FullScanRequestBuilder<KeychainKind> {
+        use bdk_chain::keychain_txout::FullScanRequestBuilderExt;
+        FullScanRequest::builder_at(start_time)
             .chain_tip(self.chain.tip())
             .spks_from_indexer(&self.indexed_graph.index)
     }
@@ -2600,7 +2718,9 @@ mod test {
         insert_tx(&mut wallet, two_output_tx);
 
         let mut params = TxParams::default();
-        let output = wallet.get_utxo(OutPoint { txid, vout: 0 }).unwrap();
+        let output = wallet
+            .get_utxo(wallet.include_unbroadcasted(), OutPoint { txid, vout: 0 })
+            .unwrap();
         params.utxos.insert(
             output.outpoint,
             WeightedUtxo {
@@ -2616,7 +2736,7 @@ mod test {
         // notice expected doesn't include the first output from two_output_tx as it should be
         // filtered out
         let expected = vec![wallet
-            .get_utxo(OutPoint { txid, vout: 1 })
+            .get_utxo(wallet.include_unbroadcasted(), OutPoint { txid, vout: 1 })
             .map(|utxo| WeightedUtxo {
                 satisfaction_weight: wallet
                     .public_descriptor(utxo.keychain)

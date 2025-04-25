@@ -91,7 +91,10 @@
 //!     .require_network(Network::Testnet)
 //!     .unwrap();
 //! let psbt = {
-//!     let mut builder = wallet.build_tx().coin_selection(AlwaysSpendEverything);
+//!     let params = wallet.include_unbroadcasted();
+//!     let mut builder = wallet
+//!         .build_tx(params)
+//!         .coin_selection(AlwaysSpendEverything);
 //!     builder.add_recipient(to_address.script_pubkey(), Amount::from_sat(50_000));
 //!     builder.finish()?
 //! };

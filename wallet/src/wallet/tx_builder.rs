@@ -23,7 +23,8 @@
 //! # let to_address = Address::from_str("2N4eQYCbKUHCCTUjBJeHcJp9ok6J2GZsTDt").unwrap().assume_checked();
 //! # let mut wallet = doctest_wallet!();
 //! // create a TxBuilder from a wallet
-//! let mut tx_builder = wallet.build_tx();
+//! let params = wallet.include_unbroadcasted();
+//! let mut tx_builder = wallet.build_tx(params);
 //!
 //! tx_builder
 //!     // Create a transaction with one output to `to_address` of 50_000 satoshi
@@ -37,6 +38,7 @@
 //! ```
 
 use alloc::{boxed::Box, string::String, vec::Vec};
+use chain::CanonicalizationParams;
 use core::fmt;
 
 use alloc::sync::Arc;
@@ -77,7 +79,8 @@ use crate::{KeychainKind, LocalOutput, Utxo, WeightedUtxo};
 /// # let addr2 = addr1.clone();
 /// // chaining
 /// let psbt1 = {
-///     let mut builder = wallet.build_tx();
+///     let params = wallet.include_unbroadcasted();
+///     let mut builder = wallet.build_tx(params);
 ///     builder
 ///         .ordering(TxOrdering::Untouched)
 ///         .add_recipient(addr1.script_pubkey(), Amount::from_sat(50_000))
@@ -87,7 +90,8 @@ use crate::{KeychainKind, LocalOutput, Utxo, WeightedUtxo};
 ///
 /// // non-chaining
 /// let psbt2 = {
-///     let mut builder = wallet.build_tx();
+///     let params = wallet.include_unbroadcasted();
+///     let mut builder = wallet.build_tx(params);
 ///     builder.ordering(TxOrdering::Untouched);
 ///     for addr in &[addr1, addr2] {
 ///         builder.add_recipient(addr.script_pubkey(), Amount::from_sat(50_000));
@@ -140,6 +144,7 @@ pub(crate) struct TxParams {
     pub(crate) bumping_fee: Option<PreviousFee>,
     pub(crate) current_height: Option<absolute::LockTime>,
     pub(crate) allow_dust: bool,
+    pub(crate) canonicalization_params: CanonicalizationParams,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -246,8 +251,9 @@ impl<'a, Cs> TxBuilder<'a, Cs> {
     /// let mut path = BTreeMap::new();
     /// path.insert("aabbccdd".to_string(), vec![0, 1]);
     ///
+    /// let params = wallet.include_unbroadcasted();
     /// let builder = wallet
-    ///     .build_tx()
+    ///     .build_tx(params)
     ///     .add_recipient(to_address.script_pubkey(), Amount::from_sat(50_000))
     ///     .policy_path(path, KeychainKind::External);
     ///
@@ -278,7 +284,7 @@ impl<'a, Cs> TxBuilder<'a, Cs> {
             .iter()
             .map(|outpoint| {
                 self.wallet
-                    .get_utxo(*outpoint)
+                    .get_utxo(self.params.canonicalization_params.clone(), *outpoint)
                     .ok_or(AddUtxoError::UnknownUtxo(*outpoint))
                     .map(|output| {
                         (
@@ -647,7 +653,8 @@ impl<'a, Cs> TxBuilder<'a, Cs> {
     ///     .unwrap()
     ///     .assume_checked();
     /// # let mut wallet = doctest_wallet!();
-    /// let mut tx_builder = wallet.build_tx();
+    /// let params = wallet.include_unbroadcasted();
+    /// let mut tx_builder = wallet.build_tx(params);
     ///
     /// tx_builder
     ///     // Spend all outputs in this wallet.
@@ -1103,7 +1110,7 @@ mod test {
             "5120e8f5c4dc2f5d6a7595e7b108cb063da9c7550312da1e22875d78b9db62b59cd5",
         )
         .unwrap();
-        let mut builder = wallet.build_tx();
+        let mut builder = wallet.build_tx(wallet.include_unbroadcasted());
         builder.add_recipient(recip.clone(), Amount::from_sat(15_000));
         builder.fee_absolute(Amount::from_sat(1_000));
         let psbt = builder.finish().unwrap();
@@ -1153,15 +1160,23 @@ mod test {
         // if the transactions were produced by the same wallet the following assert should fail
         assert_ne!(txid1, txid2);
 
-        let utxo1 = wallet1.list_unspent().next().unwrap();
-        let tx1 = wallet1.get_tx(txid1).unwrap().tx_node.tx.clone();
+        let utxo1 = wallet1
+            .list_unspent(wallet1.include_unbroadcasted())
+            .next()
+            .unwrap();
+        let tx1 = wallet1
+            .get_tx(wallet1.include_unbroadcasted(), txid1)
+            .unwrap()
+            .tx_node
+            .tx
+            .clone();
 
         let satisfaction_weight = wallet1
             .public_descriptor(KeychainKind::External)
             .max_weight_to_satisfy()
             .unwrap();
 
-        let mut builder = wallet2.build_tx();
+        let mut builder = wallet2.build_tx(wallet2.include_unbroadcasted());
 
         // add foreign utxo with satisfaction weight x
         assert!(builder
@@ -1225,15 +1240,23 @@ mod test {
             .create_wallet_no_persist()
             .expect("descriptors must be valid");
 
-        let utxo1 = wallet1.list_unspent().next().unwrap();
-        let tx1 = wallet1.get_tx(txid1).unwrap().tx_node.tx.clone();
+        let utxo1 = wallet1
+            .list_unspent(wallet1.include_unbroadcasted())
+            .next()
+            .unwrap();
+        let tx1 = wallet1
+            .get_tx(wallet1.include_unbroadcasted(), txid1)
+            .unwrap()
+            .tx_node
+            .tx
+            .clone();
 
         let satisfaction_weight = wallet1
             .public_descriptor(KeychainKind::External)
             .max_weight_to_satisfy()
             .unwrap();
 
-        let mut builder = wallet2.build_tx();
+        let mut builder = wallet2.build_tx(wallet2.include_unbroadcasted());
 
         // Add local UTxO manually, through tx_builder private parameters and not through
         // add_utxo method because we are assuming wallet2 has not knowledge of utxo1 yet
@@ -1298,15 +1321,23 @@ mod test {
             .create_wallet_no_persist()
             .expect("descriptors must be valid");
 
-        let utxo1 = wallet1.list_unspent().next().unwrap();
-        let tx1 = wallet1.get_tx(txid1).unwrap().tx_node.tx.clone();
+        let utxo1 = wallet1
+            .list_unspent(wallet1.include_unbroadcasted())
+            .next()
+            .unwrap();
+        let tx1 = wallet1
+            .get_tx(wallet1.include_unbroadcasted(), txid1)
+            .unwrap()
+            .tx_node
+            .tx
+            .clone();
 
         let satisfaction_weight = wallet1
             .public_descriptor(KeychainKind::External)
             .max_weight_to_satisfy()
             .unwrap();
 
-        let mut builder = wallet2.build_tx();
+        let mut builder = wallet2.build_tx(wallet2.include_unbroadcasted());
 
         // add foreign utxo
         assert!(builder

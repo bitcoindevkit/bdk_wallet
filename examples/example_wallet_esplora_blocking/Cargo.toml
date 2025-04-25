@@ -8,5 +8,6 @@ publish = false
 
 [dependencies]
 bdk_wallet = { path = "../../wallet", features = ["file_store"] }
-bdk_esplora = { version = "0.20", features = ["blocking"] }
+#bdk_esplora = { version = "0.20", features = ["blocking"] }
+bdk_esplora = { git = "https://github.com/evanlinjin/bdk", branch = "superimposed_canonicalization", features = ["blocking"] }
 anyhow = "1"
