@@ -16,7 +16,7 @@ rust-version = "1.63"
 workspace = true
 
 [dependencies]
-rand_core = { version = "0.6.0" }
+rand_core = { version = "0.6.0", default-features = false, features = ["getrandom"] }
 miniscript = { version = "12.3.1", features = [ "serde" ], default-features = false }
 bitcoin = { version = "0.32.4", features = [ "serde", "base64" ], default-features = false }
 serde = { version = "^1.0", features = ["derive"] }
