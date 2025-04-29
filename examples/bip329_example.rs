@@ -5,7 +5,6 @@ extern crate anyhow;
 extern crate bdk_wallet;
 extern crate bip329;
 extern crate bitcoin;
-extern crate env_logger;
 extern crate log;
 extern crate tempfile;
 
@@ -52,9 +51,6 @@ fn format_bdk_outpoint_ref(op: OutPoint) -> String {
 
 // --- Main Example Logic ---
 fn main() -> Result<()> {
-    // Initialize logger - Output controlled by RUST_LOG env var
-    env_logger::init();
-
     info!("--- BDK Wallet + BIP-329 Label Example ---");
 
     let temp_dir = tempdir().context("Failed to create temporary directory")?;
