@@ -16,9 +16,7 @@ use bdk_wallet::{
     keys::GeneratableKey,
     keys::{DerivableKey, DescriptorSecretKey, ExtendedKey, GeneratedKey},
     miniscript::{self, Descriptor, DescriptorPublicKey},
-    AddressInfo,
-    KeychainKind,
-    Wallet, // Added AddressInfo
+    AddressInfo, KeychainKind, Wallet,
 };
 use bip329::{AddressRecord, Label, LabelRef, Labels, TransactionRecord};
 use bitcoin::{address::NetworkUnchecked, bip32::DerivationPath, Address, Network, OutPoint, Txid};
@@ -27,17 +25,15 @@ use std::{
     collections::{BTreeMap, HashMap, HashSet},
     io::ErrorKind,
     ops::DerefMut,
-    // Removed path::PathBuf - no longer needed explicitly
     str::FromStr,
 };
 use tempfile::tempdir;
 
 // --- Helper Functions ---
 fn format_ref_str(item_ref: &LabelRef) -> String {
-    // Use the existing Display impl from bip329::LabelRef which handles assume_checked()
     match item_ref {
         LabelRef::Txid(txid) => format!("txid:{}", txid),
-        LabelRef::Address(_) => format!("addr:{}", item_ref), // Rely on LabelRef's Display
+        LabelRef::Address(_) => format!("addr:{}", item_ref),
         LabelRef::Output(op) => format!("output:{}", op),
         LabelRef::Input(op) => format!("input:{}", op),
         LabelRef::PublicKey(pk_str) => format!("pubkey:{}", pk_str),
@@ -62,7 +58,7 @@ fn main() -> Result<()> {
     info!("--- BDK Wallet + BIP-329 Label Example ---");
 
     let temp_dir = tempdir().context("Failed to create temporary directory")?;
-    let label_file_path = temp_dir.path().join("bdk_bip329_example_labels.jsonl"); // PathBuf inferred
+    let label_file_path = temp_dir.path().join("bdk_bip329_example_labels.jsonl");
     info!("Using temporary label file: {}", label_file_path.display());
 
     let network = Network::Regtest;
@@ -86,7 +82,7 @@ fn main() -> Result<()> {
         Descriptor<DescriptorPublicKey>,
         BTreeMap<DescriptorPublicKey, DescriptorSecretKey>,
         HashSet<Network>,
-    ) = descriptor!(wpkh((master_xprv.clone(), external_path)))?;
+    ) = descriptor!(wpkh((master_xprv, external_path)))?;
 
     let (internal_descriptor, _int_keymap, _int_networks): (
         Descriptor<DescriptorPublicKey>,
@@ -100,8 +96,8 @@ fn main() -> Result<()> {
     info!("External Descriptor: {}", external_descriptor_str);
     info!("Internal Descriptor: {}", internal_descriptor_str);
 
-    // 2. Create the BDK Wallet (Corrected: Pass owned Strings, removed mut)
-    let wallet = Wallet::create(external_descriptor_str, internal_descriptor_str) // Pass String, not &String, removed mut
+    // 2. Create the BDK Wallet
+    let wallet = Wallet::create(external_descriptor_str, internal_descriptor_str)
         .network(network)
         .create_wallet_no_persist()
         .context("Failed to create wallet using generated descriptors")?;
@@ -118,16 +114,12 @@ fn main() -> Result<()> {
         "Wallet Addresses: Index {} -> {}",
         address0.index, address0.address
     );
-    info!(
-        "                  Index {} -> {}",
-        address1.index, address1.address
-    );
+    info!("Index {} -> {}", address1.index, address1.address);
     info!("Dummy TXID: {}", dummy_txid);
     info!("Dummy OutPoint: {}", dummy_outpoint);
 
     // 3. Load Labels from temporary file (or create empty)
     info!("\n--- Loading Labels ---");
-    // Pass label_file_path by reference
     let mut labels = match Labels::try_from_file(&label_file_path) {
         Ok(loaded_labels) => {
             info!(
@@ -166,10 +158,9 @@ fn main() -> Result<()> {
 
     // 4. Correlate Wallet Data with Labels
     info!("\n--- Current Labels for Wallet Items ---");
-    // Use address0 and address1 correctly
     let items_to_lookup: Vec<(&str, String)> = vec![
-        ("Address 0", format_bdk_addr_ref(&address0.address)), // Use address0
-        ("Address 1", format_bdk_addr_ref(&address1.address)), // Use address1
+        ("Address 0", format_bdk_addr_ref(&address0.address)),
+        ("Address 1", format_bdk_addr_ref(&address1.address)),
         ("Dummy Tx", format_bdk_txid_ref(dummy_txid)),
         ("Dummy UTXO", format_bdk_outpoint_ref(dummy_outpoint)),
     ];
@@ -182,18 +173,17 @@ fn main() -> Result<()> {
 
     // 5. Add/Update Labels in Memory
     info!("\n--- Adding/Updating Labels ---");
-    // Use address0 for the label update logic
     let addr0_ref_str = format_bdk_addr_ref(&address0.address);
     let new_addr0_label = "Primary Receiving Address (Index 0)";
     let labels_vec = labels.deref_mut();
     match labels_vec
         .iter_mut()
-        .find(|l| format_ref_str(&l.ref_()) == addr0_ref_str) // Use addr0_ref_str
+        .find(|l| format_ref_str(&l.ref_()) == addr0_ref_str)
     {
         Some(label_entry) => {
             info!("Updating label for {}", addr0_ref_str);
             match label_entry {
-                Label::Address(record) => record.label = Some(new_addr0_label.to_string()), // Use new_addr0_label
+                Label::Address(record) => record.label = Some(new_addr0_label.to_string()),
                 _ => warn!(
                     "Warning: Found ref string {} but not Address label?",
                     addr0_ref_str
@@ -202,12 +192,11 @@ fn main() -> Result<()> {
         }
         None => {
             info!("Adding new label for {}", addr0_ref_str);
-            // Use address0 for conversion
             let addr_unchecked: Address<NetworkUnchecked> =
                 Address::from_str(&address0.address.to_string())?.into_unchecked();
             labels_vec.push(Label::Address(AddressRecord {
                 ref_: addr_unchecked,
-                label: Some(new_addr0_label.to_string()), // Use new_addr0_label
+                label: Some(new_addr0_label.to_string()),
             }));
         }
     }
@@ -227,7 +216,6 @@ fn main() -> Result<()> {
     // 6. Export and Save Labels to temporary file
     info!("\n--- Exporting and Saving Labels ---");
     match labels.export_to_file(&label_file_path) {
-        // Pass &PathBuf ref
         Ok(_) => info!(
             "Labels successfully saved to temporary file '{}'",
             label_file_path.display()
@@ -238,16 +226,11 @@ fn main() -> Result<()> {
     // 7. Demonstrate reading the temporary file back
     info!("\n--- Reading Labels Back from Temporary File ---");
     match Labels::try_from_file(&label_file_path) {
-        // Pass &PathBuf ref
         Ok(reloaded_labels) => {
             info!("Successfully reloaded {} labels:", reloaded_labels.len());
             for label_entry in reloaded_labels.iter() {
                 if let Some(label_text) = label_entry.label() {
-                    info!(
-                        "  {} -> {}",
-                        format_ref_str(&label_entry.ref_()),
-                        label_text
-                    );
+                    info!("{} -> {}", format_ref_str(&label_entry.ref_()), label_text);
                 }
             }
         }
