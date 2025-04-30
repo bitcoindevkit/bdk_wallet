@@ -1358,10 +1358,11 @@ impl Wallet {
             (Some(sequence), _) => sequence,
         };
 
+        let bumping_fee = params.bumping_fee;
         let (fee_rate, mut fee_amount) = match params.fee_policy.unwrap_or_default() {
-            //FIXME: see https://github.com/bitcoindevkit/bdk/issues/256
+            // Preliminary check to see if the fee or feerate is too low before doing CoinSelection
             FeePolicy::FeeAmount(fee) => {
-                if let Some(previous_fee) = params.bumping_fee {
+                if let Some(previous_fee) = bumping_fee {
                     if fee < previous_fee.absolute {
                         return Err(CreateTxError::FeeTooLow {
                             required: previous_fee.absolute,
@@ -1371,14 +1372,12 @@ impl Wallet {
                 (FeeRate::ZERO, fee)
             }
             FeePolicy::FeeRate(rate) => {
-                if let Some(previous_fee) = params.bumping_fee {
-                    let required_feerate = FeeRate::from_sat_per_kwu(
-                        previous_fee.rate.to_sat_per_kwu()
-                            + FeeRate::BROADCAST_MIN.to_sat_per_kwu(), // +1 sat/vb
-                    );
-                    if rate < required_feerate {
+                if let Some(previous_fee) = bumping_fee {
+                    if rate <= previous_fee.rate {
                         return Err(CreateTxError::FeeRateTooLow {
-                            required: required_feerate,
+                            required: FeeRate::from_sat_per_kwu(
+                                previous_fee.rate.to_sat_per_kwu() + 1,
+                            ),
                         });
                     }
                 }
@@ -1526,6 +1525,38 @@ impl Wallet {
         params.ordering.sort_tx_with_aux_rand(&mut tx, rng);
 
         let psbt = self.complete_transaction(tx, coin_selection.selected, params)?;
+
+        // RBF checks.
+        // BIP125 imposes two restrictions on RBF transactions:
+        // 1. The replacement transaction must have a higher absolute fee from the original(s)
+        // 2. The additional fees (current_fee - original_fee) pays for the replacement transaction's
+        //    bandwidth at or above the rate set by the node's incremental relay feerate
+        // Additionally, Bitcoin Core enforces a additional rule:
+        // https://github.com/bitcoin/bitcoin/blob/master/doc/policy/mempool-replacements.md#current-replace-by-fee-policy
+        // 3. The replacement transaction's feerate is greater than the (cumulative) feerates of all
+        //    directly conflicting transactions.
+        if let Some(previous_fee) = bumping_fee {
+            // Only check if we can determine the fee, else assume user knows what they're doing.
+            // TODO: ask someone if it'd be more appropriate to error with UnknownUTXO
+            if let Some(fee) = psbt.fee_amount() {
+                let tx_weight = psbt.unsigned_tx.weight() + coin_selection.satisfaction_weight;
+                let fee_rate = fee / tx_weight;
+
+                // Ensure the tx fee is atleast the previous and also pays for it's broadcast fee
+                if (fee - previous_fee.absolute) < tx_weight * FeeRate::BROADCAST_MIN {
+                    return Err(CreateTxError::FeeTooLow {
+                        required: tx_weight * FeeRate::BROADCAST_MIN + previous_fee.absolute,
+                    });
+                }
+
+                // Ensure the fee rate is strictly higher
+                if fee_rate <= previous_fee.rate {
+                    return Err(CreateTxError::FeeRateTooLow {
+                        required: FeeRate::from_sat_per_kwu(previous_fee.rate.to_sat_per_kwu() + 1),
+                    });
+                }
+            }
+        }
 
         // recording changes to the change keychain
         if let (Excess::Change { .. }, Some((keychain, index))) = (excess, drain_index) {

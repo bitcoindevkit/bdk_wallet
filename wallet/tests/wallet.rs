@@ -1880,8 +1880,7 @@ fn test_bump_fee_low_fee_rate() {
         "expected FeeRateTooLow error"
     );
 
-    let required = feerate.to_sat_per_kwu() + 250; // +1 sat/vb
-    let sat_vb = required as f64 / 250.0;
+    let sat_vb = (feerate.to_sat_per_kwu() as f64 + 1.0) / 250.0;
     let expect = format!("Fee rate too low: required {} sat/vb", sat_vb);
     assert_eq!(res.unwrap_err().to_string(), expect);
 }
