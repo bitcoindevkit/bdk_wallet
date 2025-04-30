@@ -2670,6 +2670,90 @@ fn test_bump_fee_unconfirmed_input() {
 }
 
 #[test]
+fn test_bump_fee_bip125_minimal_feerate() {
+    // BIP125 requires that the replacement transaction must overpay by it's relay fee, and a cursory
+    // analysis might indicate that just means that the replacement transaction must have
+    // feerate >= previous_feerate + BROADCAST_MIN (1 sat/vB).
+    // However this is not the case, as the replacement transaction can be larger than the original, and
+    // therefore can pay the extra broadcast fee with the same feerate, as long as the original feerate
+    // was high enough. In addition Bitcoin Core requires that the feerate be strictly higher.
+    // This test checks the edgecase where the feerate is just slightly higher, but it's valid RBF.
+
+    let (mut wallet, _) = get_funded_wallet_wpkh();
+
+    // Extra UTXO
+    let init_tx = Transaction {
+        version: transaction::Version::ONE,
+        lock_time: absolute::LockTime::ZERO,
+        input: vec![],
+        output: vec![TxOut {
+            script_pubkey: wallet
+                .next_unused_address(KeychainKind::External)
+                .script_pubkey(),
+            value: Amount::from_sat(25_000),
+        }],
+    };
+    let txid: Txid = init_tx.compute_txid();
+    let pos: ChainPosition<ConfirmationBlockTime> =
+        wallet.transactions().last().unwrap().chain_position;
+    insert_tx(&mut wallet, init_tx);
+    match pos {
+        ChainPosition::Confirmed { anchor, .. } => insert_anchor(&mut wallet, txid, anchor),
+        other => panic!("all wallet txs must be confirmed: {:?}", other),
+    }
+
+    let addr = Address::from_str("2N1Ffz3WaNzbeLFBb51xyFMHYSEUXcbiSoX")
+        .unwrap()
+        .assume_checked();
+
+    // Create original transaction, RBF is on by default, fee_rate is set to 40 sat/vB
+    let tx1 = {
+        let mut builder = wallet.build_tx().coin_selection(LargestFirstCoinSelection);
+        builder
+            .add_recipient(addr.script_pubkey(), Amount::from_sat(30_000))
+            .fee_rate(FeeRate::from_sat_per_kwu(592));
+        let mut psbt = builder.finish().unwrap();
+        wallet
+            .sign(&mut psbt, Default::default())
+            .expect("failed to sign");
+        psbt.extract_tx().expect("failed to extract tx")
+    };
+    let txid = tx1.compute_txid();
+    let fee_rate = wallet.calculate_fee_rate(&tx1).unwrap();
+    insert_tx(&mut wallet, tx1.clone());
+
+    // Create replacement transaction with a slightly higher feerate, and bigger size (extra input and output)
+    let mut builder = wallet.build_fee_bump(txid).unwrap();
+    builder
+        .add_recipient(
+            Address::from_str("2N4eQYCbKUHCCTUjBJeHcJp9ok6J2GZsTDt")
+                .unwrap()
+                .assume_checked(),
+            Amount::from_sat(25_000),
+        )
+        .fee_rate(FeeRate::from_sat_per_kwu(fee_rate.to_sat_per_kwu() + 1));
+    let mut psbt = builder.finish().expect(
+        "This should create a valid transaction, even though the feerate is only slightly higher",
+    );
+    wallet.sign(&mut psbt, Default::default()).unwrap();
+    let tx2 = psbt.extract_tx().expect("failed to extract tx");
+
+    assert!(
+        wallet.calculate_fee(&tx2).unwrap() >= wallet.calculate_fee(&tx1).unwrap(),
+        "Replacement transaction should have a higher absolute fee"
+    );
+    assert!(
+        wallet.calculate_fee(&tx2).unwrap() - wallet.calculate_fee(&tx1).unwrap()
+            > tx2.weight() * FeeRate::BROADCAST_MIN,
+        "Replacement transaction should pay for the additional bandwidth"
+    );
+    assert!(
+        wallet.calculate_fee_rate(&tx2).unwrap() > wallet.calculate_fee_rate(&tx1).unwrap(),
+        "Replacement transaction should have a higher feerate"
+    );
+}
+
+#[test]
 fn test_fee_amount_negative_drain_val() {
     // While building the transaction, bdk would calculate the drain_value
     // as
