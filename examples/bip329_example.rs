@@ -48,7 +48,7 @@ fn format_bdk_outpoint_ref(op: OutPoint) -> String {
 }
 
 // --- Main Example Logic ---
-#[allow(clippy::print_stdout)]
+#[allow(clippy::print_stdout, clippy::print_stderr)]
 fn main() -> Result<()> {
     println!("--- BDK Wallet + BIP-329 Label Example ---");
 
