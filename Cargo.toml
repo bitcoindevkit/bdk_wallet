@@ -2,10 +2,11 @@
 resolver = "2"
 members = [
     "wallet",
-    "examples/example_wallet_electrum",
-    "examples/example_wallet_esplora_blocking",
-    "examples/example_wallet_esplora_async",
-    "examples/example_wallet_rpc",
+    "examples/example_wallet_n_keychains"
+#    "examples/example_wallet_electrum",
+#    "examples/example_wallet_esplora_blocking",
+#    "examples/example_wallet_esplora_async",
+#    "examples/example_wallet_rpc",
 ]
 
 [workspace.package]

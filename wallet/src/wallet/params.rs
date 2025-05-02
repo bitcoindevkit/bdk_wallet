@@ -3,12 +3,7 @@ use bdk_chain::keychain_txout::DEFAULT_LOOKAHEAD;
 use bitcoin::{BlockHash, Network};
 use miniscript::descriptor::KeyMap;
 
-use crate::{
-    descriptor::{DescriptorError, ExtendedDescriptor, IntoWalletDescriptor},
-    utils::SecpCtx,
-    AsyncWalletPersister, CreateWithPersistError, KeychainKind, LoadWithPersistError, Wallet,
-    WalletPersister,
-};
+use crate::{descriptor::{DescriptorError, ExtendedDescriptor, IntoWalletDescriptor}, utils::SecpCtx, AsyncWalletPersister, CreateWithPersistError, KeyRing, LoadWithPersistError, Wallet, WalletPersister};
 
 use super::{ChangeSet, LoadError, PersistedWallet};
 
@@ -16,13 +11,13 @@ use super::{ChangeSet, LoadError, PersistedWallet};
 ///
 /// The better option would be to do `Box<dyn IntoWalletDescriptor>`, but we cannot due to Rust's
 /// [object safety rules](https://doc.rust-lang.org/reference/items/traits.html#object-safety).
-type DescriptorToExtract = Box<
+pub type DescriptorToExtract = Box<
     dyn FnOnce(&SecpCtx, Network) -> Result<(ExtendedDescriptor, KeyMap), DescriptorError>
         + Send
         + 'static,
 >;
 
-fn make_descriptor_to_extract<D>(descriptor: D) -> DescriptorToExtract
+pub(crate) fn make_descriptor_to_extract<D>(descriptor: D) -> DescriptorToExtract
 where
     D: IntoWalletDescriptor + Send + 'static,
 {
@@ -32,10 +27,11 @@ where
 /// Parameters for [`Wallet::create`] or [`PersistedWallet::create`].
 #[must_use]
 pub struct CreateParams {
-    pub(crate) descriptor: DescriptorToExtract,
-    pub(crate) descriptor_keymap: KeyMap,
-    pub(crate) change_descriptor: Option<DescriptorToExtract>,
-    pub(crate) change_descriptor_keymap: KeyMap,
+    pub(crate) keychain_set: KeyRing,
+    // pub(crate) descriptor: DescriptorToExtract,
+    // pub(crate) descriptor_keymap: KeyMap,
+    // pub(crate) change_descriptor: Option<DescriptorToExtract>,
+    // pub(crate) change_descriptor_keymap: KeyMap,
     pub(crate) network: Network,
     pub(crate) genesis_hash: Option<BlockHash>,
     pub(crate) lookahead: u32,
@@ -52,17 +48,17 @@ impl CreateParams {
     ///
     /// Use this method only when building a wallet with a single descriptor. See
     /// also [`Wallet::create_single`].
-    pub fn new_single<D: IntoWalletDescriptor + Send + 'static>(descriptor: D) -> Self {
-        Self {
-            descriptor: make_descriptor_to_extract(descriptor),
-            descriptor_keymap: KeyMap::default(),
-            change_descriptor: None,
-            change_descriptor_keymap: KeyMap::default(),
-            network: Network::Bitcoin,
-            genesis_hash: None,
-            lookahead: DEFAULT_LOOKAHEAD,
-        }
-    }
+    // pub fn new_single<D: IntoWalletDescriptor + Send + 'static>(descriptor: D) -> Self {
+    //     Self {
+    //         descriptor: make_descriptor_to_extract(descriptor),
+    //         descriptor_keymap: KeyMap::default(),
+    //         change_descriptor: None,
+    //         change_descriptor_keymap: KeyMap::default(),
+    //         network: Network::Bitcoin,
+    //         genesis_hash: None,
+    //         lookahead: DEFAULT_LOOKAHEAD,
+    //     }
+    // }
 
     /// Construct parameters with provided `descriptor` and `change_descriptor`.
     ///
@@ -70,30 +66,41 @@ impl CreateParams {
     /// * `network` = [`Network::Bitcoin`]
     /// * `genesis_hash` = `None`
     /// * `lookahead` = [`DEFAULT_LOOKAHEAD`]
-    pub fn new<D: IntoWalletDescriptor + Send + 'static>(
-        descriptor: D,
-        change_descriptor: D,
+    // pub fn new<D: IntoWalletDescriptor + Send + 'static>(
+    //     descriptor: D,
+    //     change_descriptor: D,
+    // ) -> Self {
+    //     Self {
+    //         descriptor: make_descriptor_to_extract(descriptor),
+    //         descriptor_keymap: KeyMap::default(),
+    //         change_descriptor: Some(make_descriptor_to_extract(change_descriptor)),
+    //         change_descriptor_keymap: KeyMap::default(),
+    //         network: Network::Bitcoin,
+    //         genesis_hash: None,
+    //         lookahead: DEFAULT_LOOKAHEAD,
+    //     }
+    // }
+
+    pub fn new_with_keychain_set(
+        keychain_set: KeyRing,
     ) -> Self {
         Self {
-            descriptor: make_descriptor_to_extract(descriptor),
-            descriptor_keymap: KeyMap::default(),
-            change_descriptor: Some(make_descriptor_to_extract(change_descriptor)),
-            change_descriptor_keymap: KeyMap::default(),
+            keychain_set,
             network: Network::Bitcoin,
             genesis_hash: None,
             lookahead: DEFAULT_LOOKAHEAD,
         }
     }
 
-    /// Extend the given `keychain`'s `keymap`.
-    pub fn keymap(mut self, keychain: KeychainKind, keymap: KeyMap) -> Self {
-        match keychain {
-            KeychainKind::External => &mut self.descriptor_keymap,
-            KeychainKind::Internal => &mut self.change_descriptor_keymap,
-        }
-        .extend(keymap);
-        self
-    }
+    // /// Extend the given `keychain`'s `keymap`.
+    // pub fn keymap(mut self, keychain: KeychainKind, keymap: KeyMap) -> Self {
+    //     match keychain {
+    //         KeychainKind::External => &mut self.descriptor_keymap,
+    //         KeychainKind::Internal => &mut self.change_descriptor_keymap,
+    //     }
+    //     .extend(keymap);
+    //     self
+    // }
 
     /// Set `network`.
     pub fn network(mut self, network: Network) -> Self {
@@ -177,14 +184,14 @@ impl LoadParams {
     }
 
     /// Extend the given `keychain`'s `keymap`.
-    pub fn keymap(mut self, keychain: KeychainKind, keymap: KeyMap) -> Self {
-        match keychain {
-            KeychainKind::External => &mut self.descriptor_keymap,
-            KeychainKind::Internal => &mut self.change_descriptor_keymap,
-        }
-        .extend(keymap);
-        self
-    }
+    // pub fn keymap(mut self, keychain: KeychainKind, keymap: KeyMap) -> Self {
+    //     match keychain {
+    //         KeychainKind::External => &mut self.descriptor_keymap,
+    //         KeychainKind::Internal => &mut self.change_descriptor_keymap,
+    //     }
+    //     .extend(keymap);
+    //     self
+    // }
 
     /// Checks the `expected_descriptor` matches exactly what is loaded for `keychain`.
     ///
@@ -192,17 +199,17 @@ impl LoadParams {
     ///
     /// You must also specify [`extract_keys`](Self::extract_keys) if you wish to add a signer
     /// for an expected descriptor containing secrets.
-    pub fn descriptor<D>(mut self, keychain: KeychainKind, expected_descriptor: Option<D>) -> Self
-    where
-        D: IntoWalletDescriptor + Send + 'static,
-    {
-        let expected = expected_descriptor.map(|d| make_descriptor_to_extract(d));
-        match keychain {
-            KeychainKind::External => self.check_descriptor = Some(expected),
-            KeychainKind::Internal => self.check_change_descriptor = Some(expected),
-        }
-        self
-    }
+    // pub fn descriptor<D>(mut self, keychain: KeychainKind, expected_descriptor: Option<D>) -> Self
+    // where
+    //     D: IntoWalletDescriptor + Send + 'static,
+    // {
+    //     let expected = expected_descriptor.map(|d| make_descriptor_to_extract(d));
+    //     match keychain {
+    //         KeychainKind::External => self.check_descriptor = Some(expected),
+    //         KeychainKind::Internal => self.check_change_descriptor = Some(expected),
+    //     }
+    //     self
+    // }
 
     /// Checks that the given network matches the one loaded from persistence.
     pub fn check_network(mut self, network: Network) -> Self {
@@ -234,32 +241,32 @@ impl LoadParams {
         self
     }
 
-    /// Load [`PersistedWallet`] with the given [`WalletPersister`].
-    pub fn load_wallet<P>(
-        self,
-        persister: &mut P,
-    ) -> Result<Option<PersistedWallet<P>>, LoadWithPersistError<P::Error>>
-    where
-        P: WalletPersister,
-    {
-        PersistedWallet::load(persister, self)
-    }
+    // /// Load [`PersistedWallet`] with the given [`WalletPersister`].
+    // pub fn load_wallet<P>(
+    //     self,
+    //     persister: &mut P,
+    // ) -> Result<Option<PersistedWallet<P>>, LoadWithPersistError<P::Error>>
+    // where
+    //     P: WalletPersister,
+    // {
+    //     PersistedWallet::load(persister, self)
+    // }
 
-    /// Load [`PersistedWallet`] with the given [`AsyncWalletPersister`].
-    pub async fn load_wallet_async<P>(
-        self,
-        persister: &mut P,
-    ) -> Result<Option<PersistedWallet<P>>, LoadWithPersistError<P::Error>>
-    where
-        P: AsyncWalletPersister,
-    {
-        PersistedWallet::load_async(persister, self).await
-    }
+    // /// Load [`PersistedWallet`] with the given [`AsyncWalletPersister`].
+    // pub async fn load_wallet_async<P>(
+    //     self,
+    //     persister: &mut P,
+    // ) -> Result<Option<PersistedWallet<P>>, LoadWithPersistError<P::Error>>
+    // where
+    //     P: AsyncWalletPersister,
+    // {
+    //     PersistedWallet::load_async(persister, self).await
+    // }
 
-    /// Load [`Wallet`] without persistence.
-    pub fn load_wallet_no_persist(self, changeset: ChangeSet) -> Result<Option<Wallet>, LoadError> {
-        Wallet::load_with_params(changeset, self)
-    }
+    // /// Load [`Wallet`] without persistence.
+    // pub fn load_wallet_no_persist(self, changeset: ChangeSet) -> Result<Option<Wallet>, LoadError> {
+    //     Wallet::load_with_params(changeset, self)
+    // }
 }
 
 impl Default for LoadParams {

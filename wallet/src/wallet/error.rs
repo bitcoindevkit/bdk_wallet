@@ -44,6 +44,12 @@ impl fmt::Display for MiniscriptPsbtError {
 impl std::error::Error for MiniscriptPsbtError {}
 
 #[derive(Debug)]
+pub enum KeychainNotInKeyRingError {
+    NoChangeKeychain,
+    KeychainNotFound,
+}
+
+#[derive(Debug)]
 /// Error returned from [`TxBuilder::finish`]
 ///
 /// [`TxBuilder::finish`]: crate::wallet::tx_builder::TxBuilder::finish

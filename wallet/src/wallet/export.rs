@@ -112,55 +112,55 @@ impl FullyNodedExport {
     ///
     /// If the database is empty or `include_blockheight` is false, the `blockheight` field
     /// returned will be `0`.
-    pub fn export_wallet(
-        wallet: &Wallet,
-        label: &str,
-        include_blockheight: bool,
-    ) -> Result<Self, &'static str> {
-        let descriptor = wallet
-            .public_descriptor(KeychainKind::External)
-            .to_string_with_secret(
-                &wallet
-                    .get_signers(KeychainKind::External)
-                    .as_key_map(wallet.secp_ctx()),
-            );
-        let descriptor = remove_checksum(descriptor);
-        Self::is_compatible_with_core(&descriptor)?;
-
-        let blockheight = if include_blockheight {
-            wallet.transactions().next().map_or(0, |canonical_tx| {
-                canonical_tx
-                    .chain_position
-                    .confirmation_height_upper_bound()
-                    .unwrap_or(0)
-            })
-        } else {
-            0
-        };
-
-        let export = FullyNodedExport {
-            descriptor,
-            label: label.into(),
-            blockheight,
-        };
-
-        let change_descriptor = {
-            let descriptor = wallet
-                .public_descriptor(KeychainKind::Internal)
-                .to_string_with_secret(
-                    &wallet
-                        .get_signers(KeychainKind::Internal)
-                        .as_key_map(wallet.secp_ctx()),
-                );
-            Some(remove_checksum(descriptor))
-        };
-
-        if export.change_descriptor() != change_descriptor {
-            return Err("Incompatible change descriptor");
-        }
-
-        Ok(export)
-    }
+    // pub fn export_wallet(
+    //     wallet: &Wallet,
+    //     label: &str,
+    //     include_blockheight: bool,
+    // ) -> Result<Self, &'static str> {
+    //     let descriptor = wallet
+    //         .public_descriptor(KeychainKind::External)
+    //         .to_string_with_secret(
+    //             &wallet
+    //                 .get_signers(KeychainKind::External)
+    //                 .as_key_map(wallet.secp_ctx()),
+    //         );
+    //     let descriptor = remove_checksum(descriptor);
+    //     Self::is_compatible_with_core(&descriptor)?;
+    //
+    //     let blockheight = if include_blockheight {
+    //         wallet.transactions().next().map_or(0, |canonical_tx| {
+    //             canonical_tx
+    //                 .chain_position
+    //                 .confirmation_height_upper_bound()
+    //                 .unwrap_or(0)
+    //         })
+    //     } else {
+    //         0
+    //     };
+    //
+    //     let export = FullyNodedExport {
+    //         descriptor,
+    //         label: label.into(),
+    //         blockheight,
+    //     };
+    //
+    //     let change_descriptor = {
+    //         let descriptor = wallet
+    //             .public_descriptor(KeychainKind::Internal)
+    //             .to_string_with_secret(
+    //                 &wallet
+    //                     .get_signers(KeychainKind::Internal)
+    //                     .as_key_map(wallet.secp_ctx()),
+    //             );
+    //         Some(remove_checksum(descriptor))
+    //     };
+    //
+    //     if export.change_descriptor() != change_descriptor {
+    //         return Err("Incompatible change descriptor");
+    //     }
+    //
+    //     Ok(export)
+    // }
 
     fn is_compatible_with_core(descriptor: &str) -> Result<(), &'static str> {
         fn check_ms<Ctx: ScriptContext>(

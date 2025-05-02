@@ -23,10 +23,16 @@ use super::{ExtendedDescriptor, IntoWalletDescriptor, KeyMap};
 use crate::descriptor::DescriptorError;
 use crate::keys::{DerivableKey, IntoDescriptorKey, ValidNetworks};
 use crate::wallet::utils::SecpCtx;
-use crate::{descriptor, KeychainKind};
+use crate::descriptor;
 
 /// Type alias for the return type of [`DescriptorTemplate`], [`descriptor!`](crate::descriptor!) and others
 pub type DescriptorTemplateOut = (ExtendedDescriptor, KeyMap, ValidNetworks);
+
+#[derive(Clone, Debug)]
+pub enum TemplateKeychainKind {
+    External,
+    Internal,
+}
 
 /// Trait for descriptor templates that can be built into a full descriptor
 ///
@@ -232,7 +238,7 @@ impl<K: IntoDescriptorKey<Tap>> DescriptorTemplate for P2TR<K> {
 /// # Ok::<_, Box<dyn std::error::Error>>(())
 /// ```
 #[derive(Debug, Clone)]
-pub struct Bip44<K: DerivableKey<Legacy>>(pub K, pub KeychainKind);
+pub struct Bip44<K: DerivableKey<Legacy>>(pub K, pub TemplateKeychainKind);
 
 impl<K: DerivableKey<Legacy>> DescriptorTemplate for Bip44<K> {
     fn build(self, network: Network) -> Result<DescriptorTemplateOut, DescriptorError> {
@@ -271,7 +277,7 @@ impl<K: DerivableKey<Legacy>> DescriptorTemplate for Bip44<K> {
 /// # Ok::<_, Box<dyn std::error::Error>>(())
 /// ```
 #[derive(Debug, Clone)]
-pub struct Bip44Public<K: DerivableKey<Legacy>>(pub K, pub bip32::Fingerprint, pub KeychainKind);
+pub struct Bip44Public<K: DerivableKey<Legacy>>(pub K, pub bip32::Fingerprint, pub TemplateKeychainKind);
 
 impl<K: DerivableKey<Legacy>> DescriptorTemplate for Bip44Public<K> {
     fn build(self, network: Network) -> Result<DescriptorTemplateOut, DescriptorError> {
@@ -309,7 +315,7 @@ impl<K: DerivableKey<Legacy>> DescriptorTemplate for Bip44Public<K> {
 /// # Ok::<_, Box<dyn std::error::Error>>(())
 /// ```
 #[derive(Debug, Clone)]
-pub struct Bip49<K: DerivableKey<Segwitv0>>(pub K, pub KeychainKind);
+pub struct Bip49<K: DerivableKey<Segwitv0>>(pub K, pub TemplateKeychainKind);
 
 impl<K: DerivableKey<Segwitv0>> DescriptorTemplate for Bip49<K> {
     fn build(self, network: Network) -> Result<DescriptorTemplateOut, DescriptorError> {
@@ -348,7 +354,7 @@ impl<K: DerivableKey<Segwitv0>> DescriptorTemplate for Bip49<K> {
 /// # Ok::<_, Box<dyn std::error::Error>>(())
 /// ```
 #[derive(Debug, Clone)]
-pub struct Bip49Public<K: DerivableKey<Segwitv0>>(pub K, pub bip32::Fingerprint, pub KeychainKind);
+pub struct Bip49Public<K: DerivableKey<Segwitv0>>(pub K, pub bip32::Fingerprint, pub TemplateKeychainKind);
 
 impl<K: DerivableKey<Segwitv0>> DescriptorTemplate for Bip49Public<K> {
     fn build(self, network: Network) -> Result<DescriptorTemplateOut, DescriptorError> {
@@ -386,7 +392,7 @@ impl<K: DerivableKey<Segwitv0>> DescriptorTemplate for Bip49Public<K> {
 /// # Ok::<_, Box<dyn std::error::Error>>(())
 /// ```
 #[derive(Debug, Clone)]
-pub struct Bip84<K: DerivableKey<Segwitv0>>(pub K, pub KeychainKind);
+pub struct Bip84<K: DerivableKey<Segwitv0>>(pub K, pub TemplateKeychainKind);
 
 impl<K: DerivableKey<Segwitv0>> DescriptorTemplate for Bip84<K> {
     fn build(self, network: Network) -> Result<DescriptorTemplateOut, DescriptorError> {
@@ -425,7 +431,7 @@ impl<K: DerivableKey<Segwitv0>> DescriptorTemplate for Bip84<K> {
 /// # Ok::<_, Box<dyn std::error::Error>>(())
 /// ```
 #[derive(Debug, Clone)]
-pub struct Bip84Public<K: DerivableKey<Segwitv0>>(pub K, pub bip32::Fingerprint, pub KeychainKind);
+pub struct Bip84Public<K: DerivableKey<Segwitv0>>(pub K, pub bip32::Fingerprint, pub TemplateKeychainKind);
 
 impl<K: DerivableKey<Segwitv0>> DescriptorTemplate for Bip84Public<K> {
     fn build(self, network: Network) -> Result<DescriptorTemplateOut, DescriptorError> {
@@ -463,7 +469,7 @@ impl<K: DerivableKey<Segwitv0>> DescriptorTemplate for Bip84Public<K> {
 /// # Ok::<_, Box<dyn std::error::Error>>(())
 /// ```
 #[derive(Debug, Clone)]
-pub struct Bip86<K: DerivableKey<Tap>>(pub K, pub KeychainKind);
+pub struct Bip86<K: DerivableKey<Tap>>(pub K, pub TemplateKeychainKind);
 
 impl<K: DerivableKey<Tap>> DescriptorTemplate for Bip86<K> {
     fn build(self, network: Network) -> Result<DescriptorTemplateOut, DescriptorError> {
@@ -502,7 +508,7 @@ impl<K: DerivableKey<Tap>> DescriptorTemplate for Bip86<K> {
 /// # Ok::<_, Box<dyn std::error::Error>>(())
 /// ```
 #[derive(Debug, Clone)]
-pub struct Bip86Public<K: DerivableKey<Tap>>(pub K, pub bip32::Fingerprint, pub KeychainKind);
+pub struct Bip86Public<K: DerivableKey<Tap>>(pub K, pub bip32::Fingerprint, pub TemplateKeychainKind);
 
 impl<K: DerivableKey<Tap>> DescriptorTemplate for Bip86Public<K> {
     fn build(self, network: Network) -> Result<DescriptorTemplateOut, DescriptorError> {
@@ -521,7 +527,7 @@ macro_rules! expand_make_bipxx {
             pub(super) fn make_bipxx_private<K: DerivableKey<$ctx>>(
                 bip: u32,
                 key: K,
-                keychain: KeychainKind,
+                keychain: TemplateKeychainKind,
                 network: Network,
             ) -> Result<impl IntoDescriptorKey<$ctx>, DescriptorError> {
                 let mut derivation_path = alloc::vec::Vec::with_capacity(4);
@@ -538,10 +544,10 @@ macro_rules! expand_make_bipxx {
                 derivation_path.push(bip32::ChildNumber::from_hardened_idx(0)?);
 
                 match keychain {
-                    KeychainKind::External => {
+                    TemplateKeychainKind::External => {
                         derivation_path.push(bip32::ChildNumber::from_normal_idx(0)?)
                     }
-                    KeychainKind::Internal => {
+                    TemplateKeychainKind::Internal => {
                         derivation_path.push(bip32::ChildNumber::from_normal_idx(1)?)
                     }
                 };
@@ -554,12 +560,12 @@ macro_rules! expand_make_bipxx {
                 bip: u32,
                 key: K,
                 parent_fingerprint: bip32::Fingerprint,
-                keychain: KeychainKind,
+                keychain: TemplateKeychainKind,
                 network: Network,
             ) -> Result<impl IntoDescriptorKey<$ctx>, DescriptorError> {
                 let derivation_path: bip32::DerivationPath = match keychain {
-                    KeychainKind::External => vec![bip32::ChildNumber::from_normal_idx(0)?].into(),
-                    KeychainKind::Internal => vec![bip32::ChildNumber::from_normal_idx(1)?].into(),
+                    TemplateKeychainKind::External => vec![bip32::ChildNumber::from_normal_idx(0)?].into(),
+                    TemplateKeychainKind::Internal => vec![bip32::ChildNumber::from_normal_idx(1)?].into(),
                 };
 
                 let source_path = bip32::DerivationPath::from(vec![
