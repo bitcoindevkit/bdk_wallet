@@ -1976,7 +1976,7 @@ fn test_bump_fee_reduce_change() {
     assert_fee_rate!(psbt, fee.unwrap_or(Amount::ZERO), feerate, @add_signature);
 
     let mut builder = wallet.build_fee_bump(txid).unwrap();
-    builder.fee_absolute(Amount::from_sat(200));
+    builder.fee_absolute(Amount::from_sat(283));
     let psbt = builder.finish().unwrap();
     let sent_received =
         wallet.sent_and_received(&psbt.clone().extract_tx().expect("failed to extract tx"));
@@ -2013,7 +2013,7 @@ fn test_bump_fee_reduce_change() {
         sent_received.1
     );
 
-    assert_eq!(fee.unwrap_or(Amount::ZERO), Amount::from_sat(200));
+    assert_eq!(fee.unwrap_or(Amount::ZERO), Amount::from_sat(283));
 }
 
 #[test]
@@ -2566,7 +2566,7 @@ fn test_bump_fee_absolute_force_add_input() {
     builder
         .add_utxo(incoming_op)
         .unwrap()
-        .fee_absolute(Amount::from_sat(250));
+        .fee_absolute(Amount::from_sat(351));
     let psbt = builder.finish().unwrap();
     let sent_received =
         wallet.sent_and_received(&psbt.clone().extract_tx().expect("failed to extract tx"));
@@ -2601,7 +2601,7 @@ fn test_bump_fee_absolute_force_add_input() {
         sent_received.1
     );
 
-    assert_eq!(fee.unwrap_or(Amount::ZERO), Amount::from_sat(250));
+    assert_eq!(fee.unwrap_or(Amount::ZERO), Amount::from_sat(351));
 }
 
 #[test]
