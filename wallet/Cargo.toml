@@ -23,6 +23,7 @@ serde = { version = "^1.0", features = ["derive"] }
 serde_json = { version = "^1.0" }
 bdk_chain = { version = "0.21.1", features = [ "miniscript", "serde" ], default-features = false }
 bdk_file_store = { version = "0.18.1", optional = true }
+bdk_tx = { git = "https://github.com/bitcoindevkit/bdk-tx.git", rev = "6e2414ed7e701c04d0af46ff477c2dbf9a9f75b2" }
 
 # Optional dependencies
 bip39 = { version = "2.0", optional = true }
