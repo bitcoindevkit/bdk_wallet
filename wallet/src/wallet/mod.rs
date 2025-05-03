@@ -2516,7 +2516,7 @@ fn new_local_utxo(
 }
 
 fn create_indexer(
-    keychain_set: KeyRing,
+    keyring: KeyRing,
     // descriptor: ExtendedDescriptor,
     // change_descriptor: Option<ExtendedDescriptor>,
     lookahead: u32,
@@ -2525,10 +2525,17 @@ fn create_indexer(
 
     // let (descriptor, keymap) = descriptor;
     // let signers = Arc::new(SignersContainer::build(keymap, &descriptor, secp));
-    let default_keychain = keychain_set.get_default_keychain().clone();
-    assert!(indexer
-        .insert_descriptor(default_keychain.0, default_keychain.1.0)
-        .expect("first descriptor introduced must succeed"));
+    let default_keychain = keyring.get_default_keychain().clone();
+    // TODO: KeyRings always have at least one descriptor, so I think we don't need this assert
+    // assert!(indexer
+    //     .insert_descriptor(default_keychain.0, default_keychain.1.0)
+    //     .expect("first descriptor introduced must succeed"));
+
+    // TODO: I'm here, May 2
+    keyring.list_keychains().iter().for_each(|k| {
+        indexer.insert_descriptor(k.0, k.1.0.clone()).expect("This should work");
+        dbg!("Inserting descriptor into indexer");
+    });
 
     // let (descriptor, keymap) = change_descriptor;
     // let change_signers = Arc::new(SignersContainer::build(keymap, &descriptor, secp));

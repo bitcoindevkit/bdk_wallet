@@ -131,6 +131,17 @@ impl KeyRing {
         &self.keychains
     }
 
+    pub fn list_keychain_ids(&self) -> Vec<DescriptorId> {
+        self.keychains
+            .iter()
+            .map(|keychain| match keychain.0 {
+                KeychainKind::Other(descriptor_id) => descriptor_id,
+                KeychainKind::Default => keychain.1.0.descriptor_id(),
+                KeychainKind::Change => keychain.1.0.descriptor_id(),
+            })
+            .collect()
+    }
+
     // pub fn add_change_keychain(&mut self, keychain: (DescriptorToExtract, KeyMap), keychain_identifier: KeychainIdentifier) {
     //
     // }
