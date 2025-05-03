@@ -83,10 +83,11 @@ impl CreateParams {
 
     pub fn new_with_keychain_set(
         keychain_set: KeyRing,
+        network: Network,
     ) -> Self {
         Self {
             keychain_set,
-            network: Network::Bitcoin,
+            network,
             genesis_hash: None,
             lookahead: DEFAULT_LOOKAHEAD,
         }

@@ -286,8 +286,8 @@ impl std::error::Error for ApplyBlockError {}
 pub type WalletTx<'a> = CanonicalTx<'a, Arc<Transaction>, ConfirmationBlockTime>;
 
 impl Wallet {
-    pub fn new(keychain_set: KeyRing) -> CreateParams {
-        CreateParams::new_with_keychain_set(keychain_set)
+    pub fn new(keychain_set: KeyRing, network: Network) -> CreateParams {
+        CreateParams::new_with_keychain_set(keychain_set, network)
     }
 
     /// Build a new single descriptor [`Wallet`].
