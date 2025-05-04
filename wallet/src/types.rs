@@ -10,18 +10,11 @@
 // licenses.
 
 use alloc::boxed::Box;
-use chain::{ChainPosition, ConfirmationBlockTime, DescriptorExt, DescriptorId};
+use chain::{ChainPosition, ConfirmationBlockTime, DescriptorId};
 use std::hash::{Hash, Hasher};
-use std::prelude::rust_2021::Vec;
 use bitcoin::transaction::{OutPoint, Sequence, TxOut};
 use bitcoin::{psbt, Network, Weight};
-use miniscript::{Descriptor, DescriptorPublicKey};
-use miniscript::descriptor::KeyMap;
 use serde::{Deserialize, Serialize};
-use crate::descriptor::{IntoWalletDescriptor};
-use crate::DescriptorToExtract;
-use crate::wallet::make_descriptor_to_extract;
-use crate::wallet::utils::SecpCtx;
 
 /// Types of keychains
 // #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd)]
@@ -32,6 +25,7 @@ use crate::wallet::utils::SecpCtx;
 //     Internal = 1,
 // }
 
+// TODO #226: Figure out why these are there and implement them on the new KeychainKind.
 // impl KeychainKind {
 //     /// Return [`KeychainKind`] as a byte
 //     pub fn as_byte(&self) -> u8 {
@@ -56,99 +50,6 @@ pub enum KeychainKind {
     Default,
     Change,
     Other(DescriptorId),
-}
-
-// pub type KeychainIdentifier = (KeychainKind, Option<DescriptorId>);
-
-pub type WalletKeychain = (KeychainKind, (Descriptor<DescriptorPublicKey>, KeyMap));
-
-/// A `WalletKeychain` is mostly a descriptor with metadata associated with it. It states whether the
-/// keychain is the default keychain for the wallet, and provides an identifier for it which can be
-/// used for retrieval.
-// #[derive(Clone, Debug, Eq, PartialEq)]
-// pub struct WalletKeychain {
-//     pub keychain_kind: KeychainKind,
-//     pub public_descriptor: Descriptor<DescriptorPublicKey>,
-//     pub keymap: KeyMap,
-// }
-
-#[derive(Debug, Clone)]
-pub struct KeyRing {
-    keychains: Vec<WalletKeychain>,
-    network: Network,
-}
-
-impl KeyRing {
-    pub fn new<D: IntoWalletDescriptor + Send + 'static>(
-        default_descriptor: D,
-        network: Network,
-    ) -> Self {
-        let secp = SecpCtx::new();
-        let descriptor_to_extract: DescriptorToExtract = make_descriptor_to_extract(default_descriptor);
-        let public_descriptor: (Descriptor<DescriptorPublicKey>, KeyMap) = descriptor_to_extract(&secp, network).unwrap();
-        let descriptor_id: DescriptorId = public_descriptor.0.descriptor_id();
-        // Using the type alias
-        let wallet_keychain = ((KeychainKind::Default), public_descriptor);
-
-        // Using the struct
-        // let wallet_keychain = WalletKeychain {
-        //     keychain_kind: KeychainKind::Default(descriptor_id),
-        //     public_descriptor,
-        //     keymap: KeyMap::default()
-        // };
-
-        KeyRing {
-            keychains: vec![wallet_keychain],
-            network,
-        }
-    }
-
-    // TODO: This needs to never fail because there is always a default keychain.
-    pub fn get_default_keychain(&self) -> WalletKeychain {
-        self.keychains.iter().find(|keychain| matches!(keychain.0, KeychainKind::Default)).unwrap().clone()
-    }
-
-    pub fn get_change_keychain(&self) -> Option<WalletKeychain> {
-        self.keychains.iter().find(|keychain| matches!(keychain.0, KeychainKind::Change)).cloned()
-    }
-
-    pub fn add_other_descriptor<D: IntoWalletDescriptor + Send + 'static>(
-        &mut self,
-        other_descriptor: D
-    ) -> &mut KeyRing {
-        let secp = SecpCtx::new();
-        let descriptor_to_extract: DescriptorToExtract = make_descriptor_to_extract(other_descriptor);
-        let public_descriptor = descriptor_to_extract(&secp, self.network).unwrap();
-        let descriptor_id = public_descriptor.0.descriptor_id();
-
-        let wallet_keychain = ((KeychainKind::Other(descriptor_id)), public_descriptor);
-
-        self.keychains.push(wallet_keychain);
-        self
-    }
-
-    pub fn list_keychains(&self) -> &Vec<WalletKeychain> {
-        &self.keychains
-    }
-
-    pub fn list_keychain_ids(&self) -> Vec<DescriptorId> {
-        self.keychains
-            .iter()
-            .map(|keychain| match keychain.0 {
-                KeychainKind::Other(descriptor_id) => descriptor_id,
-                KeychainKind::Default => keychain.1.0.descriptor_id(),
-                KeychainKind::Change => keychain.1.0.descriptor_id(),
-            })
-            .collect()
-    }
-
-    // pub fn add_change_keychain(&mut self, keychain: (DescriptorToExtract, KeyMap), keychain_identifier: KeychainIdentifier) {
-    //
-    // }
-    // pub fn add_wallet_keychain<D: IntoWalletDescriptor + Send + 'static>(
-    //     &mut self,
-    //     descriptor: D,
-    // )
 }
 
 /// An unspent output owned by a [`Wallet`].

@@ -59,6 +59,7 @@ mod persisted;
 pub mod signer;
 pub mod tx_builder;
 pub(crate) mod utils;
+mod keyring;
 
 use crate::collections::{BTreeMap, HashMap, HashSet};
 use crate::descriptor::{
@@ -85,6 +86,7 @@ pub use persisted::*;
 pub use utils::IsDust;
 use crate::error::KeychainNotInKeyRingError;
 use crate::error::KeychainNotInKeyRingError::KeychainNotFound;
+use crate::wallet::keyring::KeyRing;
 
 /// A Bitcoin wallet
 ///
