@@ -34,53 +34,16 @@ pub struct CreateParams {
 }
 
 impl CreateParams {
-    /// Construct parameters with provided `descriptor`.
+    /// Construct parameters with provided `KeyRing`.
     ///
     /// Default values:
-    /// * `change_descriptor` = `None`
-    /// * `network` = [`Network::Bitcoin`]
+    /// * `network` = Provided by your KeyRing
     /// * `genesis_hash` = `None`
     /// * `lookahead` = [`DEFAULT_LOOKAHEAD`]
-    ///
-    /// Use this method only when building a wallet with a single descriptor. See
-    /// also [`Wallet::create_single`].
-    // pub fn new_single<D: IntoWalletDescriptor + Send + 'static>(descriptor: D) -> Self {
-    //     Self {
-    //         descriptor: make_descriptor_to_extract(descriptor),
-    //         descriptor_keymap: KeyMap::default(),
-    //         change_descriptor: None,
-    //         change_descriptor_keymap: KeyMap::default(),
-    //         network: Network::Bitcoin,
-    //         genesis_hash: None,
-    //         lookahead: DEFAULT_LOOKAHEAD,
-    //     }
-    // }
-
-    /// Construct parameters with provided `descriptor` and `change_descriptor`.
-    ///
-    /// Default values:
-    /// * `network` = [`Network::Bitcoin`]
-    /// * `genesis_hash` = `None`
-    /// * `lookahead` = [`DEFAULT_LOOKAHEAD`]
-    // pub fn new<D: IntoWalletDescriptor + Send + 'static>(
-    //     descriptor: D,
-    //     change_descriptor: D,
-    // ) -> Self {
-    //     Self {
-    //         descriptor: make_descriptor_to_extract(descriptor),
-    //         descriptor_keymap: KeyMap::default(),
-    //         change_descriptor: Some(make_descriptor_to_extract(change_descriptor)),
-    //         change_descriptor_keymap: KeyMap::default(),
-    //         network: Network::Bitcoin,
-    //         genesis_hash: None,
-    //         lookahead: DEFAULT_LOOKAHEAD,
-    //     }
-    // }
-
-    pub fn new_with_keyring(
+    pub fn new(
         key_ring: KeyRing,
-        network: Network,
     ) -> Self {
+        let network = key_ring.network();
         Self {
             key_ring,
             network,

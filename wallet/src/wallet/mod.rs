@@ -288,58 +288,6 @@ impl std::error::Error for ApplyBlockError {}
 pub type WalletTx<'a> = CanonicalTx<'a, Arc<Transaction>, ConfirmationBlockTime>;
 
 impl Wallet {
-    pub fn new(key_ring: KeyRing) -> CreateParams {
-        let network = key_ring.network();
-        CreateParams::new_with_keyring(key_ring, network)
-    }
-
-    /// Build a new single descriptor [`Wallet`].
-    ///
-    /// If you have previously created a wallet, use [`load`](Self::load) instead.
-    ///
-    /// # Note
-    ///
-    /// Only use this method when creating a wallet designed to be used with a single
-    /// descriptor and keychain. Otherwise the recommended way to construct a new wallet is
-    /// by using [`Wallet::create`]. It's worth noting that not all features are available
-    /// with single descriptor wallets, for example setting a [`change_policy`] on [`TxBuilder`]
-    /// and related methods such as [`do_not_spend_change`]. This is because all payments are
-    /// received on the external keychain (including change), and without a change keychain
-    /// BDK lacks enough information to distinguish between change and outside payments.
-    ///
-    /// Additionally because this wallet has no internal (change) keychain, all methods that
-    /// require a [`KeychainKind`] as input, e.g. [`reveal_next_address`] should only be called
-    /// using the [`External`] variant. In most cases passing [`Internal`] is treated as the
-    /// equivalent of [`External`] but this behavior must not be relied on.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// # use bdk_wallet::Wallet;
-    /// # use bitcoin::Network;
-    /// # const EXTERNAL_DESC: &str = "wpkh(tprv8ZgxMBicQKsPdy6LMhUtFHAgpocR8GC6QmwMSFpZs7h6Eziw3SpThFfczTDh5rW2krkqffa11UpX3XkeTTB2FvzZKWXqPY54Y6Rq4AQ5R8L/84'/1'/0'/0/*)";
-    /// # let temp_dir = tempfile::tempdir().expect("must create tempdir");
-    /// # let file_path = temp_dir.path().join("store.db");
-    /// // Create a wallet that is persisted to SQLite database.
-    /// use bdk_wallet::rusqlite::Connection;
-    /// let mut conn = Connection::open(file_path)?;
-    /// let wallet = Wallet::create_single(EXTERNAL_DESC)
-    ///     .network(Network::Testnet)
-    ///     .create_wallet(&mut conn)?;
-    /// # Ok::<_, anyhow::Error>(())
-    /// ```
-    /// [`change_policy`]: TxBuilder::change_policy
-    /// [`do_not_spend_change`]: TxBuilder::do_not_spend_change
-    /// [`External`]: KeychainKind::External
-    /// [`Internal`]: KeychainKind::Internal
-    /// [`reveal_next_address`]: Self::reveal_next_address
-    // pub fn create_single<D>(descriptor: D) -> CreateParams
-    // where
-    //     D: IntoWalletDescriptor + Send + Clone + 'static,
-    // {
-    //     CreateParams::new_single(descriptor)
-    // }
-
     /// Build a new [`Wallet`].
     ///
     /// If you have previously created a wallet, use [`load`](Self::load) instead.
@@ -348,13 +296,14 @@ impl Wallet {
     ///
     /// ```rust
     /// # use bdk_wallet::Wallet;
+    /// # use bdk_wallet::keyring::KeyRing;
     /// # use bitcoin::Network;
     /// # fn main() -> anyhow::Result<()> {
-    /// # const EXTERNAL_DESC: &str = "wpkh(tprv8ZgxMBicQKsPdy6LMhUtFHAgpocR8GC6QmwMSFpZs7h6Eziw3SpThFfczTDh5rW2krkqffa11UpX3XkeTTB2FvzZKWXqPY54Y6Rq4AQ5R8L/84'/1'/0'/0/*)";
-    /// # const INTERNAL_DESC: &str = "wpkh(tprv8ZgxMBicQKsPdy6LMhUtFHAgpocR8GC6QmwMSFpZs7h6Eziw3SpThFfczTDh5rW2krkqffa11UpX3XkeTTB2FvzZKWXqPY54Y6Rq4AQ5R8L/84'/1'/0'/1/*)";
+    /// # const MY_DESCRIPTOR: &str = "wpkh(tprv8ZgxMBicQKsPdy6LMhUtFHAgpocR8GC6QmwMSFpZs7h6Eziw3SpThFfczTDh5rW2krkqffa11UpX3XkeTTB2FvzZKWXqPY54Y6Rq4AQ5R8L/84'/1'/0'/0/*)";
+    /// // Create a KeyRing
+    /// let mut key_ring = KeyRing::new(MY_DESCRIPTOR, Network::Signet);
     /// // Create a non-persisted wallet.
-    /// let wallet = Wallet::create(EXTERNAL_DESC, INTERNAL_DESC)
-    ///     .network(Network::Testnet)
+    /// let wallet = Wallet::create(key_ring)
     ///     .create_wallet_no_persist()?;
     ///
     /// // Create a wallet that is persisted to SQLite database.
@@ -362,19 +311,15 @@ impl Wallet {
     /// # let file_path = temp_dir.path().join("store.db");
     /// use bdk_wallet::rusqlite::Connection;
     /// let mut conn = Connection::open(file_path)?;
-    /// let wallet = Wallet::create(EXTERNAL_DESC, INTERNAL_DESC)
-    ///     .network(Network::Testnet)
+    /// let wallet = Wallet::create(key_ring)
     ///     .create_wallet(&mut conn)?;
     /// # Ok(())
     /// # }
     /// ```
-    // pub fn create<D>(descriptor: D, change_descriptor: D) -> CreateParams
-    // where
-    //     D: IntoWalletDescriptor + Send + Clone + 'static,
-    // {
-    //     CreateParams::new(descriptor, change_descriptor)
-    // }
-    //
+    pub fn create(key_ring: KeyRing) -> CreateParams {
+        CreateParams::new(key_ring)
+    }
+
     // /// Create a new [`Wallet`] with given `params`.
     // ///
     // /// Refer to [`Wallet::create`] for more.

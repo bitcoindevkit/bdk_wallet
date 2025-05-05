@@ -22,7 +22,7 @@ fn main() -> Result<(), anyhow::Error> {
     println!("{:?}", keychain_ids);
 
     // Create the wallet and peek addresses on each of the descriptors
-    let wallet: Wallet = Wallet::new(keyring).create_wallet_no_persist()?;
+    let mut wallet: Wallet = Wallet::create(keyring).create_wallet_no_persist()?;
     let address_1 = wallet.peek_address(KeychainKind::Default, 0).unwrap();
     let address_2 = wallet.peek_address(KeychainKind::Other(keychain_ids[1]), 0).unwrap();
     let address_3 = wallet.peek_address(KeychainKind::Other(keychain_ids[2]), 0).unwrap();
