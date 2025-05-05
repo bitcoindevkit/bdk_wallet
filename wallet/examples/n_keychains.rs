@@ -1,7 +1,8 @@
 use bdk_chain::DescriptorId;
-use bdk_wallet::{KeyRing, Wallet};
+use bdk_wallet::Wallet;
 use bdk_wallet::bitcoin::Network;
 use bdk_wallet::KeychainKind;
+use bdk_wallet::keyring::KeyRing;
 
 const EXTERNAL_DESC: &str = "wpkh(tprv8ZgxMBicQKsPdy6LMhUtFHAgpocR8GC6QmwMSFpZs7h6Eziw3SpThFfczTDh5rW2krkqffa11UpX3XkeTTB2FvzZKWXqPY54Y6Rq4AQ5R8L/84'/1'/0'/0/*)";
 const OTHER_DESC_21: &str = "wpkh(tprv8ZgxMBicQKsPdy6LMhUtFHAgpocR8GC6QmwMSFpZs7h6Eziw3SpThFfczTDh5rW2krkqffa11UpX3XkeTTB2FvzZKWXqPY54Y6Rq4AQ5R8L/84'/1'/0'/21/*)";
@@ -10,7 +11,7 @@ const OTHER_DESC_41: &str = "wpkh(tprv8ZgxMBicQKsPdy6LMhUtFHAgpocR8GC6QmwMSFpZs7
 
 fn main() -> Result<(), anyhow::Error> {
     // Create a keyring with a single, default descriptor (aka the KeychainKind::External from the 1.2.0 API)
-    let mut keyring = KeyRing::new(EXTERNAL_DESC, Network::Testnet4);
+    let mut keyring = KeyRing::new(EXTERNAL_DESC, Network::Testnet);
 
     // Add 3 new custom descriptors
     keyring.add_other_descriptor(OTHER_DESC_21);
@@ -36,7 +37,6 @@ fn main() -> Result<(), anyhow::Error> {
     println!("Balance {:?}", balance);
 
     let full_scan_request = wallet.start_full_scan().build();
-
 
     Ok(())
 }

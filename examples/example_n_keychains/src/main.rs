@@ -1,8 +1,9 @@
 use bdk_esplora::{esplora_client, EsploraExt};
 use bdk_wallet::chain::DescriptorId;
-use bdk_wallet::{KeyRing, Wallet};
+use bdk_wallet::Wallet;
 use bdk_wallet::bitcoin::Network;
 use bdk_wallet::KeychainKind;
+use bdk_wallet::keyring::KeyRing;
 
 const ESPLORA_URL: &str = "http://signet.bitcoindevkit.net";
 const STOP_GAP: usize = 5;
@@ -26,7 +27,7 @@ fn main() -> Result<(), anyhow::Error> {
     println!("{:?}", keychain_ids);
 
     // Create the wallet and peek addresses on each of the descriptors
-    let mut wallet: Wallet = Wallet::new(keyring, Network::Signet).create_wallet_no_persist()?;
+    let mut wallet: Wallet = Wallet::new(keyring).create_wallet_no_persist()?;
     let address_1 = wallet.peek_address(KeychainKind::Default, 0).unwrap();
     let address_2 = wallet.peek_address(KeychainKind::Other(keychain_ids[1]), 0).unwrap();
     let address_3 = wallet.peek_address(KeychainKind::Other(keychain_ids[2]), 0).unwrap();

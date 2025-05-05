@@ -3,7 +3,7 @@ use bdk_chain::keychain_txout::DEFAULT_LOOKAHEAD;
 use bitcoin::{BlockHash, Network};
 use miniscript::descriptor::KeyMap;
 
-use crate::{descriptor::{DescriptorError, ExtendedDescriptor, IntoWalletDescriptor}, utils::SecpCtx, AsyncWalletPersister, CreateWithPersistError, KeyRing, LoadWithPersistError, Wallet, WalletPersister};
+use crate::{descriptor::{DescriptorError, ExtendedDescriptor, IntoWalletDescriptor}, utils::SecpCtx, AsyncWalletPersister, CreateWithPersistError, wallet::keyring::KeyRing, LoadWithPersistError, Wallet, WalletPersister};
 
 use super::{ChangeSet, LoadError, PersistedWallet};
 
@@ -27,11 +27,7 @@ where
 /// Parameters for [`Wallet::create`] or [`PersistedWallet::create`].
 #[must_use]
 pub struct CreateParams {
-    pub(crate) keychain_set: KeyRing,
-    // pub(crate) descriptor: DescriptorToExtract,
-    // pub(crate) descriptor_keymap: KeyMap,
-    // pub(crate) change_descriptor: Option<DescriptorToExtract>,
-    // pub(crate) change_descriptor_keymap: KeyMap,
+    pub(crate) key_ring: KeyRing,
     pub(crate) network: Network,
     pub(crate) genesis_hash: Option<BlockHash>,
     pub(crate) lookahead: u32,
@@ -81,12 +77,12 @@ impl CreateParams {
     //     }
     // }
 
-    pub fn new_with_keychain_set(
-        keychain_set: KeyRing,
+    pub fn new_with_keyring(
+        key_ring: KeyRing,
         network: Network,
     ) -> Self {
         Self {
-            keychain_set,
+            key_ring,
             network,
             genesis_hash: None,
             lookahead: DEFAULT_LOOKAHEAD,

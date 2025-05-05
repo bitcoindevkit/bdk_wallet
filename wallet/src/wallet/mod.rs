@@ -59,7 +59,7 @@ mod persisted;
 pub mod signer;
 pub mod tx_builder;
 pub(crate) mod utils;
-mod keyring;
+pub mod keyring;
 
 use crate::collections::{BTreeMap, HashMap, HashSet};
 use crate::descriptor::{
@@ -86,7 +86,7 @@ pub use persisted::*;
 pub use utils::IsDust;
 use crate::error::KeychainNotInKeyRingError;
 use crate::error::KeychainNotInKeyRingError::KeychainNotFound;
-use crate::wallet::keyring::KeyRing;
+use crate::keyring::KeyRing;
 
 /// A Bitcoin wallet
 ///
@@ -114,7 +114,7 @@ pub struct Wallet {
     stage: ChangeSet,
     network: Network,
     secp: SecpCtx,
-    keychain_set: KeyRing
+    key_ring: KeyRing
 }
 
 /// An update to [`Wallet`].
@@ -288,8 +288,9 @@ impl std::error::Error for ApplyBlockError {}
 pub type WalletTx<'a> = CanonicalTx<'a, Arc<Transaction>, ConfirmationBlockTime>;
 
 impl Wallet {
-    pub fn new(keychain_set: KeyRing, network: Network) -> CreateParams {
-        CreateParams::new_with_keychain_set(keychain_set, network)
+    pub fn new(key_ring: KeyRing) -> CreateParams {
+        let network = key_ring.network();
+        CreateParams::new_with_keyring(key_ring, network)
     }
 
     /// Build a new single descriptor [`Wallet`].
@@ -387,15 +388,16 @@ impl Wallet {
 
         // let (descriptor, mut descriptor_keymap) = (params.descriptor)(&secp, network)?;
         // let (descriptor, mut descriptor_keymap) = (params.keychain_set.get_default_keychain().1.0)(&secp, network)?;
-        let (descriptor, mut descriptor_keymap) = params.keychain_set.get_default_keychain().1;
+        let descriptor = params.key_ring.get_default_keychain().1;
         check_wallet_descriptor(&descriptor)?;
-        descriptor_keymap.extend(descriptor_keymap.clone());
+        // descriptor_keymap.extend(descriptor_keymap.clone());
 
-        let signers = Arc::new(SignersContainer::build(
-            descriptor_keymap,
-            &descriptor,
-            &secp,
-        ));
+        let signers = Arc::new(SignersContainer::new());
+        // let signers = Arc::new(SignersContainer::build(
+        //     descriptor_keymap,
+        //     &descriptor,
+        //     &secp,
+        // ));
 
         // TODO: Handle change
         let (change_descriptor, change_signers) = (None, Arc::new(SignersContainer::new()));
@@ -414,11 +416,11 @@ impl Wallet {
             // None => (None, Arc::new(SignersContainer::new())),
         // };
 
-        let index = create_indexer(params.keychain_set.clone(), params.lookahead)?;
+        let index = create_indexer(params.key_ring.clone(), params.lookahead)?;
 
         // TODO: Understand why we have the descriptors above but then request them from the indexer
         //       here. Is it just for sanity check?
-        let descriptor = index.get_descriptor(params.keychain_set.get_default_keychain().0).cloned();
+        let descriptor = index.get_descriptor(params.key_ring.get_default_keychain().0).cloned();
         // TODO: Doesn't work because get_change_keychain() returns an Option
         // let change_descriptor = index.get_descriptor(params.keychain_set.get_change_keychain().0).cloned();
         let indexed_graph = IndexedTxGraph::new(index);
@@ -441,7 +443,7 @@ impl Wallet {
             indexed_graph,
             stage,
             secp,
-            keychain_set: params.keychain_set,
+            key_ring: params.key_ring,
         })
     }
 
@@ -2535,7 +2537,7 @@ fn create_indexer(
 
     // TODO: I'm here, May 2
     keyring.list_keychains().iter().for_each(|k| {
-        indexer.insert_descriptor(k.0, k.1.0.clone()).expect("This should work");
+        indexer.insert_descriptor(k.0, k.1.clone()).expect("This should work");
         dbg!("Inserting descriptor into indexer");
     });
 
