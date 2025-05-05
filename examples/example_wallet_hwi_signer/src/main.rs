@@ -1,91 +1,161 @@
-use std::sync::Arc;
-
 use async_hwi::bitbox::api::runtime::TokioRuntime;
 use async_hwi::bitbox::api::{usb, BitBox};
 use async_hwi::bitbox::NoiseConfigNoCache;
-use bdk_wallet::bitcoin::secp256k1::{All, Secp256k1};
-use bdk_wallet::bitcoin::{Network, Psbt};
-use bdk_wallet::signer::{SignerError, SignerOrdering, TransactionSigner};
-use bdk_wallet::KeychainKind;
-use bdk_wallet::{signer::SignerCommon, signer::SignerId, Wallet};
+use bdk_wallet::bitcoin::absolute::LockTime;
+use bdk_wallet::bitcoin::hashes::Hash;
+use bdk_wallet::bitcoin::{
+    absolute, transaction, Amount, BlockHash, FeeRate, Network, OutPoint, Transaction, TxIn, TxOut,
+};
+use bdk_wallet::chain::{BlockId, TxUpdate};
+use bdk_wallet::file_store::Store;
+use bdk_wallet::Wallet;
+use bdk_wallet::{KeychainKind, Update};
+use std::sync::Arc;
 
 use async_hwi::{bitbox::BitBox02, HWI};
-use tokio::runtime::Runtime;
 
-#[derive(Debug)]
-struct HwiSigner<T: HWI> {
-    hw_device: T,
-}
+const DB_MAGIC: &str = "bdk_wallet_electrum_example";
+const SEND_AMOUNT: Amount = Amount::from_sat(5000);
+const NETWORK: Network = Network::Regtest;
+const EXTERNAL_DESC: &str = "wpkh(tprv8ZgxMBicQKsPdfCLpvozodGytD3gRUa1M5WQz4kNuDZVf1inhcsSHXRpyLWN3k3Qy3nucrzz5hw2iZiEs6spehpee2WxqfSi31ByRJEu4rZ/84h/1h/0h/0/*)";
+const INTERNAL_DESC: &str = "wpkh(tprv8ZgxMBicQKsPdfCLpvozodGytD3gRUa1M5WQz4kNuDZVf1inhcsSHXRpyLWN3k3Qy3nucrzz5hw2iZiEs6spehpee2WxqfSi31ByRJEu4rZ/84h/1h/0h/1/*)";
 
-impl<T: HWI> HwiSigner<T> {
-    async fn sign_tx(&self, psbt: &mut Psbt) -> Result<(), SignerError> {
-        if let Err(e) = self.hw_device.sign_tx(psbt).await {
-            return Err(SignerError::External(e.to_string()));
-        }
-        Ok(())
-    }
-
-    fn new(hw_device: T) -> Self {
-        HwiSigner { hw_device }
-    }
-
-    fn get_id(&self) -> SignerId {
-        SignerId::Dummy(0)
+pub fn new_tx(locktime: u32) -> Transaction {
+    Transaction {
+        version: transaction::Version::ONE,
+        lock_time: absolute::LockTime::from_consensus(locktime),
+        input: vec![],
+        output: vec![],
     }
 }
 
-impl<T> SignerCommon for HwiSigner<T>
-where
-    T: Sync + Send + HWI,
-{
-    fn id(&self, _secp: &Secp256k1<All>) -> SignerId {
-        self.get_id()
-    }
+pub fn insert_checkpoint(wallet: &mut Wallet, block: BlockId) {
+    let mut cp = wallet.latest_checkpoint();
+    cp = cp.insert(block);
+    wallet
+        .apply_update(Update {
+            chain: Some(cp),
+            ..Default::default()
+        })
+        .unwrap();
 }
 
-impl<T> TransactionSigner for HwiSigner<T>
-where
-    T: Sync + Send + HWI,
-{
-    fn sign_transaction(
-        &self,
-        psbt: &mut Psbt,
-        _sign_options: &bdk_wallet::SignOptions,
-        _secp: &Secp256k1<All>,
-    ) -> Result<(), SignerError> {
-        let rt = Runtime::new().unwrap();
-        rt.block_on(self.sign_tx(psbt))?;
-        Ok(())
-    }
+fn feed_wallet(wallet: &mut Wallet) {
+    let sendto_address = wallet.next_unused_address(KeychainKind::External);
+    let change_addr = wallet.next_unused_address(KeychainKind::Internal);
+
+    let tx0 = Transaction {
+        output: vec![TxOut {
+            value: Amount::from_sat(76_000),
+            script_pubkey: change_addr.script_pubkey(),
+        }],
+        ..new_tx(0)
+    };
+
+    let tx1 = Transaction {
+        input: vec![TxIn {
+            previous_output: OutPoint {
+                txid: tx0.compute_txid(),
+                vout: 0,
+            },
+            ..Default::default()
+        }],
+        output: vec![
+            TxOut {
+                value: Amount::from_sat(50_000),
+                script_pubkey: sendto_address.script_pubkey(),
+            },
+            TxOut {
+                value: Amount::from_sat(25_000),
+                script_pubkey: change_addr.script_pubkey(),
+            },
+        ],
+        ..new_tx(0)
+    };
+
+    insert_checkpoint(
+        wallet,
+        BlockId {
+            height: 42,
+            hash: BlockHash::all_zeros(),
+        },
+    );
+    insert_checkpoint(
+        wallet,
+        BlockId {
+            height: 1_000,
+            hash: BlockHash::all_zeros(),
+        },
+    );
+
+    insert_checkpoint(
+        wallet,
+        BlockId {
+            height: 2_000,
+            hash: BlockHash::all_zeros(),
+        },
+    );
+
+    wallet
+        .apply_update(Update {
+            tx_update: TxUpdate {
+                txs: vec![Arc::new(tx0), Arc::new(tx1)],
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .unwrap();
 }
 
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
-    let descriptor = "wpkh(tpubD6NzVbkrYhZ4Xferm7Pz4VnjdcDPFyjVu5K4iZXQ4pVN8Cks4pHVowTBXBKRhX64pkRyJZJN5xAKj4UDNnLPb5p2sSKXhewoYx5GbTdUFWq/0/*)";
-    let change_descriptor = "wpkh(tpubD6NzVbkrYhZ4Xferm7Pz4VnjdcDPFyjVu5K4iZXQ4pVN8Cks4pHVowTBXBKRhX64pkRyJZJN5xAKj4UDNnLPb5p2sSKXhewoYx5GbTdUFWq/1/*)";
+    let db_path = "bdk-signer-example.db";
+    let mut db = Store::<bdk_wallet::ChangeSet>::open_or_create_new(DB_MAGIC.as_bytes(), db_path)?;
 
+    let wallet_opt = Wallet::load()
+        .descriptor(KeychainKind::External, Some(EXTERNAL_DESC))
+        .descriptor(KeychainKind::Internal, Some(INTERNAL_DESC))
+        .extract_keys()
+        .check_network(NETWORK)
+        .load_wallet(&mut db)?;
+
+    let mut wallet = match wallet_opt {
+        Some(wallet) => wallet,
+        None => Wallet::create(EXTERNAL_DESC, INTERNAL_DESC)
+            .network(NETWORK)
+            .create_wallet(&mut db)?,
+    };
+
+    // Pairing with Bitbox connected Bitbox device
     let noise_config = Box::new(NoiseConfigNoCache {});
-    let bitbox =
+    let bitbox = if cfg!(feature = "simulator") {
+        bitbox_api::BitBox::<TokioRuntime>::from_simulator(None, noise_config).await?
+    } else {
         BitBox::<TokioRuntime>::from_hid_device(usb::get_any_bitbox02().unwrap(), noise_config)
-            .await?;
+            .await?
+    };
 
     let pairing_device = bitbox.unlock_and_pair().await?;
     let paired_device = pairing_device.wait_confirm().await?;
+
+    // paired_device.restore_from_mnemonic().await?;
     let bb = BitBox02::from(paired_device);
+    let bb = bb.with_network(NETWORK);
 
-    let _ = bb.register_wallet("test-wallet", descriptor).await.unwrap();
+    let receiving_wallet = wallet.next_unused_address(KeychainKind::External);
 
-    let bitbox_signer = HwiSigner::new(bb);
+    feed_wallet(&mut wallet);
 
-    let mut wallet = Wallet::create(descriptor, change_descriptor)
-        .network(Network::Testnet)
-        .create_wallet_no_persist()?;
+    let mut tx_builder = wallet.build_tx();
 
-    wallet.add_signer(
-        KeychainKind::External,
-        SignerOrdering(100),
-        Arc::new(bitbox_signer),
-    );
+    tx_builder
+        .add_recipient(receiving_wallet.script_pubkey(), SEND_AMOUNT)
+        .fee_rate(FeeRate::from_sat_per_vb(2).unwrap())
+        .nlocktime(LockTime::from_height(0).unwrap());
 
+    let mut psbt = tx_builder.finish()?;
+
+    // Sign with the connected bitbox or any hardware device
+    bb.sign_tx(&mut psbt).await?;
     Ok(())
 }

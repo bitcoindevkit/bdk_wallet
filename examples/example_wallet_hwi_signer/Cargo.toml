@@ -4,10 +4,16 @@ version = "0.1.0"
 edition = "2021"
 authors.workspace = true
 
+[features]
+simulator = []
+
 [dependencies]
 bdk_wallet = { path = "../../wallet", features = ["file_store"] }
-bdk_bitcoind_rpc = { version = "0.18" }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros"] }
+bitbox-api = {version = "0.6.0", features = ["tokio", "simulator"]}
 
 async-hwi = "0.0.27"
 anyhow = "1"
+
+[patch.crates-io]
+bitbox-api = {git = "https://github.com/sdmg15/bitbox-api-rs", branch = "0.6.0-simulator-patch", features = ["tokio", "simulator"]}
