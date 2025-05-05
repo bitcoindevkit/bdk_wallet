@@ -20,7 +20,8 @@ use alloc::{
     vec::Vec,
 };
 use core::{cmp::Ordering, fmt, mem, ops::Deref};
-
+use std::arch::aarch64::__crc32ch;
+use std::cmp::PartialEq;
 use bdk_chain::{
     indexed_tx_graph,
     indexer::keychain_txout::KeychainTxOutIndex,
@@ -58,6 +59,7 @@ mod persisted;
 pub mod signer;
 pub mod tx_builder;
 pub(crate) mod utils;
+pub mod keyring;
 
 use crate::collections::{BTreeMap, HashMap, HashSet};
 use crate::descriptor::{
@@ -77,10 +79,14 @@ use crate::wallet::{
 
 // re-exports
 pub use bdk_chain::Balance;
+use chain::DescriptorId;
 pub use changeset::ChangeSet;
 pub use params::*;
 pub use persisted::*;
 pub use utils::IsDust;
+use crate::error::KeychainNotInKeyRingError;
+use crate::error::KeychainNotInKeyRingError::KeychainNotFound;
+use crate::keyring::KeyRing;
 
 /// A Bitcoin wallet
 ///
@@ -108,6 +114,7 @@ pub struct Wallet {
     stage: ChangeSet,
     network: Network,
     secp: SecpCtx,
+    key_ring: KeyRing
 }
 
 /// An update to [`Wallet`].
@@ -281,53 +288,6 @@ impl std::error::Error for ApplyBlockError {}
 pub type WalletTx<'a> = CanonicalTx<'a, Arc<Transaction>, ConfirmationBlockTime>;
 
 impl Wallet {
-    /// Build a new single descriptor [`Wallet`].
-    ///
-    /// If you have previously created a wallet, use [`load`](Self::load) instead.
-    ///
-    /// # Note
-    ///
-    /// Only use this method when creating a wallet designed to be used with a single
-    /// descriptor and keychain. Otherwise the recommended way to construct a new wallet is
-    /// by using [`Wallet::create`]. It's worth noting that not all features are available
-    /// with single descriptor wallets, for example setting a [`change_policy`] on [`TxBuilder`]
-    /// and related methods such as [`do_not_spend_change`]. This is because all payments are
-    /// received on the external keychain (including change), and without a change keychain
-    /// BDK lacks enough information to distinguish between change and outside payments.
-    ///
-    /// Additionally because this wallet has no internal (change) keychain, all methods that
-    /// require a [`KeychainKind`] as input, e.g. [`reveal_next_address`] should only be called
-    /// using the [`External`] variant. In most cases passing [`Internal`] is treated as the
-    /// equivalent of [`External`] but this behavior must not be relied on.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// # use bdk_wallet::Wallet;
-    /// # use bitcoin::Network;
-    /// # const EXTERNAL_DESC: &str = "wpkh(tprv8ZgxMBicQKsPdy6LMhUtFHAgpocR8GC6QmwMSFpZs7h6Eziw3SpThFfczTDh5rW2krkqffa11UpX3XkeTTB2FvzZKWXqPY54Y6Rq4AQ5R8L/84'/1'/0'/0/*)";
-    /// # let temp_dir = tempfile::tempdir().expect("must create tempdir");
-    /// # let file_path = temp_dir.path().join("store.db");
-    /// // Create a wallet that is persisted to SQLite database.
-    /// use bdk_wallet::rusqlite::Connection;
-    /// let mut conn = Connection::open(file_path)?;
-    /// let wallet = Wallet::create_single(EXTERNAL_DESC)
-    ///     .network(Network::Testnet)
-    ///     .create_wallet(&mut conn)?;
-    /// # Ok::<_, anyhow::Error>(())
-    /// ```
-    /// [`change_policy`]: TxBuilder::change_policy
-    /// [`do_not_spend_change`]: TxBuilder::do_not_spend_change
-    /// [`External`]: KeychainKind::External
-    /// [`Internal`]: KeychainKind::Internal
-    /// [`reveal_next_address`]: Self::reveal_next_address
-    pub fn create_single<D>(descriptor: D) -> CreateParams
-    where
-        D: IntoWalletDescriptor + Send + Clone + 'static,
-    {
-        CreateParams::new_single(descriptor)
-    }
-
     /// Build a new [`Wallet`].
     ///
     /// If you have previously created a wallet, use [`load`](Self::load) instead.
@@ -336,13 +296,14 @@ impl Wallet {
     ///
     /// ```rust
     /// # use bdk_wallet::Wallet;
+    /// # use bdk_wallet::keyring::KeyRing;
     /// # use bitcoin::Network;
     /// # fn main() -> anyhow::Result<()> {
-    /// # const EXTERNAL_DESC: &str = "wpkh(tprv8ZgxMBicQKsPdy6LMhUtFHAgpocR8GC6QmwMSFpZs7h6Eziw3SpThFfczTDh5rW2krkqffa11UpX3XkeTTB2FvzZKWXqPY54Y6Rq4AQ5R8L/84'/1'/0'/0/*)";
-    /// # const INTERNAL_DESC: &str = "wpkh(tprv8ZgxMBicQKsPdy6LMhUtFHAgpocR8GC6QmwMSFpZs7h6Eziw3SpThFfczTDh5rW2krkqffa11UpX3XkeTTB2FvzZKWXqPY54Y6Rq4AQ5R8L/84'/1'/0'/1/*)";
+    /// # const MY_DESCRIPTOR: &str = "wpkh(tprv8ZgxMBicQKsPdy6LMhUtFHAgpocR8GC6QmwMSFpZs7h6Eziw3SpThFfczTDh5rW2krkqffa11UpX3XkeTTB2FvzZKWXqPY54Y6Rq4AQ5R8L/84'/1'/0'/0/*)";
+    /// // Create a KeyRing
+    /// let mut key_ring = KeyRing::new(MY_DESCRIPTOR, Network::Signet);
     /// // Create a non-persisted wallet.
-    /// let wallet = Wallet::create(EXTERNAL_DESC, INTERNAL_DESC)
-    ///     .network(Network::Testnet)
+    /// let wallet = Wallet::create(key_ring)
     ///     .create_wallet_no_persist()?;
     ///
     /// // Create a wallet that is persisted to SQLite database.
@@ -350,22 +311,18 @@ impl Wallet {
     /// # let file_path = temp_dir.path().join("store.db");
     /// use bdk_wallet::rusqlite::Connection;
     /// let mut conn = Connection::open(file_path)?;
-    /// let wallet = Wallet::create(EXTERNAL_DESC, INTERNAL_DESC)
-    ///     .network(Network::Testnet)
+    /// let wallet = Wallet::create(key_ring)
     ///     .create_wallet(&mut conn)?;
     /// # Ok(())
     /// # }
     /// ```
-    pub fn create<D>(descriptor: D, change_descriptor: D) -> CreateParams
-    where
-        D: IntoWalletDescriptor + Send + Clone + 'static,
-    {
-        CreateParams::new(descriptor, change_descriptor)
+    pub fn create(key_ring: KeyRing) -> CreateParams {
+        CreateParams::new(key_ring)
     }
 
-    /// Create a new [`Wallet`] with given `params`.
-    ///
-    /// Refer to [`Wallet::create`] for more.
+    // /// Create a new [`Wallet`] with given `params`.
+    // ///
+    // /// Refer to [`Wallet::create`] for more.
     pub fn create_with_params(params: CreateParams) -> Result<Self, DescriptorError> {
         let secp = SecpCtx::new();
         let network = params.network;
@@ -374,35 +331,43 @@ impl Wallet {
             .unwrap_or(genesis_block(network).block_hash());
         let (chain, chain_changeset) = LocalChain::from_genesis_hash(genesis_hash);
 
-        let (descriptor, mut descriptor_keymap) = (params.descriptor)(&secp, network)?;
+        // let (descriptor, mut descriptor_keymap) = (params.descriptor)(&secp, network)?;
+        // let (descriptor, mut descriptor_keymap) = (params.keychain_set.get_default_keychain().1.0)(&secp, network)?;
+        let descriptor = params.key_ring.get_default_keychain().1;
         check_wallet_descriptor(&descriptor)?;
-        descriptor_keymap.extend(params.descriptor_keymap);
+        // descriptor_keymap.extend(descriptor_keymap.clone());
 
-        let signers = Arc::new(SignersContainer::build(
-            descriptor_keymap,
-            &descriptor,
-            &secp,
-        ));
+        let signers = Arc::new(SignersContainer::new());
+        // let signers = Arc::new(SignersContainer::build(
+        //     descriptor_keymap,
+        //     &descriptor,
+        //     &secp,
+        // ));
 
-        let (change_descriptor, change_signers) = match params.change_descriptor {
-            Some(make_desc) => {
-                let (change_descriptor, mut internal_keymap) = make_desc(&secp, network)?;
-                check_wallet_descriptor(&change_descriptor)?;
-                internal_keymap.extend(params.change_descriptor_keymap);
-                let change_signers = Arc::new(SignersContainer::build(
-                    internal_keymap,
-                    &change_descriptor,
-                    &secp,
-                ));
-                (Some(change_descriptor), change_signers)
-            }
-            None => (None, Arc::new(SignersContainer::new())),
-        };
+        // TODO: Handle change
+        let (change_descriptor, change_signers) = (None, Arc::new(SignersContainer::new()));
+        // let (change_descriptor, change_signers) = match params.change_descriptor {
+            // Some(make_desc) => {
+            //     let (change_descriptor, mut internal_keymap) = make_desc(&secp, network)?;
+            //     check_wallet_descriptor(&change_descriptor)?;
+            //     internal_keymap.extend(params.change_descriptor_keymap);
+            //     let change_signers = Arc::new(SignersContainer::build(
+            //         internal_keymap,
+            //         &change_descriptor,
+            //         &secp,
+            //     ));
+            //     (Some(change_descriptor), change_signers)
+            // }
+            // None => (None, Arc::new(SignersContainer::new())),
+        // };
 
-        let index = create_indexer(descriptor, change_descriptor, params.lookahead)?;
+        let index = create_indexer(params.key_ring.clone(), params.lookahead)?;
 
-        let descriptor = index.get_descriptor(KeychainKind::External).cloned();
-        let change_descriptor = index.get_descriptor(KeychainKind::Internal).cloned();
+        // TODO: Understand why we have the descriptors above but then request them from the indexer
+        //       here. Is it just for sanity check?
+        let descriptor = index.get_descriptor(params.key_ring.get_default_keychain().0).cloned();
+        // TODO: Doesn't work because get_change_keychain() returns an Option
+        // let change_descriptor = index.get_descriptor(params.keychain_set.get_change_keychain().0).cloned();
         let indexed_graph = IndexedTxGraph::new(index);
         let indexed_graph_changeset = indexed_graph.initial_changeset();
 
@@ -423,6 +388,7 @@ impl Wallet {
             indexed_graph,
             stage,
             secp,
+            key_ring: params.key_ring,
         })
     }
 
@@ -472,151 +438,151 @@ impl Wallet {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn load() -> LoadParams {
-        LoadParams::new()
-    }
-
-    /// Load [`Wallet`] from the given previously persisted [`ChangeSet`] and `params`.
-    ///
-    /// Refer to [`Wallet::load`] for more.
-    pub fn load_with_params(
-        changeset: ChangeSet,
-        params: LoadParams,
-    ) -> Result<Option<Self>, LoadError> {
-        if changeset.is_empty() {
-            return Ok(None);
-        }
-        let secp = Secp256k1::new();
-        let network = changeset.network.ok_or(LoadError::MissingNetwork)?;
-        let chain = LocalChain::from_changeset(changeset.local_chain)
-            .map_err(|_| LoadError::MissingGenesis)?;
-
-        if let Some(exp_network) = params.check_network {
-            if network != exp_network {
-                return Err(LoadError::Mismatch(LoadMismatch::Network {
-                    loaded: network,
-                    expected: exp_network,
-                }));
-            }
-        }
-        if let Some(exp_genesis_hash) = params.check_genesis_hash {
-            if chain.genesis_hash() != exp_genesis_hash {
-                return Err(LoadError::Mismatch(LoadMismatch::Genesis {
-                    loaded: chain.genesis_hash(),
-                    expected: exp_genesis_hash,
-                }));
-            }
-        }
-
-        let descriptor = changeset
-            .descriptor
-            .ok_or(LoadError::MissingDescriptor(KeychainKind::External))?;
-        check_wallet_descriptor(&descriptor).map_err(LoadError::Descriptor)?;
-        let mut external_keymap = params.descriptor_keymap;
-
-        if let Some(expected) = params.check_descriptor {
-            if let Some(make_desc) = expected {
-                let (exp_desc, keymap) =
-                    make_desc(&secp, network).map_err(LoadError::Descriptor)?;
-                if descriptor.descriptor_id() != exp_desc.descriptor_id() {
-                    return Err(LoadError::Mismatch(LoadMismatch::Descriptor {
-                        keychain: KeychainKind::External,
-                        loaded: Some(descriptor),
-                        expected: Some(exp_desc),
-                    }));
-                }
-                if params.extract_keys {
-                    external_keymap.extend(keymap);
-                }
-            } else {
-                return Err(LoadError::Mismatch(LoadMismatch::Descriptor {
-                    keychain: KeychainKind::External,
-                    loaded: Some(descriptor),
-                    expected: None,
-                }));
-            }
-        }
-        let signers = Arc::new(SignersContainer::build(external_keymap, &descriptor, &secp));
-
-        let mut change_descriptor = None;
-        let mut internal_keymap = params.change_descriptor_keymap;
-
-        match (changeset.change_descriptor, params.check_change_descriptor) {
-            // empty signer
-            (None, None) => {}
-            (None, Some(expect)) => {
-                // expected desc but none loaded
-                if let Some(make_desc) = expect {
-                    let (exp_desc, _) = make_desc(&secp, network).map_err(LoadError::Descriptor)?;
-                    return Err(LoadError::Mismatch(LoadMismatch::Descriptor {
-                        keychain: KeychainKind::Internal,
-                        loaded: None,
-                        expected: Some(exp_desc),
-                    }));
-                }
-            }
-            // nothing expected
-            (Some(desc), None) => {
-                check_wallet_descriptor(&desc).map_err(LoadError::Descriptor)?;
-                change_descriptor = Some(desc);
-            }
-            (Some(desc), Some(expect)) => match expect {
-                // expected none for existing
-                None => {
-                    return Err(LoadError::Mismatch(LoadMismatch::Descriptor {
-                        keychain: KeychainKind::Internal,
-                        loaded: Some(desc),
-                        expected: None,
-                    }))
-                }
-                // parameters must match
-                Some(make_desc) => {
-                    check_wallet_descriptor(&desc).map_err(LoadError::Descriptor)?;
-                    let (exp_desc, keymap) =
-                        make_desc(&secp, network).map_err(LoadError::Descriptor)?;
-                    if desc.descriptor_id() != exp_desc.descriptor_id() {
-                        return Err(LoadError::Mismatch(LoadMismatch::Descriptor {
-                            keychain: KeychainKind::Internal,
-                            loaded: Some(desc),
-                            expected: Some(exp_desc),
-                        }));
-                    }
-                    if params.extract_keys {
-                        internal_keymap.extend(keymap);
-                    }
-                    change_descriptor = Some(desc);
-                }
-            },
-        }
-
-        let change_signers = match change_descriptor {
-            Some(ref change_descriptor) => Arc::new(SignersContainer::build(
-                internal_keymap,
-                change_descriptor,
-                &secp,
-            )),
-            None => Arc::new(SignersContainer::new()),
-        };
-
-        let index = create_indexer(descriptor, change_descriptor, params.lookahead)
-            .map_err(LoadError::Descriptor)?;
-
-        let mut indexed_graph = IndexedTxGraph::new(index);
-        indexed_graph.apply_changeset(changeset.indexer.into());
-        indexed_graph.apply_changeset(changeset.tx_graph.into());
-
-        let stage = ChangeSet::default();
-
-        Ok(Some(Wallet {
-            signers,
-            change_signers,
-            chain,
-            indexed_graph,
-            stage,
-            network,
-            secp,
-        }))
-    }
+    // pub fn load() -> LoadParams {
+    //     LoadParams::new()
+    // }
+    //
+    // /// Load [`Wallet`] from the given previously persisted [`ChangeSet`] and `params`.
+    // ///
+    // /// Refer to [`Wallet::load`] for more.
+    // pub fn load_with_params(
+    //     changeset: ChangeSet,
+    //     params: LoadParams,
+    // ) -> Result<Option<Self>, LoadError> {
+    //     if changeset.is_empty() {
+    //         return Ok(None);
+    //     }
+    //     let secp = Secp256k1::new();
+    //     let network = changeset.network.ok_or(LoadError::MissingNetwork)?;
+    //     let chain = LocalChain::from_changeset(changeset.local_chain)
+    //         .map_err(|_| LoadError::MissingGenesis)?;
+    //
+    //     if let Some(exp_network) = params.check_network {
+    //         if network != exp_network {
+    //             return Err(LoadError::Mismatch(LoadMismatch::Network {
+    //                 loaded: network,
+    //                 expected: exp_network,
+    //             }));
+    //         }
+    //     }
+    //     if let Some(exp_genesis_hash) = params.check_genesis_hash {
+    //         if chain.genesis_hash() != exp_genesis_hash {
+    //             return Err(LoadError::Mismatch(LoadMismatch::Genesis {
+    //                 loaded: chain.genesis_hash(),
+    //                 expected: exp_genesis_hash,
+    //             }));
+    //         }
+    //     }
+    //
+    //     let descriptor = changeset
+    //         .descriptor
+    //         .ok_or(LoadError::MissingDescriptor(KeychainKind::External))?;
+    //     check_wallet_descriptor(&descriptor).map_err(LoadError::Descriptor)?;
+    //     let mut external_keymap = params.descriptor_keymap;
+    //
+    //     if let Some(expected) = params.check_descriptor {
+    //         if let Some(make_desc) = expected {
+    //             let (exp_desc, keymap) =
+    //                 make_desc(&secp, network).map_err(LoadError::Descriptor)?;
+    //             if descriptor.descriptor_id() != exp_desc.descriptor_id() {
+    //                 return Err(LoadError::Mismatch(LoadMismatch::Descriptor {
+    //                     keychain: KeychainKind::External,
+    //                     loaded: Some(descriptor),
+    //                     expected: Some(exp_desc),
+    //                 }));
+    //             }
+    //             if params.extract_keys {
+    //                 external_keymap.extend(keymap);
+    //             }
+    //         } else {
+    //             return Err(LoadError::Mismatch(LoadMismatch::Descriptor {
+    //                 keychain: KeychainKind::External,
+    //                 loaded: Some(descriptor),
+    //                 expected: None,
+    //             }));
+    //         }
+    //     }
+    //     let signers = Arc::new(SignersContainer::build(external_keymap, &descriptor, &secp));
+    //
+    //     let mut change_descriptor = None;
+    //     let mut internal_keymap = params.change_descriptor_keymap;
+    //
+    //     match (changeset.change_descriptor, params.check_change_descriptor) {
+    //         // empty signer
+    //         (None, None) => {}
+    //         (None, Some(expect)) => {
+    //             // expected desc but none loaded
+    //             if let Some(make_desc) = expect {
+    //                 let (exp_desc, _) = make_desc(&secp, network).map_err(LoadError::Descriptor)?;
+    //                 return Err(LoadError::Mismatch(LoadMismatch::Descriptor {
+    //                     keychain: KeychainKind::Internal,
+    //                     loaded: None,
+    //                     expected: Some(exp_desc),
+    //                 }));
+    //             }
+    //         }
+    //         // nothing expected
+    //         (Some(desc), None) => {
+    //             check_wallet_descriptor(&desc).map_err(LoadError::Descriptor)?;
+    //             change_descriptor = Some(desc);
+    //         }
+    //         (Some(desc), Some(expect)) => match expect {
+    //             // expected none for existing
+    //             None => {
+    //                 return Err(LoadError::Mismatch(LoadMismatch::Descriptor {
+    //                     keychain: KeychainKind::Internal,
+    //                     loaded: Some(desc),
+    //                     expected: None,
+    //                 }))
+    //             }
+    //             // parameters must match
+    //             Some(make_desc) => {
+    //                 check_wallet_descriptor(&desc).map_err(LoadError::Descriptor)?;
+    //                 let (exp_desc, keymap) =
+    //                     make_desc(&secp, network).map_err(LoadError::Descriptor)?;
+    //                 if desc.descriptor_id() != exp_desc.descriptor_id() {
+    //                     return Err(LoadError::Mismatch(LoadMismatch::Descriptor {
+    //                         keychain: KeychainKind::Internal,
+    //                         loaded: Some(desc),
+    //                         expected: Some(exp_desc),
+    //                     }));
+    //                 }
+    //                 if params.extract_keys {
+    //                     internal_keymap.extend(keymap);
+    //                 }
+    //                 change_descriptor = Some(desc);
+    //             }
+    //         },
+    //     }
+    //
+    //     let change_signers = match change_descriptor {
+    //         Some(ref change_descriptor) => Arc::new(SignersContainer::build(
+    //             internal_keymap,
+    //             change_descriptor,
+    //             &secp,
+    //         )),
+    //         None => Arc::new(SignersContainer::new()),
+    //     };
+    //
+    //     let index = create_indexer(descriptor, change_descriptor, params.lookahead)
+    //         .map_err(LoadError::Descriptor)?;
+    //
+    //     let mut indexed_graph = IndexedTxGraph::new(index);
+    //     indexed_graph.apply_changeset(changeset.indexer.into());
+    //     indexed_graph.apply_changeset(changeset.tx_graph.into());
+    //
+    //     let stage = ChangeSet::default();
+    //
+    //     Ok(Some(Wallet {
+    //         signers,
+    //         change_signers,
+    //         chain,
+    //         indexed_graph,
+    //         stage,
+    //         network,
+    //         secp,
+    //     }))
+    // }
 
     /// Get the Bitcoin network the wallet is using.
     pub fn network(&self) -> Network {
@@ -636,12 +602,16 @@ impl Wallet {
     ///
     /// This panics when the caller requests for an address of derivation index greater than the
     /// [BIP32](https://github.com/bitcoin/bips/blob/master/bip-0032.mediawiki) max index.
-    pub fn peek_address(&self, keychain: KeychainKind, mut index: u32) -> AddressInfo {
-        let keychain = self.map_keychain(keychain);
+    pub fn peek_address(&self, keychain: KeychainKind, mut index: u32) -> Result<AddressInfo, KeychainNotInKeyRingError> {
+        // TODO #266: Add test for when the keychain provided is not part of the key_ring
+        if !self.indexed_graph.index.keychains().any(|(k, _)| k == keychain) {
+            return Err(KeychainNotInKeyRingError::KeychainNotFound(keychain));
+        }
+        
         let mut spk_iter = self
             .indexed_graph
             .index
-            .unbounded_spk_iter(keychain)
+            .unbounded_spk_iter(keychain.clone())
             .expect("keychain must exist");
         if !spk_iter.descriptor().has_wildcard() {
             index = 0;
@@ -650,11 +620,11 @@ impl Wallet {
             .nth(index as usize)
             .expect("derivation index is out of bounds");
 
-        AddressInfo {
+        Ok(AddressInfo {
             index,
             address: Address::from_script(&spk, self.network).expect("must have address form"),
             keychain,
-        }
+        })
     }
 
     /// Attempt to reveal the next address of the given `keychain`.
@@ -675,15 +645,19 @@ impl Wallet {
     ///     .load_wallet(&mut conn)
     ///     .expect("database is okay")
     ///     .expect("database has data");
-    /// let next_address = wallet.reveal_next_address(KeychainKind::External);
+    /// let next_address = wallet.reveal_next_address(KeychainKind::Default());
     /// wallet.persist(&mut conn).expect("write is okay");
     ///
     /// // Now it's safe to show the user their next address!
     /// println!("Next address: {}", next_address.address);
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    pub fn reveal_next_address(&mut self, keychain: KeychainKind) -> AddressInfo {
-        let keychain = self.map_keychain(keychain);
+    pub fn reveal_next_address(&mut self, keychain: KeychainKind) -> Result<AddressInfo, KeychainNotInKeyRingError> {
+        // TODO #266: Add test for when the keychain provided is not part of the key_ring
+        if !self.indexed_graph.index.keychains().any(|(k, _)| k == keychain) {
+            return Err(KeychainNotInKeyRingError::KeychainNotFound(keychain));
+        }
+
         let index = &mut self.indexed_graph.index;
         let stage = &mut self.stage;
 
@@ -693,12 +667,12 @@ impl Wallet {
 
         stage.merge(index_changeset.into());
 
-        AddressInfo {
+        Ok(AddressInfo {
             index,
             address: Address::from_script(spk.as_script(), self.network)
                 .expect("must have address form"),
             keychain,
-        }
+        })
     }
 
     /// Reveal addresses up to and including the target `index` and return an iterator
@@ -710,26 +684,26 @@ impl Wallet {
     ///
     /// **WARNING**: To avoid address reuse you must persist the changes resulting from one or more
     /// calls to this method before closing the wallet. See [`Wallet::reveal_next_address`].
-    pub fn reveal_addresses_to(
-        &mut self,
-        keychain: KeychainKind,
-        index: u32,
-    ) -> impl Iterator<Item = AddressInfo> + '_ {
-        let keychain = self.map_keychain(keychain);
-        let (spks, index_changeset) = self
-            .indexed_graph
-            .index
-            .reveal_to_target(keychain, index)
-            .expect("keychain must exist");
-
-        self.stage.merge(index_changeset.into());
-
-        spks.into_iter().map(move |(index, spk)| AddressInfo {
-            index,
-            address: Address::from_script(&spk, self.network).expect("must have address form"),
-            keychain,
-        })
-    }
+    // pub fn reveal_addresses_to(
+    //     &mut self,
+    //     keychain: KeychainKind,
+    //     index: u32,
+    // ) -> impl Iterator<Item = AddressInfo> + '_ {
+    //     let keychain = self.map_keychain(keychain);
+    //     let (spks, index_changeset) = self
+    //         .indexed_graph
+    //         .index
+    //         .reveal_to_target(keychain, index)
+    //         .expect("keychain must exist");
+    //
+    //     self.stage.merge(index_changeset.into());
+    //
+    //     spks.into_iter().map(move |(index, spk)| AddressInfo {
+    //         index,
+    //         address: Address::from_script(&spk, self.network).expect("must have address form"),
+    //         keychain,
+    //     })
+    // }
 
     /// Get the next unused address for the given `keychain`, i.e. the address with the lowest
     /// derivation index that hasn't been used in a transaction.
@@ -739,8 +713,12 @@ impl Wallet {
     ///
     /// **WARNING**: To avoid address reuse you must persist the changes resulting from one or more
     /// calls to this method before closing the wallet. See [`Wallet::reveal_next_address`].
-    pub fn next_unused_address(&mut self, keychain: KeychainKind) -> AddressInfo {
-        let keychain = self.map_keychain(keychain);
+    pub fn next_unused_address(&mut self, keychain: KeychainKind) -> Result<AddressInfo, KeychainNotInKeyRingError> {
+        // TODO #266: Add test for when the keychain provided is not part of the key_ring
+        if !self.indexed_graph.index.keychains().any(|(k, _)| k == keychain) {
+            return Err(KeychainNotInKeyRingError::KeychainNotFound(keychain));
+        }
+
         let index = &mut self.indexed_graph.index;
 
         let ((index, spk), index_changeset) = index
@@ -750,19 +728,25 @@ impl Wallet {
         self.stage
             .merge(indexed_tx_graph::ChangeSet::from(index_changeset).into());
 
-        AddressInfo {
+        Ok(AddressInfo {
             index,
             address: Address::from_script(spk.as_script(), self.network)
                 .expect("must have address form"),
             keychain,
-        }
+        })
     }
 
     /// Marks an address used of the given `keychain` at `index`.
     ///
     /// Returns whether the given index was present and then removed from the unused set.
-    pub fn mark_used(&mut self, keychain: KeychainKind, index: u32) -> bool {
-        self.indexed_graph.index.mark_used(keychain, index)
+    pub fn mark_used(&mut self, keychain: KeychainKind, index: u32) -> Result<bool, KeychainNotInKeyRingError> {
+        // TODO #266: Add test for when the keychain provided is not part of the key_ring
+        if !self.indexed_graph.index.keychains().any(|(k, _)| k == keychain) {
+            return Err(KeychainNotInKeyRingError::KeychainNotFound(keychain));
+        }
+
+        self.indexed_graph.index.mark_used(keychain, index);
+        Ok(true)
     }
 
     /// Undoes the effect of [`mark_used`] and returns whether the `index` was inserted
@@ -773,8 +757,13 @@ impl Wallet {
     /// derived spk.
     ///
     /// [`mark_used`]: Self::mark_used
-    pub fn unmark_used(&mut self, keychain: KeychainKind, index: u32) -> bool {
-        self.indexed_graph.index.unmark_used(keychain, index)
+    pub fn unmark_used(&mut self, keychain: KeychainKind, index: u32) -> Result<bool, KeychainNotInKeyRingError> {
+        // TODO #266: Add test for when the keychain provided is not part of the key_ring
+        if !self.indexed_graph.index.keychains().any(|(k, _)| k == keychain) {
+            return Err(KeychainNotInKeyRingError::KeychainNotFound(keychain));
+        }
+        self.indexed_graph.index.unmark_used(keychain, index);
+        Ok(true)
     }
 
     /// List addresses that are revealed but unused.
@@ -782,20 +771,20 @@ impl Wallet {
     /// Note if the returned iterator is empty you can reveal more addresses
     /// by using [`reveal_next_address`](Self::reveal_next_address) or
     /// [`reveal_addresses_to`](Self::reveal_addresses_to).
-    pub fn list_unused_addresses(
-        &self,
-        keychain: KeychainKind,
-    ) -> impl DoubleEndedIterator<Item = AddressInfo> + '_ {
-        self.indexed_graph
-            .index
-            .unused_keychain_spks(self.map_keychain(keychain))
-            .map(move |(index, spk)| AddressInfo {
-                index,
-                address: Address::from_script(spk.as_script(), self.network)
-                    .expect("must have address form"),
-                keychain,
-            })
-    }
+    // pub fn list_unused_addresses(
+    //     &self,
+    //     keychain: KeychainKind,
+    // ) -> impl DoubleEndedIterator<Item = AddressInfo> + '_ {
+    //     self.indexed_graph
+    //         .index
+    //         .unused_keychain_spks(self.map_keychain(keychain))
+    //         .map(move |(index, spk)| AddressInfo {
+    //             index,
+    //             address: Address::from_script(spk.as_script(), self.network)
+    //                 .expect("must have address form"),
+    //             keychain,
+    //         })
+    // }
 
     /// Return whether or not a `script` is part of this wallet (either internal or external)
     pub fn is_mine(&self, script: ScriptBuf) -> bool {
@@ -864,30 +853,30 @@ impl Wallet {
     /// See [`all_unbounded_spk_iters`] for more documentation
     ///
     /// [`all_unbounded_spk_iters`]: Self::all_unbounded_spk_iters
-    pub fn unbounded_spk_iter(
-        &self,
-        keychain: KeychainKind,
-    ) -> impl Iterator<Item = Indexed<ScriptBuf>> + Clone {
-        self.indexed_graph
-            .index
-            .unbounded_spk_iter(self.map_keychain(keychain))
-            .expect("keychain must exist")
-    }
+    // pub fn unbounded_spk_iter(
+    //     &self,
+    //     keychain: KeychainKind,
+    // ) -> impl Iterator<Item = Indexed<ScriptBuf>> + Clone {
+    //     self.indexed_graph
+    //         .index
+    //         .unbounded_spk_iter(self.map_keychain(keychain))
+    //         .expect("keychain must exist")
+    // }
 
     /// Returns the utxo owned by this wallet corresponding to `outpoint` if it exists in the
     /// wallet's database.
-    pub fn get_utxo(&self, op: OutPoint) -> Option<LocalOutput> {
-        let ((keychain, index), _) = self.indexed_graph.index.txout(op)?;
-        self.indexed_graph
-            .graph()
-            .filter_chain_unspents(
-                &self.chain,
-                self.chain.tip().block_id(),
-                core::iter::once(((), op)),
-            )
-            .map(|(_, full_txo)| new_local_utxo(keychain, index, full_txo))
-            .next()
-    }
+    // pub fn get_utxo(&self, op: OutPoint) -> Option<LocalOutput> {
+    //     let ((keychain, index), _) = self.indexed_graph.index.txout(op)?;
+    //     self.indexed_graph
+    //         .graph()
+    //         .filter_chain_unspents(
+    //             &self.chain,
+    //             self.chain.tip().block_id(),
+    //             core::iter::once(((), op)),
+    //         )
+    //         .map(|(_, full_txo)| new_local_utxo(keychain, index, full_txo))
+    //         .next()
+    // }
 
     /// Inserts a [`TxOut`] at [`OutPoint`] into the wallet's transaction graph.
     ///
@@ -1108,52 +1097,53 @@ impl Wallet {
 
     /// Return the balance, separated into available, trusted-pending, untrusted-pending and immature
     /// values.
+    // TODO: The trust predicate here is a problem.
     pub fn balance(&self) -> Balance {
         self.indexed_graph.graph().balance(
             &self.chain,
             self.chain.tip().block_id(),
             self.indexed_graph.index.outpoints().iter().cloned(),
-            |&(k, _), _| k == KeychainKind::Internal,
+            |&(k, _), _| k.clone() == KeychainKind::Change,
         )
     }
 
     /// Add an external signer
     ///
     /// See [the `signer` module](signer) for an example.
-    pub fn add_signer(
-        &mut self,
-        keychain: KeychainKind,
-        ordering: SignerOrdering,
-        signer: Arc<dyn TransactionSigner>,
-    ) {
-        let signers = match keychain {
-            KeychainKind::External => Arc::make_mut(&mut self.signers),
-            KeychainKind::Internal => Arc::make_mut(&mut self.change_signers),
-        };
-
-        signers.add_external(signer.id(&self.secp), ordering, signer);
-    }
+    // pub fn add_signer(
+    //     &mut self,
+    //     keychain: KeychainKind,
+    //     ordering: SignerOrdering,
+    //     signer: Arc<dyn TransactionSigner>,
+    // ) {
+    //     let signers = match keychain {
+    //         KeychainKind::External => Arc::make_mut(&mut self.signers),
+    //         KeychainKind::Internal => Arc::make_mut(&mut self.change_signers),
+    //     };
+    //
+    //     signers.add_external(signer.id(&self.secp), ordering, signer);
+    // }
 
     /// Set the keymap for a given keychain.
     ///
     /// Note this does nothing if the given keychain has no descriptor because we won't
     /// know the context (segwit, taproot, etc) in which to create signatures.
-    pub fn set_keymap(&mut self, keychain: KeychainKind, keymap: KeyMap) {
-        let wallet_signers = match keychain {
-            KeychainKind::External => Arc::make_mut(&mut self.signers),
-            KeychainKind::Internal => Arc::make_mut(&mut self.change_signers),
-        };
-        if let Some(descriptor) = self.indexed_graph.index.get_descriptor(keychain) {
-            *wallet_signers = SignersContainer::build(keymap, descriptor, &self.secp)
-        }
-    }
+    // pub fn set_keymap(&mut self, keychain: KeychainKind, keymap: KeyMap) {
+    //     let wallet_signers = match keychain {
+    //         KeychainKind::External => Arc::make_mut(&mut self.signers),
+    //         KeychainKind::Internal => Arc::make_mut(&mut self.change_signers),
+    //     };
+    //     if let Some(descriptor) = self.indexed_graph.index.get_descriptor(keychain) {
+    //         *wallet_signers = SignersContainer::build(keymap, descriptor, &self.secp)
+    //     }
+    // }
 
     /// Set the keymap for each keychain.
-    pub fn set_keymaps(&mut self, keymaps: impl IntoIterator<Item = (KeychainKind, KeyMap)>) {
-        for (keychain, keymap) in keymaps {
-            self.set_keymap(keychain, keymap);
-        }
-    }
+    // pub fn set_keymaps(&mut self, keymaps: impl IntoIterator<Item = (KeychainKind, KeyMap)>) {
+    //     for (keychain, keymap) in keymaps {
+    //         self.set_keymap(keychain, keymap);
+    //     }
+    // }
 
     /// Get the signers
     ///
@@ -1176,8 +1166,9 @@ impl Wallet {
     /// ```
     pub fn get_signers(&self, keychain: KeychainKind) -> Arc<SignersContainer> {
         match keychain {
-            KeychainKind::External => Arc::clone(&self.signers),
-            KeychainKind::Internal => Arc::clone(&self.change_signers),
+            KeychainKind::Default => Arc::clone(&self.signers),
+            KeychainKind::Change => Arc::clone(&self.change_signers),
+            KeychainKind::Other(_) => Arc::new(SignersContainer::new())
         }
     }
 
@@ -1217,329 +1208,329 @@ impl Wallet {
         }
     }
 
-    pub(crate) fn create_tx<Cs: coin_selection::CoinSelectionAlgorithm>(
-        &mut self,
-        coin_selection: Cs,
-        params: TxParams,
-        rng: &mut impl RngCore,
-    ) -> Result<Psbt, CreateTxError> {
-        let keychains: BTreeMap<_, _> = self.indexed_graph.index.keychains().collect();
-        let external_descriptor = keychains.get(&KeychainKind::External).expect("must exist");
-        let internal_descriptor = keychains.get(&KeychainKind::Internal);
-
-        let external_policy = external_descriptor
-            .extract_policy(&self.signers, BuildSatisfaction::None, &self.secp)?
-            .unwrap();
-        let internal_policy = internal_descriptor
-            .map(|desc| {
-                Ok::<_, CreateTxError>(
-                    desc.extract_policy(&self.change_signers, BuildSatisfaction::None, &self.secp)?
-                        .unwrap(),
-                )
-            })
-            .transpose()?;
-
-        // The policy allows spending external outputs, but it requires a policy path that hasn't been
-        // provided
-        if params.change_policy != tx_builder::ChangeSpendPolicy::OnlyChange
-            && external_policy.requires_path()
-            && params.external_policy_path.is_none()
-        {
-            return Err(CreateTxError::SpendingPolicyRequired(
-                KeychainKind::External,
-            ));
-        };
-        // Same for the internal_policy path
-        if let Some(internal_policy) = &internal_policy {
-            if params.change_policy != tx_builder::ChangeSpendPolicy::ChangeForbidden
-                && internal_policy.requires_path()
-                && params.internal_policy_path.is_none()
-            {
-                return Err(CreateTxError::SpendingPolicyRequired(
-                    KeychainKind::Internal,
-                ));
-            };
-        }
-
-        let external_requirements = external_policy.get_condition(
-            params
-                .external_policy_path
-                .as_ref()
-                .unwrap_or(&BTreeMap::new()),
-        )?;
-        let internal_requirements = internal_policy
-            .map(|policy| {
-                Ok::<_, CreateTxError>(
-                    policy.get_condition(
-                        params
-                            .internal_policy_path
-                            .as_ref()
-                            .unwrap_or(&BTreeMap::new()),
-                    )?,
-                )
-            })
-            .transpose()?;
-
-        let requirements =
-            external_requirements.merge(&internal_requirements.unwrap_or_default())?;
-
-        let version = match params.version {
-            Some(transaction::Version(0)) => return Err(CreateTxError::Version0),
-            Some(transaction::Version::ONE) if requirements.csv.is_some() => {
-                return Err(CreateTxError::Version1Csv)
-            }
-            Some(v) => v,
-            None => transaction::Version::TWO,
-        };
-
-        // We use a match here instead of a unwrap_or_else as it's way more readable :)
-        let current_height = match params.current_height {
-            // If they didn't tell us the current height, we assume it's the latest sync height.
-            None => {
-                let tip_height = self.chain.tip().height();
-                absolute::LockTime::from_height(tip_height).expect("invalid height")
-            }
-            Some(h) => h,
-        };
-
-        let lock_time = match params.locktime {
-            // When no nLockTime is specified, we try to prevent fee sniping, if possible
-            None => {
-                // Fee sniping can be partially prevented by setting the timelock
-                // to current_height. If we don't know the current_height,
-                // we default to 0.
-                let fee_sniping_height = current_height;
-
-                // We choose the biggest between the required nlocktime and the fee sniping
-                // height
-                match requirements.timelock {
-                    // No requirement, just use the fee_sniping_height
-                    None => fee_sniping_height,
-                    // There's a block-based requirement, but the value is lower than the fee_sniping_height
-                    Some(value @ absolute::LockTime::Blocks(_)) if value < fee_sniping_height => {
-                        fee_sniping_height
-                    }
-                    // There's a time-based requirement or a block-based requirement greater
-                    // than the fee_sniping_height use that value
-                    Some(value) => value,
-                }
-            }
-            // Specific nLockTime required and we have no constraints, so just set to that value
-            Some(x) if requirements.timelock.is_none() => x,
-            // Specific nLockTime required and it's compatible with the constraints
-            Some(x)
-                if requirements.timelock.unwrap().is_same_unit(x)
-                    && x >= requirements.timelock.unwrap() =>
-            {
-                x
-            }
-            // Invalid nLockTime required
-            Some(x) => {
-                return Err(CreateTxError::LockTime {
-                    requested: x,
-                    required: requirements.timelock.unwrap(),
-                })
-            }
-        };
-
-        // nSequence value for inputs
-        // When not explicitly specified, defaults to 0xFFFFFFFD,
-        // meaning RBF signaling is enabled
-        let n_sequence = match (params.sequence, requirements.csv) {
-            // Enable RBF by default
-            (None, None) => Sequence::ENABLE_RBF_NO_LOCKTIME,
-            // None requested, use required
-            (None, Some(csv)) => csv,
-            // Requested sequence is incompatible with requirements
-            (Some(sequence), Some(csv)) if !check_nsequence_rbf(sequence, csv) => {
-                return Err(CreateTxError::RbfSequenceCsv { sequence, csv })
-            }
-            // Use requested nSequence value
-            (Some(sequence), _) => sequence,
-        };
-
-        let (fee_rate, mut fee_amount) = match params.fee_policy.unwrap_or_default() {
-            //FIXME: see https://github.com/bitcoindevkit/bdk/issues/256
-            FeePolicy::FeeAmount(fee) => {
-                if let Some(previous_fee) = params.bumping_fee {
-                    if fee < previous_fee.absolute {
-                        return Err(CreateTxError::FeeTooLow {
-                            required: previous_fee.absolute,
-                        });
-                    }
-                }
-                (FeeRate::ZERO, fee)
-            }
-            FeePolicy::FeeRate(rate) => {
-                if let Some(previous_fee) = params.bumping_fee {
-                    let required_feerate = FeeRate::from_sat_per_kwu(
-                        previous_fee.rate.to_sat_per_kwu()
-                            + FeeRate::BROADCAST_MIN.to_sat_per_kwu(), // +1 sat/vb
-                    );
-                    if rate < required_feerate {
-                        return Err(CreateTxError::FeeRateTooLow {
-                            required: required_feerate,
-                        });
-                    }
-                }
-                (rate, Amount::ZERO)
-            }
-        };
-
-        let mut tx = Transaction {
-            version,
-            lock_time,
-            input: vec![],
-            output: vec![],
-        };
-
-        if params.manually_selected_only && params.utxos.is_empty() {
-            return Err(CreateTxError::NoUtxosSelected);
-        }
-
-        let mut outgoing = Amount::ZERO;
-        let recipients = params.recipients.iter().map(|(r, v)| (r, *v));
-
-        for (index, (script_pubkey, value)) in recipients.enumerate() {
-            if !params.allow_dust && value.is_dust(script_pubkey) && !script_pubkey.is_op_return() {
-                return Err(CreateTxError::OutputBelowDustLimit(index));
-            }
-
-            let new_out = TxOut {
-                script_pubkey: script_pubkey.clone(),
-                value,
-            };
-
-            tx.output.push(new_out);
-
-            outgoing += value;
-        }
-
-        fee_amount += fee_rate * tx.weight();
-
-        let (required_utxos, optional_utxos) = {
-            // NOTE: manual selection overrides unspendable
-            let mut required: Vec<WeightedUtxo> = params.utxos.values().cloned().collect();
-            let optional = self.filter_utxos(&params, current_height.to_consensus_u32());
-
-            // if drain_wallet is true, all UTxOs are required
-            if params.drain_wallet {
-                required.extend(optional);
-                (required, vec![])
-            } else {
-                (required, optional)
-            }
-        };
-
-        // get drain script
-        let mut drain_index = Option::<(KeychainKind, u32)>::None;
-        let drain_script = match params.drain_to {
-            Some(ref drain_recipient) => drain_recipient.clone(),
-            None => {
-                let change_keychain = self.map_keychain(KeychainKind::Internal);
-                let (index, spk) = self
-                    .indexed_graph
-                    .index
-                    .unused_keychain_spks(change_keychain)
-                    .next()
-                    .unwrap_or_else(|| {
-                        let (next_index, _) = self
-                            .indexed_graph
-                            .index
-                            .next_index(change_keychain)
-                            .expect("keychain must exist");
-                        let spk = self
-                            .peek_address(change_keychain, next_index)
-                            .script_pubkey();
-                        (next_index, spk)
-                    });
-                drain_index = Some((change_keychain, index));
-                spk
-            }
-        };
-
-        let coin_selection = coin_selection
-            .coin_select(
-                required_utxos,
-                optional_utxos,
-                fee_rate,
-                outgoing + fee_amount,
-                &drain_script,
-                rng,
-            )
-            .map_err(CreateTxError::CoinSelection)?;
-
-        let excess = &coin_selection.excess;
-        tx.input = coin_selection
-            .selected
-            .iter()
-            .map(|u| bitcoin::TxIn {
-                previous_output: u.outpoint(),
-                script_sig: ScriptBuf::default(),
-                sequence: u.sequence().unwrap_or(n_sequence),
-                witness: Witness::new(),
-            })
-            .collect();
-
-        if tx.output.is_empty() {
-            // Uh oh, our transaction has no outputs.
-            // We allow this when:
-            // - We have a drain_to address and the utxos we must spend (this happens,
-            // for example, when we RBF)
-            // - We have a drain_to address and drain_wallet set
-            // Otherwise, we don't know who we should send the funds to, and how much
-            // we should send!
-            if params.drain_to.is_some() && (params.drain_wallet || !params.utxos.is_empty()) {
-                if let Excess::NoChange {
-                    dust_threshold,
-                    remaining_amount,
-                    change_fee,
-                } = excess
-                {
-                    return Err(CreateTxError::CoinSelection(InsufficientFunds {
-                        needed: *dust_threshold,
-                        available: remaining_amount
-                            .checked_sub(*change_fee)
-                            .unwrap_or_default(),
-                    }));
-                }
-            } else {
-                return Err(CreateTxError::NoRecipients);
-            }
-        }
-
-        // if there's change, create and add a change output
-        if let Excess::Change { amount, .. } = excess {
-            // create drain output
-            let drain_output = TxOut {
-                value: *amount,
-                script_pubkey: drain_script,
-            };
-
-            // TODO: We should pay attention when adding a new output: this might increase
-            // the length of the "number of vouts" parameter by 2 bytes, potentially making
-            // our feerate too low
-            tx.output.push(drain_output);
-        }
-
-        // sort input/outputs according to the chosen algorithm
-        params.ordering.sort_tx_with_aux_rand(&mut tx, rng);
-
-        let psbt = self.complete_transaction(tx, coin_selection.selected, params)?;
-
-        // recording changes to the change keychain
-        if let (Excess::Change { .. }, Some((keychain, index))) = (excess, drain_index) {
-            let (_, index_changeset) = self
-                .indexed_graph
-                .index
-                .reveal_to_target(keychain, index)
-                .expect("must not be None");
-            self.stage.merge(index_changeset.into());
-            self.mark_used(keychain, index);
-        }
-
-        Ok(psbt)
-    }
+    // pub(crate) fn create_tx<Cs: coin_selection::CoinSelectionAlgorithm>(
+    //     &mut self,
+    //     coin_selection: Cs,
+    //     params: TxParams,
+    //     rng: &mut impl RngCore,
+    // ) -> Result<Psbt, CreateTxError> {
+    //     let keychains: BTreeMap<_, _> = self.indexed_graph.index.keychains().collect();
+    //     let external_descriptor = keychains.get(&KeychainKind::External).expect("must exist");
+    //     let internal_descriptor = keychains.get(&KeychainKind::Internal);
+    //
+    //     let external_policy = external_descriptor
+    //         .extract_policy(&self.signers, BuildSatisfaction::None, &self.secp)?
+    //         .unwrap();
+    //     let internal_policy = internal_descriptor
+    //         .map(|desc| {
+    //             Ok::<_, CreateTxError>(
+    //                 desc.extract_policy(&self.change_signers, BuildSatisfaction::None, &self.secp)?
+    //                     .unwrap(),
+    //             )
+    //         })
+    //         .transpose()?;
+    //
+    //     // The policy allows spending external outputs, but it requires a policy path that hasn't been
+    //     // provided
+    //     if params.change_policy != tx_builder::ChangeSpendPolicy::OnlyChange
+    //         && external_policy.requires_path()
+    //         && params.external_policy_path.is_none()
+    //     {
+    //         return Err(CreateTxError::SpendingPolicyRequired(
+    //             KeychainKind::External,
+    //         ));
+    //     };
+    //     // Same for the internal_policy path
+    //     if let Some(internal_policy) = &internal_policy {
+    //         if params.change_policy != tx_builder::ChangeSpendPolicy::ChangeForbidden
+    //             && internal_policy.requires_path()
+    //             && params.internal_policy_path.is_none()
+    //         {
+    //             return Err(CreateTxError::SpendingPolicyRequired(
+    //                 KeychainKind::Internal,
+    //             ));
+    //         };
+    //     }
+    //
+    //     let external_requirements = external_policy.get_condition(
+    //         params
+    //             .external_policy_path
+    //             .as_ref()
+    //             .unwrap_or(&BTreeMap::new()),
+    //     )?;
+    //     let internal_requirements = internal_policy
+    //         .map(|policy| {
+    //             Ok::<_, CreateTxError>(
+    //                 policy.get_condition(
+    //                     params
+    //                         .internal_policy_path
+    //                         .as_ref()
+    //                         .unwrap_or(&BTreeMap::new()),
+    //                 )?,
+    //             )
+    //         })
+    //         .transpose()?;
+    //
+    //     let requirements =
+    //         external_requirements.merge(&internal_requirements.unwrap_or_default())?;
+    //
+    //     let version = match params.version {
+    //         Some(transaction::Version(0)) => return Err(CreateTxError::Version0),
+    //         Some(transaction::Version::ONE) if requirements.csv.is_some() => {
+    //             return Err(CreateTxError::Version1Csv)
+    //         }
+    //         Some(v) => v,
+    //         None => transaction::Version::TWO,
+    //     };
+    //
+    //     // We use a match here instead of a unwrap_or_else as it's way more readable :)
+    //     let current_height = match params.current_height {
+    //         // If they didn't tell us the current height, we assume it's the latest sync height.
+    //         None => {
+    //             let tip_height = self.chain.tip().height();
+    //             absolute::LockTime::from_height(tip_height).expect("invalid height")
+    //         }
+    //         Some(h) => h,
+    //     };
+    //
+    //     let lock_time = match params.locktime {
+    //         // When no nLockTime is specified, we try to prevent fee sniping, if possible
+    //         None => {
+    //             // Fee sniping can be partially prevented by setting the timelock
+    //             // to current_height. If we don't know the current_height,
+    //             // we default to 0.
+    //             let fee_sniping_height = current_height;
+    //
+    //             // We choose the biggest between the required nlocktime and the fee sniping
+    //             // height
+    //             match requirements.timelock {
+    //                 // No requirement, just use the fee_sniping_height
+    //                 None => fee_sniping_height,
+    //                 // There's a block-based requirement, but the value is lower than the fee_sniping_height
+    //                 Some(value @ absolute::LockTime::Blocks(_)) if value < fee_sniping_height => {
+    //                     fee_sniping_height
+    //                 }
+    //                 // There's a time-based requirement or a block-based requirement greater
+    //                 // than the fee_sniping_height use that value
+    //                 Some(value) => value,
+    //             }
+    //         }
+    //         // Specific nLockTime required and we have no constraints, so just set to that value
+    //         Some(x) if requirements.timelock.is_none() => x,
+    //         // Specific nLockTime required and it's compatible with the constraints
+    //         Some(x)
+    //             if requirements.timelock.unwrap().is_same_unit(x)
+    //                 && x >= requirements.timelock.unwrap() =>
+    //         {
+    //             x
+    //         }
+    //         // Invalid nLockTime required
+    //         Some(x) => {
+    //             return Err(CreateTxError::LockTime {
+    //                 requested: x,
+    //                 required: requirements.timelock.unwrap(),
+    //             })
+    //         }
+    //     };
+    //
+    //     // nSequence value for inputs
+    //     // When not explicitly specified, defaults to 0xFFFFFFFD,
+    //     // meaning RBF signaling is enabled
+    //     let n_sequence = match (params.sequence, requirements.csv) {
+    //         // Enable RBF by default
+    //         (None, None) => Sequence::ENABLE_RBF_NO_LOCKTIME,
+    //         // None requested, use required
+    //         (None, Some(csv)) => csv,
+    //         // Requested sequence is incompatible with requirements
+    //         (Some(sequence), Some(csv)) if !check_nsequence_rbf(sequence, csv) => {
+    //             return Err(CreateTxError::RbfSequenceCsv { sequence, csv })
+    //         }
+    //         // Use requested nSequence value
+    //         (Some(sequence), _) => sequence,
+    //     };
+    //
+    //     let (fee_rate, mut fee_amount) = match params.fee_policy.unwrap_or_default() {
+    //         //FIXME: see https://github.com/bitcoindevkit/bdk/issues/256
+    //         FeePolicy::FeeAmount(fee) => {
+    //             if let Some(previous_fee) = params.bumping_fee {
+    //                 if fee < previous_fee.absolute {
+    //                     return Err(CreateTxError::FeeTooLow {
+    //                         required: previous_fee.absolute,
+    //                     });
+    //                 }
+    //             }
+    //             (FeeRate::ZERO, fee)
+    //         }
+    //         FeePolicy::FeeRate(rate) => {
+    //             if let Some(previous_fee) = params.bumping_fee {
+    //                 let required_feerate = FeeRate::from_sat_per_kwu(
+    //                     previous_fee.rate.to_sat_per_kwu()
+    //                         + FeeRate::BROADCAST_MIN.to_sat_per_kwu(), // +1 sat/vb
+    //                 );
+    //                 if rate < required_feerate {
+    //                     return Err(CreateTxError::FeeRateTooLow {
+    //                         required: required_feerate,
+    //                     });
+    //                 }
+    //             }
+    //             (rate, Amount::ZERO)
+    //         }
+    //     };
+    //
+    //     let mut tx = Transaction {
+    //         version,
+    //         lock_time,
+    //         input: vec![],
+    //         output: vec![],
+    //     };
+    //
+    //     if params.manually_selected_only && params.utxos.is_empty() {
+    //         return Err(CreateTxError::NoUtxosSelected);
+    //     }
+    //
+    //     let mut outgoing = Amount::ZERO;
+    //     let recipients = params.recipients.iter().map(|(r, v)| (r, *v));
+    //
+    //     for (index, (script_pubkey, value)) in recipients.enumerate() {
+    //         if !params.allow_dust && value.is_dust(script_pubkey) && !script_pubkey.is_op_return() {
+    //             return Err(CreateTxError::OutputBelowDustLimit(index));
+    //         }
+    //
+    //         let new_out = TxOut {
+    //             script_pubkey: script_pubkey.clone(),
+    //             value,
+    //         };
+    //
+    //         tx.output.push(new_out);
+    //
+    //         outgoing += value;
+    //     }
+    //
+    //     fee_amount += fee_rate * tx.weight();
+    //
+    //     let (required_utxos, optional_utxos) = {
+    //         // NOTE: manual selection overrides unspendable
+    //         let mut required: Vec<WeightedUtxo> = params.utxos.values().cloned().collect();
+    //         let optional = self.filter_utxos(&params, current_height.to_consensus_u32());
+    //
+    //         // if drain_wallet is true, all UTxOs are required
+    //         if params.drain_wallet {
+    //             required.extend(optional);
+    //             (required, vec![])
+    //         } else {
+    //             (required, optional)
+    //         }
+    //     };
+    //
+    //     // get drain script
+    //     let mut drain_index = Option::<(KeychainKind, u32)>::None;
+    //     let drain_script = match params.drain_to {
+    //         Some(ref drain_recipient) => drain_recipient.clone(),
+    //         None => {
+    //             let change_keychain = self.map_keychain(KeychainKind::Internal);
+    //             let (index, spk) = self
+    //                 .indexed_graph
+    //                 .index
+    //                 .unused_keychain_spks(change_keychain)
+    //                 .next()
+    //                 .unwrap_or_else(|| {
+    //                     let (next_index, _) = self
+    //                         .indexed_graph
+    //                         .index
+    //                         .next_index(change_keychain)
+    //                         .expect("keychain must exist");
+    //                     let spk = self
+    //                         .peek_address(change_keychain, next_index)
+    //                         .script_pubkey();
+    //                     (next_index, spk)
+    //                 });
+    //             drain_index = Some((change_keychain, index));
+    //             spk
+    //         }
+    //     };
+    //
+    //     let coin_selection = coin_selection
+    //         .coin_select(
+    //             required_utxos,
+    //             optional_utxos,
+    //             fee_rate,
+    //             outgoing + fee_amount,
+    //             &drain_script,
+    //             rng,
+    //         )
+    //         .map_err(CreateTxError::CoinSelection)?;
+    //
+    //     let excess = &coin_selection.excess;
+    //     tx.input = coin_selection
+    //         .selected
+    //         .iter()
+    //         .map(|u| bitcoin::TxIn {
+    //             previous_output: u.outpoint(),
+    //             script_sig: ScriptBuf::default(),
+    //             sequence: u.sequence().unwrap_or(n_sequence),
+    //             witness: Witness::new(),
+    //         })
+    //         .collect();
+    //
+    //     if tx.output.is_empty() {
+    //         // Uh oh, our transaction has no outputs.
+    //         // We allow this when:
+    //         // - We have a drain_to address and the utxos we must spend (this happens,
+    //         // for example, when we RBF)
+    //         // - We have a drain_to address and drain_wallet set
+    //         // Otherwise, we don't know who we should send the funds to, and how much
+    //         // we should send!
+    //         if params.drain_to.is_some() && (params.drain_wallet || !params.utxos.is_empty()) {
+    //             if let Excess::NoChange {
+    //                 dust_threshold,
+    //                 remaining_amount,
+    //                 change_fee,
+    //             } = excess
+    //             {
+    //                 return Err(CreateTxError::CoinSelection(InsufficientFunds {
+    //                     needed: *dust_threshold,
+    //                     available: remaining_amount
+    //                         .checked_sub(*change_fee)
+    //                         .unwrap_or_default(),
+    //                 }));
+    //             }
+    //         } else {
+    //             return Err(CreateTxError::NoRecipients);
+    //         }
+    //     }
+    //
+    //     // if there's change, create and add a change output
+    //     if let Excess::Change { amount, .. } = excess {
+    //         // create drain output
+    //         let drain_output = TxOut {
+    //             value: *amount,
+    //             script_pubkey: drain_script,
+    //         };
+    //
+    //         // TODO: We should pay attention when adding a new output: this might increase
+    //         // the length of the "number of vouts" parameter by 2 bytes, potentially making
+    //         // our feerate too low
+    //         tx.output.push(drain_output);
+    //     }
+    //
+    //     // sort input/outputs according to the chosen algorithm
+    //     params.ordering.sort_tx_with_aux_rand(&mut tx, rng);
+    //
+    //     let psbt = self.complete_transaction(tx, coin_selection.selected, params)?;
+    //
+    //     // recording changes to the change keychain
+    //     if let (Excess::Change { .. }, Some((keychain, index))) = (excess, drain_index) {
+    //         let (_, index_changeset) = self
+    //             .indexed_graph
+    //             .index
+    //             .reveal_to_target(keychain, index)
+    //             .expect("must not be None");
+    //         self.stage.merge(index_changeset.into());
+    //         self.mark_used(keychain, index);
+    //     }
+    //
+    //     Ok(psbt)
+    // }
 
     /// Bump the fee of a transaction previously created with this wallet.
     ///
@@ -1582,155 +1573,155 @@ impl Wallet {
     /// # Ok::<(), anyhow::Error>(())
     /// ```
     // TODO: support for merging multiple transactions while bumping the fees
-    pub fn build_fee_bump(
-        &mut self,
-        txid: Txid,
-    ) -> Result<TxBuilder<'_, DefaultCoinSelectionAlgorithm>, BuildFeeBumpError> {
-        let graph = self.indexed_graph.graph();
-        let txout_index = &self.indexed_graph.index;
-        let chain_tip = self.chain.tip().block_id();
-        let chain_positions = graph
-            .list_canonical_txs(&self.chain, chain_tip)
-            .map(|canon_tx| (canon_tx.tx_node.txid, canon_tx.chain_position))
-            .collect::<HashMap<Txid, _>>();
-
-        let mut tx = graph
-            .get_tx(txid)
-            .ok_or(BuildFeeBumpError::TransactionNotFound(txid))?
-            .as_ref()
-            .clone();
-
-        if chain_positions
-            .get(&txid)
-            .ok_or(BuildFeeBumpError::TransactionNotFound(txid))?
-            .is_confirmed()
-        {
-            return Err(BuildFeeBumpError::TransactionConfirmed(txid));
-        }
-
-        if !tx
-            .input
-            .iter()
-            .any(|txin| txin.sequence.to_consensus_u32() <= 0xFFFFFFFD)
-        {
-            return Err(BuildFeeBumpError::IrreplaceableTransaction(
-                tx.compute_txid(),
-            ));
-        }
-
-        let fee = self
-            .calculate_fee(&tx)
-            .map_err(|_| BuildFeeBumpError::FeeRateUnavailable)?;
-        let fee_rate = self
-            .calculate_fee_rate(&tx)
-            .map_err(|_| BuildFeeBumpError::FeeRateUnavailable)?;
-
-        // remove the inputs from the tx and process them
-        let utxos = tx
-            .input
-            .drain(..)
-            .map(|txin| -> Result<_, BuildFeeBumpError> {
-                graph
-                    // Get previous transaction
-                    .get_tx(txin.previous_output.txid)
-                    .ok_or(BuildFeeBumpError::UnknownUtxo(txin.previous_output))
-                    // Get chain position
-                    .and_then(|prev_tx| {
-                        chain_positions
-                            .get(&txin.previous_output.txid)
-                            .cloned()
-                            .ok_or(BuildFeeBumpError::UnknownUtxo(txin.previous_output))
-                            .map(|chain_position| (prev_tx, chain_position))
-                    })
-                    .map(|(prev_tx, chain_position)| {
-                        let txout = prev_tx.output[txin.previous_output.vout as usize].clone();
-                        match txout_index.index_of_spk(txout.script_pubkey.clone()) {
-                            Some(&(keychain, derivation_index)) => (
-                                txin.previous_output,
-                                WeightedUtxo {
-                                    satisfaction_weight: self
-                                        .public_descriptor(keychain)
-                                        .max_weight_to_satisfy()
-                                        .unwrap(),
-                                    utxo: Utxo::Local(LocalOutput {
-                                        outpoint: txin.previous_output,
-                                        txout: txout.clone(),
-                                        keychain,
-                                        is_spent: true,
-                                        derivation_index,
-                                        chain_position,
-                                    }),
-                                },
-                            ),
-                            None => {
-                                let satisfaction_weight = Weight::from_wu_usize(
-                                    serialize(&txin.script_sig).len() * 4
-                                        + serialize(&txin.witness).len(),
-                                );
-
-                                (
-                                    txin.previous_output,
-                                    WeightedUtxo {
-                                        utxo: Utxo::Foreign {
-                                            outpoint: txin.previous_output,
-                                            sequence: txin.sequence,
-                                            psbt_input: Box::new(psbt::Input {
-                                                witness_utxo: txout
-                                                    .script_pubkey
-                                                    .witness_version()
-                                                    .map(|_| txout.clone()),
-                                                non_witness_utxo: Some(prev_tx.as_ref().clone()),
-                                                ..Default::default()
-                                            }),
-                                        },
-                                        satisfaction_weight,
-                                    },
-                                )
-                            }
-                        }
-                    })
-            })
-            .collect::<Result<HashMap<OutPoint, WeightedUtxo>, BuildFeeBumpError>>()?;
-
-        if tx.output.len() > 1 {
-            let mut change_index = None;
-            for (index, txout) in tx.output.iter().enumerate() {
-                let change_keychain = self.map_keychain(KeychainKind::Internal);
-                match txout_index.index_of_spk(txout.script_pubkey.clone()) {
-                    Some((keychain, _)) if *keychain == change_keychain => {
-                        change_index = Some(index)
-                    }
-                    _ => {}
-                }
-            }
-
-            if let Some(change_index) = change_index {
-                tx.output.remove(change_index);
-            }
-        }
-
-        let params = TxParams {
-            // TODO: figure out what rbf option should be?
-            version: Some(tx.version),
-            recipients: tx
-                .output
-                .into_iter()
-                .map(|txout| (txout.script_pubkey, txout.value))
-                .collect(),
-            utxos,
-            bumping_fee: Some(tx_builder::PreviousFee {
-                absolute: fee,
-                rate: fee_rate,
-            }),
-            ..Default::default()
-        };
-
-        Ok(TxBuilder {
-            wallet: self,
-            params,
-            coin_selection: DefaultCoinSelectionAlgorithm::default(),
-        })
-    }
+    // pub fn build_fee_bump(
+    //     &mut self,
+    //     txid: Txid,
+    // ) -> Result<TxBuilder<'_, DefaultCoinSelectionAlgorithm>, BuildFeeBumpError> {
+    //     let graph = self.indexed_graph.graph();
+    //     let txout_index = &self.indexed_graph.index;
+    //     let chain_tip = self.chain.tip().block_id();
+    //     let chain_positions = graph
+    //         .list_canonical_txs(&self.chain, chain_tip)
+    //         .map(|canon_tx| (canon_tx.tx_node.txid, canon_tx.chain_position))
+    //         .collect::<HashMap<Txid, _>>();
+    //
+    //     let mut tx = graph
+    //         .get_tx(txid)
+    //         .ok_or(BuildFeeBumpError::TransactionNotFound(txid))?
+    //         .as_ref()
+    //         .clone();
+    //
+    //     if chain_positions
+    //         .get(&txid)
+    //         .ok_or(BuildFeeBumpError::TransactionNotFound(txid))?
+    //         .is_confirmed()
+    //     {
+    //         return Err(BuildFeeBumpError::TransactionConfirmed(txid));
+    //     }
+    //
+    //     if !tx
+    //         .input
+    //         .iter()
+    //         .any(|txin| txin.sequence.to_consensus_u32() <= 0xFFFFFFFD)
+    //     {
+    //         return Err(BuildFeeBumpError::IrreplaceableTransaction(
+    //             tx.compute_txid(),
+    //         ));
+    //     }
+    //
+    //     let fee = self
+    //         .calculate_fee(&tx)
+    //         .map_err(|_| BuildFeeBumpError::FeeRateUnavailable)?;
+    //     let fee_rate = self
+    //         .calculate_fee_rate(&tx)
+    //         .map_err(|_| BuildFeeBumpError::FeeRateUnavailable)?;
+    //
+    //     // remove the inputs from the tx and process them
+    //     let utxos = tx
+    //         .input
+    //         .drain(..)
+    //         .map(|txin| -> Result<_, BuildFeeBumpError> {
+    //             graph
+    //                 // Get previous transaction
+    //                 .get_tx(txin.previous_output.txid)
+    //                 .ok_or(BuildFeeBumpError::UnknownUtxo(txin.previous_output))
+    //                 // Get chain position
+    //                 .and_then(|prev_tx| {
+    //                     chain_positions
+    //                         .get(&txin.previous_output.txid)
+    //                         .cloned()
+    //                         .ok_or(BuildFeeBumpError::UnknownUtxo(txin.previous_output))
+    //                         .map(|chain_position| (prev_tx, chain_position))
+    //                 })
+    //                 .map(|(prev_tx, chain_position)| {
+    //                     let txout = prev_tx.output[txin.previous_output.vout as usize].clone();
+    //                     match txout_index.index_of_spk(txout.script_pubkey.clone()) {
+    //                         Some(&(keychain, derivation_index)) => (
+    //                             txin.previous_output,
+    //                             WeightedUtxo {
+    //                                 satisfaction_weight: self
+    //                                     .public_descriptor(keychain)
+    //                                     .max_weight_to_satisfy()
+    //                                     .unwrap(),
+    //                                 utxo: Utxo::Local(LocalOutput {
+    //                                     outpoint: txin.previous_output,
+    //                                     txout: txout.clone(),
+    //                                     keychain,
+    //                                     is_spent: true,
+    //                                     derivation_index,
+    //                                     chain_position,
+    //                                 }),
+    //                             },
+    //                         ),
+    //                         None => {
+    //                             let satisfaction_weight = Weight::from_wu_usize(
+    //                                 serialize(&txin.script_sig).len() * 4
+    //                                     + serialize(&txin.witness).len(),
+    //                             );
+    //
+    //                             (
+    //                                 txin.previous_output,
+    //                                 WeightedUtxo {
+    //                                     utxo: Utxo::Foreign {
+    //                                         outpoint: txin.previous_output,
+    //                                         sequence: txin.sequence,
+    //                                         psbt_input: Box::new(psbt::Input {
+    //                                             witness_utxo: txout
+    //                                                 .script_pubkey
+    //                                                 .witness_version()
+    //                                                 .map(|_| txout.clone()),
+    //                                             non_witness_utxo: Some(prev_tx.as_ref().clone()),
+    //                                             ..Default::default()
+    //                                         }),
+    //                                     },
+    //                                     satisfaction_weight,
+    //                                 },
+    //                             )
+    //                         }
+    //                     }
+    //                 })
+    //         })
+    //         .collect::<Result<HashMap<OutPoint, WeightedUtxo>, BuildFeeBumpError>>()?;
+    //
+    //     if tx.output.len() > 1 {
+    //         let mut change_index = None;
+    //         for (index, txout) in tx.output.iter().enumerate() {
+    //             let change_keychain = self.map_keychain(KeychainKind::Internal);
+    //             match txout_index.index_of_spk(txout.script_pubkey.clone()) {
+    //                 Some((keychain, _)) if *keychain == change_keychain => {
+    //                     change_index = Some(index)
+    //                 }
+    //                 _ => {}
+    //             }
+    //         }
+    //
+    //         if let Some(change_index) = change_index {
+    //             tx.output.remove(change_index);
+    //         }
+    //     }
+    //
+    //     let params = TxParams {
+    //         // TODO: figure out what rbf option should be?
+    //         version: Some(tx.version),
+    //         recipients: tx
+    //             .output
+    //             .into_iter()
+    //             .map(|txout| (txout.script_pubkey, txout.value))
+    //             .collect(),
+    //         utxos,
+    //         bumping_fee: Some(tx_builder::PreviousFee {
+    //             absolute: fee,
+    //             rate: fee_rate,
+    //         }),
+    //         ..Default::default()
+    //     };
+    //
+    //     Ok(TxBuilder {
+    //         wallet: self,
+    //         params,
+    //         coin_selection: DefaultCoinSelectionAlgorithm::default(),
+    //     })
+    // }
 
     /// Sign a transaction with all the wallet's signers, in the order specified by every signer's
     /// [`SignerOrdering`]. This function returns the `Result` type with an encapsulated `bool` that has the value true if the PSBT was finalized, or false otherwise.
@@ -1809,18 +1800,18 @@ impl Wallet {
     }
 
     /// Return the spending policies for the wallet's descriptor
-    pub fn policies(&self, keychain: KeychainKind) -> Result<Option<Policy>, DescriptorError> {
-        let signers = match keychain {
-            KeychainKind::External => &self.signers,
-            KeychainKind::Internal => &self.change_signers,
-        };
-
-        self.public_descriptor(keychain).extract_policy(
-            signers,
-            BuildSatisfaction::None,
-            &self.secp,
-        )
-    }
+    // pub fn policies(&self, keychain: KeychainKind) -> Result<Option<Policy>, DescriptorError> {
+    //     let signers = match keychain {
+    //         KeychainKind::External => &self.signers,
+    //         KeychainKind::Internal => &self.change_signers,
+    //     };
+    //
+    //     self.public_descriptor(keychain).extract_policy(
+    //         signers,
+    //         BuildSatisfaction::None,
+    //         &self.secp,
+    //     )
+    // }
 
     /// Returns the descriptor used to create addresses for a particular `keychain`.
     ///
@@ -1963,28 +1954,28 @@ impl Wallet {
     }
 
     /// The index of the next address that you would get if you were to ask the wallet for a new address
-    pub fn next_derivation_index(&self, keychain: KeychainKind) -> u32 {
-        self.indexed_graph
-            .index
-            .next_index(self.map_keychain(keychain))
-            .expect("keychain must exist")
-            .0
-    }
+    // pub fn next_derivation_index(&self, keychain: KeychainKind) -> u32 {
+    //     self.indexed_graph
+    //         .index
+    //         .next_index(self.map_keychain(keychain))
+    //         .expect("keychain must exist")
+    //         .0
+    // }
 
     /// Informs the wallet that you no longer intend to broadcast a tx that was built from it.
     ///
     /// This frees up the change address used when creating the tx for use in future transactions.
     // TODO: Make this free up reserved utxos when that's implemented
-    pub fn cancel_tx(&mut self, tx: &Transaction) {
-        let txout_index = &mut self.indexed_graph.index;
-        for txout in &tx.output {
-            if let Some((keychain, index)) = txout_index.index_of_spk(txout.script_pubkey.clone()) {
-                // NOTE: unmark_used will **not** make something unused if it has actually been used
-                // by a tx in the tracker. It only removes the superficial marking.
-                txout_index.unmark_used(*keychain, *index);
-            }
-        }
-    }
+    // pub fn cancel_tx(&mut self, tx: &Transaction) {
+    //     let txout_index = &mut self.indexed_graph.index;
+    //     for txout in &tx.output {
+    //         if let Some((keychain, index)) = txout_index.index_of_spk(txout.script_pubkey.clone()) {
+    //             // NOTE: unmark_used will **not** make something unused if it has actually been used
+    //             // by a tx in the tracker. It only removes the superficial marking.
+    //             txout_index.unmark_used(*keychain, *index);
+    //         }
+    //     }
+    // }
 
     fn get_descriptor_for_txout(&self, txout: &TxOut) -> Option<DerivedDescriptor> {
         let &(keychain, child) = self
@@ -1997,51 +1988,51 @@ impl Wallet {
 
     /// Given the options returns the list of utxos that must be used to form the
     /// transaction and any further that may be used if needed.
-    fn filter_utxos(&self, params: &TxParams, current_height: u32) -> Vec<WeightedUtxo> {
-        if params.manually_selected_only {
-            vec![]
-        // only process optional UTxOs if manually_selected_only is false
-        } else {
-            self.indexed_graph
-                .graph()
-                // get all unspent UTxOs from wallet
-                // NOTE: the UTxOs returned by the following method already belong to wallet as the
-                // call chain uses get_tx_node infallibly
-                .filter_chain_unspents(
-                    &self.chain,
-                    self.chain.tip().block_id(),
-                    self.indexed_graph.index.outpoints().iter().cloned(),
-                )
-                // only create LocalOutput if UTxO is mature
-                .filter_map(move |((k, i), full_txo)| {
-                    full_txo
-                        .is_mature(current_height)
-                        .then(|| new_local_utxo(k, i, full_txo))
-                })
-                // only process UTxOs not selected manually, they will be considered later in the chain
-                // NOTE: this avoid UTxOs in both required and optional list
-                .filter(|may_spend| !params.utxos.contains_key(&may_spend.outpoint))
-                // only add to optional UTxOs those which satisfy the change policy if we reuse change
-                .filter(|local_output| {
-                    self.keychains().count() == 1
-                        || params.change_policy.is_satisfied_by(local_output)
-                })
-                // only add to optional UTxOs those marked as spendable
-                .filter(|local_output| !params.unspendable.contains(&local_output.outpoint))
-                // if bumping fees only add to optional UTxOs those confirmed
-                .filter(|local_output| {
-                    params.bumping_fee.is_none() || local_output.chain_position.is_confirmed()
-                })
-                .map(|utxo| WeightedUtxo {
-                    satisfaction_weight: self
-                        .public_descriptor(utxo.keychain)
-                        .max_weight_to_satisfy()
-                        .unwrap(),
-                    utxo: Utxo::Local(utxo),
-                })
-                .collect()
-        }
-    }
+    // fn filter_utxos(&self, params: &TxParams, current_height: u32) -> Vec<WeightedUtxo> {
+    //     if params.manually_selected_only {
+    //         vec![]
+    //     // only process optional UTxOs if manually_selected_only is false
+    //     } else {
+    //         self.indexed_graph
+    //             .graph()
+    //             // get all unspent UTxOs from wallet
+    //             // NOTE: the UTxOs returned by the following method already belong to wallet as the
+    //             // call chain uses get_tx_node infallibly
+    //             .filter_chain_unspents(
+    //                 &self.chain,
+    //                 self.chain.tip().block_id(),
+    //                 self.indexed_graph.index.outpoints().iter().cloned(),
+    //             )
+    //             // only create LocalOutput if UTxO is mature
+    //             .filter_map(move |((k, i), full_txo)| {
+    //                 full_txo
+    //                     .is_mature(current_height)
+    //                     .then(|| new_local_utxo(k, i, full_txo))
+    //             })
+    //             // only process UTxOs not selected manually, they will be considered later in the chain
+    //             // NOTE: this avoid UTxOs in both required and optional list
+    //             .filter(|may_spend| !params.utxos.contains_key(&may_spend.outpoint))
+    //             // only add to optional UTxOs those which satisfy the change policy if we reuse change
+    //             .filter(|local_output| {
+    //                 self.keychains().count() == 1
+    //                     || params.change_policy.is_satisfied_by(local_output)
+    //             })
+    //             // only add to optional UTxOs those marked as spendable
+    //             .filter(|local_output| !params.unspendable.contains(&local_output.outpoint))
+    //             // if bumping fees only add to optional UTxOs those confirmed
+    //             .filter(|local_output| {
+    //                 params.bumping_fee.is_none() || local_output.chain_position.is_confirmed()
+    //             })
+    //             .map(|utxo| WeightedUtxo {
+    //                 satisfaction_weight: self
+    //                     .public_descriptor(utxo.keychain)
+    //                     .max_weight_to_satisfy()
+    //                     .unwrap(),
+    //                 utxo: Utxo::Local(utxo),
+    //             })
+    //             .collect()
+    //     }
+    // }
 
     fn complete_transaction(
         &self,
@@ -2382,13 +2373,14 @@ impl Wallet {
         self.stage.merge(indexed_graph_changeset.into());
     }
 
-    /// Used internally to ensure that all methods requiring a [`KeychainKind`] will use a
-    /// keychain with an associated descriptor. For example in case the wallet was created
-    /// with only one keychain, passing [`KeychainKind::Internal`] here will instead return
-    /// [`KeychainKind::External`].
+    // /// Used internally to ensure that all methods requiring a [`KeychainKind`] will use a
+    // /// keychain with an associated descriptor. For example in case the wallet was created
+    // /// with only one keychain, passing [`KeychainKind::Internal`] here will instead return
+    // /// [`KeychainKind::External`].
+
     fn map_keychain(&self, keychain: KeychainKind) -> KeychainKind {
         if self.keychains().count() == 1 {
-            KeychainKind::External
+            KeychainKind::Default
         } else {
             keychain
         }
@@ -2476,35 +2468,45 @@ fn new_local_utxo(
 }
 
 fn create_indexer(
-    descriptor: ExtendedDescriptor,
-    change_descriptor: Option<ExtendedDescriptor>,
+    keyring: KeyRing,
+    // descriptor: ExtendedDescriptor,
+    // change_descriptor: Option<ExtendedDescriptor>,
     lookahead: u32,
 ) -> Result<KeychainTxOutIndex<KeychainKind>, DescriptorError> {
     let mut indexer = KeychainTxOutIndex::<KeychainKind>::new(lookahead);
 
     // let (descriptor, keymap) = descriptor;
     // let signers = Arc::new(SignersContainer::build(keymap, &descriptor, secp));
-    assert!(indexer
-        .insert_descriptor(KeychainKind::External, descriptor)
-        .expect("first descriptor introduced must succeed"));
+    let default_keychain = keyring.get_default_keychain().clone();
+    // TODO: KeyRings always have at least one descriptor, so I think we don't need this assert
+    // assert!(indexer
+    //     .insert_descriptor(default_keychain.0, default_keychain.1.0)
+    //     .expect("first descriptor introduced must succeed"));
+
+    // TODO: I'm here, May 2
+    keyring.list_keychains().iter().for_each(|k| {
+        indexer.insert_descriptor(k.0, k.1.clone()).expect("This should work");
+        dbg!("Inserting descriptor into indexer");
+    });
 
     // let (descriptor, keymap) = change_descriptor;
     // let change_signers = Arc::new(SignersContainer::build(keymap, &descriptor, secp));
-    if let Some(change_descriptor) = change_descriptor {
-        assert!(indexer
-            .insert_descriptor(KeychainKind::Internal, change_descriptor)
-            .map_err(|e| {
-                use bdk_chain::indexer::keychain_txout::InsertDescriptorError;
-                match e {
-                    InsertDescriptorError::DescriptorAlreadyAssigned { .. } => {
-                        crate::descriptor::error::Error::ExternalAndInternalAreTheSame
-                    }
-                    InsertDescriptorError::KeychainAlreadyAssigned { .. } => {
-                        unreachable!("this is the first time we're assigning internal")
-                    }
-                }
-            })?);
-    }
+    // TODO: Handle change
+    // if let Some(change_descriptor) = change_descriptor {
+    //     assert!(indexer
+    //         .insert_descriptor(KeychainKind::Internal, change_descriptor)
+    //         .map_err(|e| {
+    //             use bdk_chain::indexer::keychain_txout::InsertDescriptorError;
+    //             match e {
+    //                 InsertDescriptorError::DescriptorAlreadyAssigned { .. } => {
+    //                     crate::descriptor::error::Error::ExternalAndInternalAreTheSame
+    //                 }
+    //                 InsertDescriptorError::KeychainAlreadyAssigned { .. } => {
+    //                     unreachable!("this is the first time we're assigning internal")
+    //                 }
+    //             }
+    //         })?);
+    // }
 
     Ok(indexer)
 }

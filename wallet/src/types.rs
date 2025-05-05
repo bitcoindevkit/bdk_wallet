@@ -10,40 +10,46 @@
 // licenses.
 
 use alloc::boxed::Box;
-use chain::{ChainPosition, ConfirmationBlockTime};
-use core::convert::AsRef;
-
+use chain::{ChainPosition, ConfirmationBlockTime, DescriptorId};
+use std::hash::{Hash, Hasher};
 use bitcoin::transaction::{OutPoint, Sequence, TxOut};
-use bitcoin::{psbt, Weight};
-
+use bitcoin::{psbt, Network, Weight};
 use serde::{Deserialize, Serialize};
 
 /// Types of keychains
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd)]
+// #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd)]
+// pub enum KeychainKind {
+//     /// External keychain, used for deriving recipient addresses.
+//     External = 0,
+//     /// Internal keychain, used for deriving change addresses.
+//     Internal = 1,
+// }
+
+// TODO #226: Figure out why these are there and implement them on the new KeychainKind.
+// impl KeychainKind {
+//     /// Return [`KeychainKind`] as a byte
+//     pub fn as_byte(&self) -> u8 {
+//         match self {
+//             KeychainKind::External => b'e',
+//             KeychainKind::Internal => b'i',
+//         }
+//     }
+// }
+//
+// impl AsRef<[u8]> for KeychainKind {
+//     fn as_ref(&self) -> &[u8] {
+//         match self {
+//             KeychainKind::External => b"e",
+//             KeychainKind::Internal => b"i",
+//         }
+//     }
+// }
+
+#[derive(Clone, Debug, Copy, Eq, Ord, PartialEq, Hash, Serialize, Deserialize, PartialOrd)]
 pub enum KeychainKind {
-    /// External keychain, used for deriving recipient addresses.
-    External = 0,
-    /// Internal keychain, used for deriving change addresses.
-    Internal = 1,
-}
-
-impl KeychainKind {
-    /// Return [`KeychainKind`] as a byte
-    pub fn as_byte(&self) -> u8 {
-        match self {
-            KeychainKind::External => b'e',
-            KeychainKind::Internal => b'i',
-        }
-    }
-}
-
-impl AsRef<[u8]> for KeychainKind {
-    fn as_ref(&self) -> &[u8] {
-        match self {
-            KeychainKind::External => b"e",
-            KeychainKind::Internal => b"i",
-        }
-    }
+    Default,
+    Change,
+    Other(DescriptorId),
 }
 
 /// An unspent output owned by a [`Wallet`].
