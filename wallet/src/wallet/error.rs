@@ -46,7 +46,7 @@ impl std::error::Error for MiniscriptPsbtError {}
 #[derive(Debug)]
 pub enum KeychainNotInKeyRingError {
     NoChangeKeychain,
-    KeychainNotFound,
+    KeychainNotFound(KeychainKind),
 }
 
 #[derive(Debug)]

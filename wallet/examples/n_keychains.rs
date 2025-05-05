@@ -36,7 +36,13 @@ fn main() -> Result<(), anyhow::Error> {
     let balance = wallet.balance();
     println!("Balance {:?}", balance);
 
-    let full_scan_request = wallet.start_full_scan().build();
+    let revealed_address_1 = wallet.reveal_next_address(KeychainKind::Default);
+    let revealed_address_2 = wallet.reveal_next_address(KeychainKind::Default);
+    println!("Revealed next address {:?}", revealed_address_1);
+    println!("Revealed next address {:?}", revealed_address_2);
+
+    // Will error out because there is no change keychain defined
+    // wallet.reveal_next_address(KeychainKind::Change).unwrap();
 
     Ok(())
 }

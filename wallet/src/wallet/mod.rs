@@ -603,27 +603,11 @@ impl Wallet {
     /// This panics when the caller requests for an address of derivation index greater than the
     /// [BIP32](https://github.com/bitcoin/bips/blob/master/bip-0032.mediawiki) max index.
     pub fn peek_address(&self, keychain: KeychainKind, mut index: u32) -> Result<AddressInfo, KeychainNotInKeyRingError> {
-        // let keychain = self.map_keychain(keychain);
-        // TODO: This will not work for KeychainKind::Other and is just working as a hack for Default and Change
-
-        // if let KeychainKind::Other(ref name):  = keychain {
-        //     self.keychains()
-        //         .find(|kc| kc.1.descriptor_id() == name.clone())
-        // } else {
-        //     self.keychains()
-        //         .find(|kc| kc.0 == keychain)
-        // }
-
-        // let keychain = if keychain.0 == KeychainKind::Other {
-        //     self.keychains()
-        //         .find(|kc| kc.1.descriptor_id() == keychain.1.expect("should have a value"))
-        //         .ok_or(KeychainNotInKeyRingError::KeychainNotFound)?
-        // } else {
-        //     self.keychains()
-        //         .find(|kc| kc.0 == keychain.0)
-        //         .ok_or(KeychainNotInKeyRingError::KeychainNotFound)?
-        // };
-
+        // TODO #266: Add test for when the keychain provided is not part of the key_ring
+        if !self.indexed_graph.index.keychains().any(|(k, _)| k == keychain) {
+            return Err(KeychainNotInKeyRingError::KeychainNotFound(keychain));
+        }
+        
         let mut spk_iter = self
             .indexed_graph
             .index
@@ -668,24 +652,28 @@ impl Wallet {
     /// println!("Next address: {}", next_address.address);
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    // pub fn reveal_next_address(&mut self, keychain: KeychainKind) -> AddressInfo {
-    //     let keychain = self.map_keychain(keychain);
-    //     let index = &mut self.indexed_graph.index;
-    //     let stage = &mut self.stage;
-    //
-    //     let ((index, spk), index_changeset) = index
-    //         .reveal_next_spk(keychain)
-    //         .expect("keychain must exist");
-    //
-    //     stage.merge(index_changeset.into());
-    //
-    //     AddressInfo {
-    //         index,
-    //         address: Address::from_script(spk.as_script(), self.network)
-    //             .expect("must have address form"),
-    //         keychain,
-    //     }
-    // }
+    pub fn reveal_next_address(&mut self, keychain: KeychainKind) -> Result<AddressInfo, KeychainNotInKeyRingError> {
+        // TODO #266: Add test for when the keychain provided is not part of the key_ring
+        if !self.indexed_graph.index.keychains().any(|(k, _)| k == keychain) {
+            return Err(KeychainNotInKeyRingError::KeychainNotFound(keychain));
+        }
+
+        let index = &mut self.indexed_graph.index;
+        let stage = &mut self.stage;
+
+        let ((index, spk), index_changeset) = index
+            .reveal_next_spk(keychain)
+            .expect("keychain must exist");
+
+        stage.merge(index_changeset.into());
+
+        Ok(AddressInfo {
+            index,
+            address: Address::from_script(spk.as_script(), self.network)
+                .expect("must have address form"),
+            keychain,
+        })
+    }
 
     /// Reveal addresses up to and including the target `index` and return an iterator
     /// of newly revealed addresses.
@@ -725,30 +713,40 @@ impl Wallet {
     ///
     /// **WARNING**: To avoid address reuse you must persist the changes resulting from one or more
     /// calls to this method before closing the wallet. See [`Wallet::reveal_next_address`].
-    // pub fn next_unused_address(&mut self, keychain: KeychainKind) -> AddressInfo {
-    //     let keychain = self.map_keychain(keychain);
-    //     let index = &mut self.indexed_graph.index;
-    //
-    //     let ((index, spk), index_changeset) = index
-    //         .next_unused_spk(keychain)
-    //         .expect("keychain must exist");
-    //
-    //     self.stage
-    //         .merge(indexed_tx_graph::ChangeSet::from(index_changeset).into());
-    //
-    //     AddressInfo {
-    //         index,
-    //         address: Address::from_script(spk.as_script(), self.network)
-    //             .expect("must have address form"),
-    //         keychain,
-    //     }
-    // }
+    pub fn next_unused_address(&mut self, keychain: KeychainKind) -> Result<AddressInfo, KeychainNotInKeyRingError> {
+        // TODO #266: Add test for when the keychain provided is not part of the key_ring
+        if !self.indexed_graph.index.keychains().any(|(k, _)| k == keychain) {
+            return Err(KeychainNotInKeyRingError::KeychainNotFound(keychain));
+        }
+
+        let index = &mut self.indexed_graph.index;
+
+        let ((index, spk), index_changeset) = index
+            .next_unused_spk(keychain)
+            .expect("keychain must exist");
+
+        self.stage
+            .merge(indexed_tx_graph::ChangeSet::from(index_changeset).into());
+
+        Ok(AddressInfo {
+            index,
+            address: Address::from_script(spk.as_script(), self.network)
+                .expect("must have address form"),
+            keychain,
+        })
+    }
 
     /// Marks an address used of the given `keychain` at `index`.
     ///
     /// Returns whether the given index was present and then removed from the unused set.
-    pub fn mark_used(&mut self, keychain: KeychainKind, index: u32) -> bool {
-        self.indexed_graph.index.mark_used(keychain, index)
+    pub fn mark_used(&mut self, keychain: KeychainKind, index: u32) -> Result<bool, KeychainNotInKeyRingError> {
+        // TODO #266: Add test for when the keychain provided is not part of the key_ring
+        if !self.indexed_graph.index.keychains().any(|(k, _)| k == keychain) {
+            return Err(KeychainNotInKeyRingError::KeychainNotFound(keychain));
+        }
+
+        self.indexed_graph.index.mark_used(keychain, index);
+        Ok(true)
     }
 
     /// Undoes the effect of [`mark_used`] and returns whether the `index` was inserted
@@ -759,8 +757,13 @@ impl Wallet {
     /// derived spk.
     ///
     /// [`mark_used`]: Self::mark_used
-    pub fn unmark_used(&mut self, keychain: KeychainKind, index: u32) -> bool {
-        self.indexed_graph.index.unmark_used(keychain, index)
+    pub fn unmark_used(&mut self, keychain: KeychainKind, index: u32) -> Result<bool, KeychainNotInKeyRingError> {
+        // TODO #266: Add test for when the keychain provided is not part of the key_ring
+        if !self.indexed_graph.index.keychains().any(|(k, _)| k == keychain) {
+            return Err(KeychainNotInKeyRingError::KeychainNotFound(keychain));
+        }
+        self.indexed_graph.index.unmark_used(keychain, index);
+        Ok(true)
     }
 
     /// List addresses that are revealed but unused.
