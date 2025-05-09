@@ -6,10 +6,16 @@ use core::{
     pin::Pin,
 };
 
-use alloc::boxed::Box;
+use alloc::{
+    boxed::Box,
+    string::{String, ToString},
+};
 use chain::Merge;
 
-use crate::{descriptor::DescriptorError, ChangeSet, CreateParams, LoadParams, Wallet};
+use crate::{
+    descriptor::{calc_checksum, DescriptorError},
+    ChangeSet, CreateParams, LoadParams, Wallet,
+};
 
 /// Trait that persists [`PersistedWallet`].
 ///
@@ -361,16 +367,46 @@ pub enum CreateWithPersistError<E> {
 impl<E: fmt::Display> fmt::Display for CreateWithPersistError<E> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Persist(err) => fmt::Display::fmt(err, f),
-            Self::DataAlreadyExists(changeset) => write!(
-                f,
-                "Cannot create wallet in persister which already contains wallet data: {:?}",
-                changeset
-            ),
-            Self::Descriptor(err) => fmt::Display::fmt(&err, f),
+            Self::Persist(err) => write!(f, "{}", err),
+            Self::DataAlreadyExists(changeset) => {
+                write!(
+                    f,
+                    "Cannot create wallet in a persister which already contains data: {}",
+                    changeset_info(changeset)
+                )
+            }
+            Self::Descriptor(err) => {
+                write!(f, "{err}")
+            }
         }
     }
 }
 
 #[cfg(feature = "std")]
 impl<E: fmt::Debug + fmt::Display> std::error::Error for CreateWithPersistError<E> {}
+
+/// Helper function to display basic information about a [`ChangeSet`].
+fn changeset_info(changeset: &ChangeSet) -> String {
+    let network = match &changeset.network {
+        Some(network) => network.to_string(),
+        None => "None".to_string(),
+    };
+
+    let mut checksum = String::new();
+    if let Some(desc) = &changeset.descriptor {
+        if let Ok(ck) = calc_checksum(&desc.to_string()) {
+            checksum += ck.as_str();
+        }
+    }
+    if let Some(desc) = &changeset.change_descriptor {
+        if let Ok(ck) = calc_checksum(&desc.to_string()) {
+            checksum += ck.as_str();
+        }
+    }
+    // Don't return an empty checksum
+    if checksum.is_empty() {
+        checksum = "None".to_string();
+    }
+
+    format!("Network: {}, Descriptor Checksum: {}", network, checksum)
+}
