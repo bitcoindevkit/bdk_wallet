@@ -148,8 +148,14 @@ impl<P: WalletPersister> PersistedWallet<P> {
         if !existing.is_empty() {
             return Err(CreateWithPersistError::DataAlreadyExists(existing));
         }
-        let mut inner =
-            Wallet::create_with_params(params).map_err(CreateWithPersistError::Descriptor)?;
+        // TODO: This is a temporary hack that should probably be done in a cleaner way.
+        // (same for `load`). The idea is to implement the new behavior without disrupting
+        // the old way.
+        let mut inner = if params.keyring.is_some() {
+            Wallet::create_with_keyring(params).map_err(CreateWithPersistError::Descriptor)?
+        } else {
+            Wallet::create_with_params(params).map_err(CreateWithPersistError::Descriptor)?
+        };
         if let Some(changeset) = inner.take_staged() {
             P::persist(persister, &changeset).map_err(CreateWithPersistError::Persist)?;
         }
@@ -165,14 +171,18 @@ impl<P: WalletPersister> PersistedWallet<P> {
         params: LoadParams,
     ) -> Result<Option<Self>, LoadWithPersistError<P::Error>> {
         let changeset = P::initialize(persister).map_err(LoadWithPersistError::Persist)?;
-        Wallet::load_with_params(changeset, params)
-            .map(|opt| {
-                opt.map(|inner| PersistedWallet {
-                    inner,
-                    _marker: PhantomData,
-                })
-            })
-            .map_err(LoadWithPersistError::InvalidChangeSet)
+        let wallet = if changeset.keychains.is_empty() {
+            Wallet::load_with_params(changeset, params)
+                .map_err(LoadWithPersistError::InvalidChangeSet)?
+        } else {
+            // Call the special keyring loader
+            Wallet::load_with_keyring(changeset, params)
+                .map_err(LoadWithPersistError::InvalidChangeSet)?
+        };
+        Ok(wallet.map(|inner| PersistedWallet {
+            inner,
+            _marker: PhantomData,
+        }))
     }
 
     /// Persist staged changes of wallet into `persister`.

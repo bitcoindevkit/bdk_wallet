@@ -7,7 +7,7 @@ use bdk_electrum::BdkElectrumClient;
 use bdk_wallet::bitcoin::Amount;
 use bdk_wallet::bitcoin::Network;
 use bdk_wallet::chain::collections::HashSet;
-use bdk_wallet::{KeychainKind, SignOptions};
+use bdk_wallet::{Keychain, KeychainKind, SignOptions};
 
 const DB_MAGIC: &str = "bdk_wallet_electrum_example";
 const SEND_AMOUNT: Amount = Amount::from_sat(5000);
@@ -53,7 +53,7 @@ fn main() -> Result<(), anyhow::Error> {
 
     let request = wallet.start_full_scan().inspect({
         let mut stdout = std::io::stdout();
-        let mut once = HashSet::<KeychainKind>::new();
+        let mut once = HashSet::<Keychain>::new();
         move |k, spk_i, _| {
             if once.insert(k) {
                 print!("\nScanning keychain [{:?}]", k);

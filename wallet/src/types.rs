@@ -46,6 +46,19 @@ impl AsRef<[u8]> for KeychainKind {
     }
 }
 
+use crate::Keychain;
+
+impl KeychainKind {
+    /// From keychain.
+    pub(crate) fn from_keychain(keychain: Keychain) -> Option<Self> {
+        match keychain {
+            Keychain::ZERO => Some(KeychainKind::External),
+            Keychain::ONE => Some(KeychainKind::Internal),
+            _ => None,
+        }
+    }
+}
+
 /// An unspent output owned by a [`Wallet`].
 ///
 /// [`Wallet`]: crate::Wallet

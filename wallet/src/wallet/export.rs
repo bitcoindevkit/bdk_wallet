@@ -65,6 +65,7 @@ use miniscript::{Descriptor, ScriptContext, Terminal};
 
 use crate::types::KeychainKind;
 use crate::wallet::Wallet;
+use crate::Keychain;
 
 /// Alias for [`FullyNodedExport`]
 #[deprecated(since = "0.18.0", note = "Please use [`FullyNodedExport`] instead")]
@@ -118,7 +119,7 @@ impl FullyNodedExport {
         include_blockheight: bool,
     ) -> Result<Self, &'static str> {
         let descriptor = wallet
-            .public_descriptor(KeychainKind::External)
+            .public_descriptor(Keychain::ZERO)
             .to_string_with_secret(
                 &wallet
                     .get_signers(KeychainKind::External)
@@ -146,7 +147,7 @@ impl FullyNodedExport {
 
         let change_descriptor = {
             let descriptor = wallet
-                .public_descriptor(KeychainKind::Internal)
+                .public_descriptor(Keychain::ONE)
                 .to_string_with_secret(
                     &wallet
                         .get_signers(KeychainKind::Internal)

@@ -46,6 +46,8 @@ pub use tx_builder::*;
 pub use types::*;
 pub use wallet::*;
 
+pub(crate) use bdk_chain::keychain_txout::DEFAULT_LOOKAHEAD;
+
 /// Get the version of [`bdk_wallet`](crate) at runtime.
 pub fn version() -> &'static str {
     env!("CARGO_PKG_VERSION", "unknown")

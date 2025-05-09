@@ -1,16 +1,15 @@
 use alloc::boxed::Box;
-use bdk_chain::keychain_txout::DEFAULT_LOOKAHEAD;
 use bitcoin::{BlockHash, Network};
 use miniscript::descriptor::KeyMap;
 
 use crate::{
     descriptor::{DescriptorError, ExtendedDescriptor, IntoWalletDescriptor},
     utils::SecpCtx,
-    AsyncWalletPersister, CreateWithPersistError, KeychainKind, LoadWithPersistError, Wallet,
-    WalletPersister,
+    AsyncWalletPersister, CreateWithPersistError, LoadWithPersistError, Wallet, WalletPersister,
+    DEFAULT_LOOKAHEAD,
 };
 
-use super::{ChangeSet, LoadError, PersistedWallet};
+use super::{ChangeSet, KeychainKind, Keyring, LoadError, PersistedWallet};
 
 /// This atrocity is to avoid having type parameters on [`CreateParams`] and [`LoadParams`].
 ///
@@ -32,13 +31,30 @@ where
 /// Parameters for [`Wallet::create`] or [`PersistedWallet::create`].
 #[must_use]
 pub struct CreateParams {
-    pub(crate) descriptor: DescriptorToExtract,
+    pub(crate) descriptor: Option<DescriptorToExtract>,
     pub(crate) descriptor_keymap: KeyMap,
     pub(crate) change_descriptor: Option<DescriptorToExtract>,
     pub(crate) change_descriptor_keymap: KeyMap,
     pub(crate) network: Network,
     pub(crate) genesis_hash: Option<BlockHash>,
     pub(crate) lookahead: u32,
+    // Now we introduce the keyring!
+    pub(crate) keyring: Option<Keyring>,
+}
+
+impl Default for CreateParams {
+    fn default() -> Self {
+        Self {
+            descriptor: None,
+            change_descriptor: None,
+            network: Network::Bitcoin,
+            descriptor_keymap: Default::default(),
+            change_descriptor_keymap: Default::default(),
+            genesis_hash: None,
+            lookahead: DEFAULT_LOOKAHEAD,
+            keyring: None,
+        }
+    }
 }
 
 impl CreateParams {
@@ -54,13 +70,14 @@ impl CreateParams {
     /// also [`Wallet::create_single`].
     pub fn new_single<D: IntoWalletDescriptor + Send + 'static>(descriptor: D) -> Self {
         Self {
-            descriptor: make_descriptor_to_extract(descriptor),
+            descriptor: Some(make_descriptor_to_extract(descriptor)),
             descriptor_keymap: KeyMap::default(),
             change_descriptor: None,
             change_descriptor_keymap: KeyMap::default(),
             network: Network::Bitcoin,
             genesis_hash: None,
             lookahead: DEFAULT_LOOKAHEAD,
+            keyring: None,
         }
     }
 
@@ -75,13 +92,14 @@ impl CreateParams {
         change_descriptor: D,
     ) -> Self {
         Self {
-            descriptor: make_descriptor_to_extract(descriptor),
+            descriptor: Some(make_descriptor_to_extract(descriptor)),
             descriptor_keymap: KeyMap::default(),
             change_descriptor: Some(make_descriptor_to_extract(change_descriptor)),
             change_descriptor_keymap: KeyMap::default(),
             network: Network::Bitcoin,
             genesis_hash: None,
             lookahead: DEFAULT_LOOKAHEAD,
+            keyring: None,
         }
     }
 

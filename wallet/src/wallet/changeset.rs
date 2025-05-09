@@ -3,6 +3,9 @@ use bdk_chain::{
 };
 use miniscript::{Descriptor, DescriptorPublicKey};
 
+use crate::collections::BTreeMap;
+use crate::Keychain;
+
 type IndexedTxGraphChangeSet =
     indexed_tx_graph::ChangeSet<ConfirmationBlockTime, keychain_txout::ChangeSet>;
 
@@ -21,6 +24,9 @@ pub struct ChangeSet {
     pub tx_graph: tx_graph::ChangeSet<ConfirmationBlockTime>,
     /// Changes to [`KeychainTxOutIndex`](keychain_txout::KeychainTxOutIndex).
     pub indexer: keychain_txout::ChangeSet,
+
+    /// Wallet keychain descriptors
+    pub keychains: BTreeMap<Keychain, Descriptor<DescriptorPublicKey>>,
 }
 
 impl Merge for ChangeSet {
@@ -70,6 +76,8 @@ impl ChangeSet {
     pub const WALLET_SCHEMA_NAME: &'static str = "bdk_wallet";
     /// Name of table to store wallet descriptors and network.
     pub const WALLET_TABLE_NAME: &'static str = "bdk_wallet";
+    /// Name of table to store wallet descriptors and network.
+    pub const DESCRIPTORS_TABLE_NAME: &'static str = "bdk_wallet_descriptors";
 
     /// Get v0 sqlite [ChangeSet] schema
     pub fn schema_v0() -> alloc::string::String {
@@ -84,12 +92,23 @@ impl ChangeSet {
         )
     }
 
+    /// Schema 1 adds a table of descriptors
+    pub fn schema_v1() -> alloc::string::String {
+        format!(
+            "CREATE TABLE {} ( \
+                keychain INTEGER PRIMARY KEY NOT NULL, \
+                descriptor TEXT \
+                ) STRICT;",
+            Self::DESCRIPTORS_TABLE_NAME,
+        )
+    }
+
     /// Initialize sqlite tables for wallet tables.
     pub fn init_sqlite_tables(db_tx: &chain::rusqlite::Transaction) -> chain::rusqlite::Result<()> {
         crate::rusqlite_impl::migrate_schema(
             db_tx,
             Self::WALLET_SCHEMA_NAME,
-            &[&Self::schema_v0()],
+            &[&Self::schema_v0(), &Self::schema_v1()],
         )?;
 
         bdk_chain::local_chain::ChangeSet::init_sqlite_tables(db_tx)?;
@@ -127,6 +146,21 @@ impl ChangeSet {
             changeset.network = network.map(Impl::into_inner);
         }
 
+        let mut stmt = db_tx.prepare_cached(&format!(
+            "SELECT keychain, descriptor FROM {}",
+            Self::DESCRIPTORS_TABLE_NAME,
+        ))?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, usize>("keychain")?,
+                row.get::<_, Impl<Descriptor<DescriptorPublicKey>>>("descriptor")?,
+            ))
+        })?;
+        for row in rows {
+            let (k, Impl(descriptor)) = row?;
+            changeset.keychains.insert(Keychain(k), descriptor);
+        }
+
         changeset.local_chain = local_chain::ChangeSet::from_sqlite(db_tx)?;
         changeset.tx_graph = tx_graph::ChangeSet::<_>::from_sqlite(db_tx)?;
         changeset.indexer = keychain_txout::ChangeSet::from_sqlite(db_tx)?;
@@ -161,6 +195,17 @@ impl ChangeSet {
             change_descriptor_statement.execute(named_params! {
                 ":id": 0,
                 ":change_descriptor": Impl(change_descriptor.clone()),
+            })?;
+        }
+
+        let mut stmt = db_tx.prepare_cached(&format!(
+            "INSERT INTO {}(keychain, descriptor) VALUES(:keychain, :descriptor) ON CONFLICT(keychain) DO UPDATE SET descriptor=:descriptor",
+            Self::DESCRIPTORS_TABLE_NAME,
+        ))?;
+        for (keychain, descriptor) in &self.keychains {
+            stmt.execute(named_params! {
+                ":keychain": keychain.0,
+                ":descriptor": Impl(descriptor.clone()),
             })?;
         }
 

@@ -10,8 +10,8 @@ use bdk_wallet::descriptor::{calc_checksum, DescriptorError, IntoWalletDescripto
 use bdk_wallet::error::CreateTxError;
 use bdk_wallet::psbt::PsbtUtils;
 use bdk_wallet::signer::{SignOptions, SignerError};
-use bdk_wallet::test_utils::*;
 use bdk_wallet::tx_builder::AddForeignUtxoError;
+use bdk_wallet::{test_utils::*, Keychain};
 use bdk_wallet::{
     AddressInfo, Balance, ChangeSet, PersistedWallet, Update, Wallet, WalletPersister, WalletTx,
 };
@@ -104,7 +104,7 @@ fn wallet_is_persisted() -> anyhow::Result<()> {
             );
             let secp = Secp256k1::new();
             assert_eq!(
-                *wallet.public_descriptor(KeychainKind::External),
+                *wallet.public_descriptor(Keychain::ZERO),
                 external_desc
                     .into_wallet_descriptor(&secp, wallet.network())
                     .unwrap()
@@ -309,7 +309,7 @@ fn single_descriptor_wallet_persist_and_recover() {
         .load_wallet(&mut db)
         .unwrap()
         .expect("must have loaded changeset");
-    assert_eq!(wallet.derivation_index(KeychainKind::External), Some(2));
+    assert_eq!(wallet.derivation_index(Keychain::ZERO), Some(2));
     // should have private key
     assert_eq!(
         wallet.get_signers(KeychainKind::External).as_key_map(secp),
@@ -326,7 +326,7 @@ fn single_descriptor_wallet_persist_and_recover() {
     assert_matches!(
         err,
         Err(LoadWithPersistError::InvalidChangeSet(LoadError::Mismatch(LoadMismatch::Descriptor { keychain, loaded, expected })))
-        if keychain == KeychainKind::Internal && loaded.is_none() && expected == Some(exp_desc),
+        if keychain == Keychain::ONE && loaded.is_none() && expected == Some(exp_desc),
         "single descriptor wallet should refuse change descriptor param"
     );
 }
@@ -360,7 +360,7 @@ fn test_error_external_and_internal_are_the_same() {
 #[test]
 fn test_descriptor_checksum() {
     let (wallet, _) = get_funded_wallet_wpkh();
-    let checksum = wallet.descriptor_checksum(KeychainKind::External);
+    let checksum = wallet.descriptor_checksum(Keychain::ZERO);
     assert_eq!(checksum.len(), 8);
 
     let raw_descriptor = wallet
@@ -1523,7 +1523,7 @@ fn test_create_tx_increment_change_index() {
         }
         let (exp_derivation_index, exp_next_unused) = test.expect;
         assert_eq!(
-            wallet.derivation_index(change_keychain),
+            wallet.derivation_index(change_keychain.into()),
             exp_derivation_index,
             "derivation index test {}",
             test.name,
@@ -1548,7 +1548,7 @@ fn test_add_foreign_utxo() {
         .assume_checked();
     let utxo = wallet2.list_unspent().next().expect("must take!");
     let foreign_utxo_satisfaction = wallet2
-        .public_descriptor(KeychainKind::External)
+        .public_descriptor(Keychain::ZERO)
         .max_weight_to_satisfy()
         .unwrap();
 
@@ -1622,7 +1622,7 @@ fn test_calculate_fee_with_missing_foreign_utxo() {
         .assume_checked();
     let utxo = wallet2.list_unspent().next().expect("must take!");
     let foreign_utxo_satisfaction = wallet2
-        .public_descriptor(KeychainKind::External)
+        .public_descriptor(Keychain::ZERO)
         .max_weight_to_satisfy()
         .unwrap();
 
@@ -1650,7 +1650,7 @@ fn test_add_foreign_utxo_invalid_psbt_input() {
     let (mut wallet, _) = get_funded_wallet_wpkh();
     let outpoint = wallet.list_unspent().next().expect("must exist").outpoint;
     let foreign_utxo_satisfaction = wallet
-        .public_descriptor(KeychainKind::External)
+        .public_descriptor(Keychain::ZERO)
         .max_weight_to_satisfy()
         .unwrap();
 
@@ -1671,7 +1671,7 @@ fn test_add_foreign_utxo_where_outpoint_doesnt_match_psbt_input() {
     let tx2 = wallet2.get_tx(txid2).unwrap().tx_node.tx.clone();
 
     let satisfaction_weight = wallet2
-        .public_descriptor(KeychainKind::External)
+        .public_descriptor(Keychain::ZERO)
         .max_weight_to_satisfy()
         .unwrap();
 
@@ -1715,7 +1715,7 @@ fn test_add_foreign_utxo_only_witness_utxo() {
     let utxo2 = wallet2.list_unspent().next().unwrap();
 
     let satisfaction_weight = wallet2
-        .public_descriptor(KeychainKind::External)
+        .public_descriptor(Keychain::ZERO)
         .max_weight_to_satisfy()
         .unwrap();
 
@@ -3029,7 +3029,7 @@ fn test_next_unused_address() {
         .network(Network::Testnet)
         .create_wallet_no_persist()
         .expect("wallet");
-    assert_eq!(wallet.derivation_index(KeychainKind::External), None);
+    assert_eq!(wallet.derivation_index(Keychain::ZERO), None);
 
     assert_eq!(
         wallet
@@ -3037,7 +3037,7 @@ fn test_next_unused_address() {
             .to_string(),
         "tb1q6yn66vajcctph75pvylgkksgpp6nq04ppwct9a"
     );
-    assert_eq!(wallet.derivation_index(KeychainKind::External), Some(0));
+    assert_eq!(wallet.derivation_index(Keychain::ZERO), Some(0));
     // calling next_unused again gives same address
     assert_eq!(
         wallet
@@ -3045,14 +3045,14 @@ fn test_next_unused_address() {
             .to_string(),
         "tb1q6yn66vajcctph75pvylgkksgpp6nq04ppwct9a"
     );
-    assert_eq!(wallet.derivation_index(KeychainKind::External), Some(0));
+    assert_eq!(wallet.derivation_index(Keychain::ZERO), Some(0));
 
     // test mark used / unused
-    assert!(wallet.mark_used(KeychainKind::External, 0));
+    assert!(wallet.mark_used(Keychain::ZERO, 0));
     let next_unused_addr = wallet.next_unused_address(KeychainKind::External);
     assert_eq!(next_unused_addr.index, 1);
 
-    assert!(wallet.unmark_used(KeychainKind::External, 0));
+    assert!(wallet.unmark_used(Keychain::ZERO, 0));
     let next_unused_addr = wallet.next_unused_address(KeychainKind::External);
     assert_eq!(next_unused_addr.index, 0);
 
@@ -3065,10 +3065,10 @@ fn test_next_unused_address() {
             .to_string(),
         "tb1q4er7kxx6sssz3q7qp7zsqsdx4erceahhax77d7"
     );
-    assert_eq!(wallet.derivation_index(KeychainKind::External), Some(1));
+    assert_eq!(wallet.derivation_index(Keychain::ZERO), Some(1));
 
     // trying to mark index 0 unused should return false
-    assert!(!wallet.unmark_used(KeychainKind::External, 0));
+    assert!(!wallet.unmark_used(Keychain::ZERO, 0));
 }
 
 #[test]
@@ -3249,7 +3249,7 @@ fn test_reveal_addresses() {
     let keychain = KeychainKind::External;
 
     let last_revealed_addr = wallet.reveal_addresses_to(keychain, 9).last().unwrap();
-    assert_eq!(wallet.derivation_index(keychain), Some(9));
+    assert_eq!(wallet.derivation_index(keychain.into()), Some(9));
 
     let unused_addrs = wallet.list_unused_addresses(keychain).collect::<Vec<_>>();
     assert_eq!(unused_addrs.len(), 10);
@@ -3506,7 +3506,7 @@ fn test_taproot_foreign_utxo() {
     let utxo = wallet2.list_unspent().next().unwrap();
     let psbt_input = wallet2.get_psbt_input(utxo.clone(), None, false).unwrap();
     let foreign_utxo_satisfaction = wallet2
-        .public_descriptor(KeychainKind::External)
+        .public_descriptor(Keychain::ZERO)
         .max_weight_to_satisfy()
         .unwrap();
 
@@ -4108,7 +4108,7 @@ fn test_taproot_load_descriptor_duplicated_keys() {
 #[test]
 #[cfg(debug_assertions)]
 #[should_panic(
-    expected = "replenish lookahead: must not have existing spk: keychain=Internal, lookahead=25, next_store_index=0, next_reveal_index=0"
+    expected = "replenish lookahead: must not have existing spk: keychain=Keychain(1), lookahead=25, next_store_index=0, next_reveal_index=0"
 )]
 fn test_keychains_with_overlapping_spks() {
     // this can happen if a non-wildcard descriptor keychain derives an spk that a
@@ -4163,7 +4163,7 @@ fn test_tx_cancellation() {
         .iter()
         .find_map(|txout| wallet.derivation_of_spk(txout.script_pubkey.clone()))
         .unwrap();
-    assert_eq!(change_derivation_1, (KeychainKind::Internal, 0));
+    assert_eq!(change_derivation_1, (Keychain::ONE, 0));
 
     let psbt2 = new_tx!(wallet);
 
@@ -4173,7 +4173,7 @@ fn test_tx_cancellation() {
         .iter()
         .find_map(|txout| wallet.derivation_of_spk(txout.script_pubkey.clone()))
         .unwrap();
-    assert_eq!(change_derivation_2, (KeychainKind::Internal, 1));
+    assert_eq!(change_derivation_2, (Keychain::ONE, 1));
 
     wallet.cancel_tx(&psbt1.extract_tx().expect("failed to extract tx"));
 
@@ -4184,7 +4184,7 @@ fn test_tx_cancellation() {
         .iter()
         .find_map(|txout| wallet.derivation_of_spk(txout.script_pubkey.clone()))
         .unwrap();
-    assert_eq!(change_derivation_3, (KeychainKind::Internal, 0));
+    assert_eq!(change_derivation_3, (Keychain::ONE, 0));
 
     let psbt3 = new_tx!(wallet);
     let change_derivation_3 = psbt3
@@ -4193,7 +4193,7 @@ fn test_tx_cancellation() {
         .iter()
         .find_map(|txout| wallet.derivation_of_spk(txout.script_pubkey.clone()))
         .unwrap();
-    assert_eq!(change_derivation_3, (KeychainKind::Internal, 2));
+    assert_eq!(change_derivation_3, (Keychain::ONE, 2));
 
     wallet.cancel_tx(&psbt3.extract_tx().expect("failed to extract tx"));
 
@@ -4204,7 +4204,7 @@ fn test_tx_cancellation() {
         .iter()
         .find_map(|txout| wallet.derivation_of_spk(txout.script_pubkey.clone()))
         .unwrap();
-    assert_eq!(change_derivation_4, (KeychainKind::Internal, 2));
+    assert_eq!(change_derivation_4, (Keychain::ONE, 2));
 }
 
 #[test]

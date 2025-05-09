@@ -286,7 +286,7 @@ impl<'a, Cs> TxBuilder<'a, Cs> {
                             WeightedUtxo {
                                 satisfaction_weight: self
                                     .wallet
-                                    .public_descriptor(output.keychain)
+                                    .public_descriptor(output.keychain.into())
                                     .max_weight_to_satisfy()
                                     .unwrap(),
                                 utxo: Utxo::Local(output),
@@ -862,6 +862,8 @@ mod test {
     use bitcoin::TxOut;
 
     use super::*;
+    use crate::Keychain;
+
     #[test]
     fn test_output_ordering_untouched() {
         let original_tx = ordering_test_tx!();
@@ -1157,7 +1159,7 @@ mod test {
         let tx1 = wallet1.get_tx(txid1).unwrap().tx_node.tx.clone();
 
         let satisfaction_weight = wallet1
-            .public_descriptor(KeychainKind::External)
+            .public_descriptor(Keychain::ZERO)
             .max_weight_to_satisfy()
             .unwrap();
 
@@ -1229,7 +1231,7 @@ mod test {
         let tx1 = wallet1.get_tx(txid1).unwrap().tx_node.tx.clone();
 
         let satisfaction_weight = wallet1
-            .public_descriptor(KeychainKind::External)
+            .public_descriptor(Keychain::ZERO)
             .max_weight_to_satisfy()
             .unwrap();
 
@@ -1241,7 +1243,7 @@ mod test {
             utxo1.outpoint,
             WeightedUtxo {
                 satisfaction_weight: wallet1
-                    .public_descriptor(utxo1.keychain)
+                    .public_descriptor(utxo1.keychain.into())
                     .max_weight_to_satisfy()
                     .unwrap(),
                 utxo: Utxo::Local(utxo1.clone()),
@@ -1302,7 +1304,7 @@ mod test {
         let tx1 = wallet1.get_tx(txid1).unwrap().tx_node.tx.clone();
 
         let satisfaction_weight = wallet1
-            .public_descriptor(KeychainKind::External)
+            .public_descriptor(Keychain::ZERO)
             .max_weight_to_satisfy()
             .unwrap();
 
@@ -1326,7 +1328,7 @@ mod test {
             utxo1.outpoint,
             WeightedUtxo {
                 satisfaction_weight: wallet1
-                    .public_descriptor(utxo1.keychain)
+                    .public_descriptor(utxo1.keychain.into())
                     .max_weight_to_satisfy()
                     .unwrap(),
                 utxo: Utxo::Local(utxo1.clone()),

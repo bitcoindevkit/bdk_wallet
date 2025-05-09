@@ -4,7 +4,7 @@ use bdk_esplora::{esplora_client, EsploraExt};
 use bdk_wallet::{
     bitcoin::{Amount, Network},
     file_store::Store,
-    KeychainKind, SignOptions, Wallet,
+    Keychain, KeychainKind, SignOptions, Wallet,
 };
 
 const DB_MAGIC: &str = "bdk_wallet_esplora_example";
@@ -49,7 +49,7 @@ fn main() -> Result<(), anyhow::Error> {
 
     let request = wallet.start_full_scan().inspect({
         let mut stdout = std::io::stdout();
-        let mut once = BTreeSet::<KeychainKind>::new();
+        let mut once = BTreeSet::<Keychain>::new();
         move |keychain, spk_i, _| {
             if once.insert(keychain) {
                 print!("\nScanning keychain [{:?}] ", keychain);
