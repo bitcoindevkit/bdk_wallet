@@ -113,7 +113,7 @@ pub struct Wallet {
 /// An update to [`Wallet`].
 ///
 /// It updates [`KeychainTxOutIndex`], [`bdk_chain::TxGraph`] and [`LocalChain`] atomically.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Deserialize, serde::Serialize)]
 pub struct Update {
     /// Contains the last active derivation indices per keychain (`K`), which is used to update the
     /// [`KeychainTxOutIndex`].
