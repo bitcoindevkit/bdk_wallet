@@ -47,17 +47,19 @@
 //!     ) -> Result<CoinSelectionResult, coin_selection::InsufficientFunds> {
 //!         let mut selected_amount = Amount::ZERO;
 //!         let mut additional_weight = Weight::ZERO;
+//!         let mut satisfaction_weight = Weight::ZERO;
 //!         let all_utxos_selected = required_utxos
 //!             .into_iter()
 //!             .chain(optional_utxos)
 //!             .scan(
-//!                 (&mut selected_amount, &mut additional_weight),
-//!                 |(selected_amount, additional_weight), weighted_utxo| {
+//!                 (&mut selected_amount, &mut additional_weight, &mut satisfaction_weight),
+//!                 |(selected_amount, additional_weight, satisfaction_weight), weighted_utxo| {
 //!                     **selected_amount += weighted_utxo.utxo.txout().value;
 //!                     **additional_weight += TxIn::default()
 //!                         .segwit_weight()
 //!                         .checked_add(weighted_utxo.satisfaction_weight)
 //!                         .expect("`Weight` addition should not cause an integer overflow");
+//!                     **satisfaction_weight += weighted_utxo.satisfaction_weight;
 //!                     Some(weighted_utxo.utxo)
 //!                 },
 //!             )
@@ -79,6 +81,7 @@
 //!             selected: all_utxos_selected,
 //!             fee_amount: additional_fees,
 //!             excess,
+//!             satisfaction_weight,
 //!         })
 //!     }
 //! }
@@ -174,6 +177,8 @@ pub struct CoinSelectionResult {
     pub fee_amount: Amount,
     /// Remaining amount after deducing fees and outgoing outputs
     pub excess: Excess,
+    /// The total satisfaction weight of the selected inputs
+    pub satisfaction_weight: Weight,
 }
 
 impl CoinSelectionResult {
@@ -325,10 +330,16 @@ fn select_sorted_utxos(
 ) -> Result<CoinSelectionResult, InsufficientFunds> {
     let mut selected_amount = Amount::ZERO;
     let mut fee_amount = Amount::ZERO;
+    let mut satisfaction_weight = Weight::ZERO;
+
     let selected = utxos
         .scan(
-            (&mut selected_amount, &mut fee_amount),
-            |(selected_amount, fee_amount), (must_use, weighted_utxo)| {
+            (
+                &mut selected_amount,
+                &mut fee_amount,
+                &mut satisfaction_weight,
+            ),
+            |(selected_amount, fee_amount, satisfaction_weight), (must_use, weighted_utxo)| {
                 if must_use || **selected_amount < target_amount + **fee_amount {
                     **fee_amount += fee_rate
                         * TxIn::default()
@@ -336,6 +347,7 @@ fn select_sorted_utxos(
                             .checked_add(weighted_utxo.satisfaction_weight)
                             .expect("`Weight` addition should not cause an integer overflow");
                     **selected_amount += weighted_utxo.utxo.txout().value;
+                    **satisfaction_weight += weighted_utxo.satisfaction_weight;
                     Some(weighted_utxo.utxo)
                 } else {
                     None
@@ -360,6 +372,7 @@ fn select_sorted_utxos(
         selected,
         fee_amount,
         excess,
+        satisfaction_weight,
     })
 }
 
@@ -706,6 +719,9 @@ fn calculate_cs_result(
 ) -> CoinSelectionResult {
     selected_utxos.append(&mut required_utxos);
     let fee_amount = selected_utxos.iter().map(|u| u.fee).sum();
+    let satisfaction_weight = selected_utxos.iter().fold(Weight::ZERO, |acc, u| {
+        acc + u.weighted_utxo.satisfaction_weight
+    });
     let selected = selected_utxos
         .into_iter()
         .map(|u| u.weighted_utxo.utxo)
@@ -715,6 +731,7 @@ fn calculate_cs_result(
         selected,
         fee_amount,
         excess,
+        satisfaction_weight,
     }
 }
 
