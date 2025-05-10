@@ -19,7 +19,8 @@ use alloc::string::String;
 
 use miniscript::descriptor::checksum::desc_checksum;
 
-/// Compute the checksum of a descriptor, excludes any existing checksum in the descriptor string from the calculation
+/// Compute the checksum of a descriptor, excludes any existing checksum in the descriptor string
+/// from the calculation
 pub fn calc_checksum(desc: &str) -> Result<String, DescriptorError> {
     if let Some(split) = desc.split_once('#') {
         let og_checksum = split.1;

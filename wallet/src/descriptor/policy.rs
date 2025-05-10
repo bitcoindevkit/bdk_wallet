@@ -237,7 +237,8 @@ fn mix<T: Clone>(vec: Vec<Vec<T>>) -> Vec<Vec<T>> {
 
 /// Type for a map of sets of [`Condition`] items keyed by each set's index
 pub type ConditionMap = BTreeMap<usize, HashSet<Condition>>;
-/// Type for a map of folded sets of [`Condition`] items keyed by a vector of the combined set's indexes
+/// Type for a map of folded sets of [`Condition`] items keyed by a vector of the combined set's
+/// indexes
 pub type FoldedConditionMap = BTreeMap<Vec<usize>, HashSet<Condition>>;
 
 fn serialize_folded_cond_map<S>(
@@ -363,14 +364,18 @@ impl Satisfaction {
             if items.len() >= *m {
                 let mut map = BTreeMap::new();
                 let indexes = combinations(items, *m);
-                // `indexes` at this point is a Vec<Vec<usize>>, with the "n choose k" of items (m of n)
+                // `indexes` at this point is a Vec<Vec<usize>>, with the "n choose k" of items (m
+                // of n)
                 indexes
                     .into_iter()
                     // .inspect(|x| println!("--- orig --- {:?}", x))
-                    // we map each of the combinations of elements into a tuple of ([chosen items], [conditions]). unfortunately, those items have potentially more than one
-                    // condition (think about ORs), so we also use `mix` to expand those, i.e. [[0], [1, 2]] becomes [[0, 1], [0, 2]]. This is necessary to make sure that we
+                    // we map each of the combinations of elements into a tuple of ([chosen items],
+                    // [conditions]). unfortunately, those items have potentially more than one
+                    // condition (think about ORs), so we also use `mix` to expand those, i.e. [[0],
+                    // [1, 2]] becomes [[0, 1], [0, 2]]. This is necessary to make sure that we
                     // consider every possible options and check whether or not they are compatible.
-                    // since this step can turn one item of the iterator into multiple ones, we use `flat_map()` to expand them out
+                    // since this step can turn one item of the iterator into multiple ones, we use
+                    // `flat_map()` to expand them out
                     .flat_map(|i_vec| {
                         mix(i_vec
                             .iter()
@@ -386,7 +391,8 @@ impl Satisfaction {
                         .collect::<Vec<(Vec<usize>, Vec<Condition>)>>()
                     })
                     // .inspect(|x| println!("flat {:?}", x))
-                    // try to fold all the conditions for this specific combination of indexes/options. if they are not compatible, try_fold will be Err
+                    // try to fold all the conditions for this specific combination of
+                    // indexes/options. if they are not compatible, try_fold will be Err
                     .map(|(key, val)| {
                         (
                             key,
@@ -503,15 +509,18 @@ impl Condition {
 /// Errors that can happen while extracting and manipulating policies
 #[derive(Debug, PartialEq, Eq)]
 pub enum PolicyError {
-    /// Not enough items are selected to satisfy a [`SatisfiableItem::Thresh`] or a [`SatisfiableItem::Multisig`]
+    /// Not enough items are selected to satisfy a [`SatisfiableItem::Thresh`] or a
+    /// [`SatisfiableItem::Multisig`]
     NotEnoughItemsSelected(String),
-    /// Index out of range for an item to satisfy a [`SatisfiableItem::Thresh`] or a [`SatisfiableItem::Multisig`]
+    /// Index out of range for an item to satisfy a [`SatisfiableItem::Thresh`] or a
+    /// [`SatisfiableItem::Multisig`]
     IndexOutOfRange(usize),
     /// Can not add to an item that is [`Satisfaction::None`] or [`Satisfaction::Complete`]
     AddOnLeaf,
     /// Can not add to an item that is [`Satisfaction::PartialComplete`]
     AddOnPartialComplete,
-    /// Can not merge CSV or timelock values unless both are less than or both are equal or greater than 500_000_000
+    /// Can not merge CSV or timelock values unless both are less than or both are equal or greater
+    /// than 500_000_000
     MixedTimelockUnits,
     /// Incompatible conditions (not currently used)
     IncompatibleConditions,
@@ -642,8 +651,8 @@ impl Policy {
     /// create a transaction
     ///
     /// What this means is that for some spending policies the user should select which paths in
-    /// the tree it intends to satisfy while signing, because the transaction must be created differently based
-    /// on that.
+    /// the tree it intends to satisfy while signing, because the transaction must be created
+    /// differently based on that.
     pub fn requires_path(&self) -> bool {
         self.get_condition(&BTreeMap::new()).is_err()
     }
@@ -1063,7 +1072,8 @@ pub enum BuildSatisfaction<'a> {
         /// Current blockchain height
         current_height: u32,
         /// The highest confirmation height between the inputs
-        /// CSV should consider different inputs, but we consider the worst condition for the tx as whole
+        /// CSV should consider different inputs, but we consider the worst condition for the tx as
+        /// whole
         input_max_height: u32,
     },
 }
@@ -1633,6 +1643,7 @@ mod test {
         );
     }
 
+    #[rustfmt::skip]
     #[test]
     fn test_extract_satisfaction_timelock() {
         //const PSBT_POLICY_CONSIDER_TIMELOCK_NOT_EXPIRED: &str = "cHNidP8BAFMBAAAAAdld52uJFGT7Yde0YZdSVh2vL020Zm2exadH5R4GSNScAAAAAAD/////ATrcAAAAAAAAF6kUXv2Fn+YemPP4PUpNR1ZbU16/eRCHAAAAAAABASvI3AAAAAAAACIAILhzvvcBzw/Zfnc9ispRK0PCahxn1F6RHXTZAmw5tqNPAQVSdmNSsmlofCEDeAtjYQk/Vfu4db2+68hyMKjc38+kWl5sP5QH8L42Zsusk3whAvhhP8vi6bSPMZokerDnvffCBs8m6MdEH8+PgUJdZ5mIrJNShyIGAvhhP8vi6bSPMZokerDnvffCBs8m6MdEH8+PgUJdZ5mIDBwu7j4AAACAAAAAACIGA3gLY2EJP1X7uHW9vuvIcjCo3N/PpFpebD+UB/C+NmbLDMkRfC4AAACAAAAAAAAA";

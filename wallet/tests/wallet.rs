@@ -37,11 +37,10 @@ fn parse_descriptor(s: &str) -> (Descriptor<DescriptorPublicKey>, KeyMap) {
 }
 
 // The satisfaction size of a P2WPKH is 112 WU =
-// 1 (elements in witness) + 1 (OP_PUSH) + 33 (pk) + 1 (OP_PUSH) + 72 (signature + sighash) + 1*4 (script len)
-// On the witness itself, we have to push once for the pk (33WU) and once for signature + sighash (72WU), for
-// a total of 105 WU.
-// Here, we push just once for simplicity, so we have to add an extra byte for the missing
-// OP_PUSH.
+// 1 (elements in witness) + 1 (OP_PUSH) + 33 (pk) + 1 (OP_PUSH) + 72 (signature + sighash) + 1*4
+// (script len) On the witness itself, we have to push once for the pk (33WU) and once for signature
+// + sighash (72WU), for a total of 105 WU. Here, we push just once for simplicity, so we have to
+// add an extra byte for the missing OP_PUSH.
 const P2WPKH_FAKE_WITNESS_SIZE: usize = 106;
 
 const DB_MAGIC: &[u8] = &[0x21, 0x24, 0x48];
@@ -377,8 +376,8 @@ fn test_get_funded_wallet_balance() {
     let (wallet, _) = get_funded_wallet_wpkh();
 
     // The funded wallet contains a tx with a 76_000 sats input and two outputs, one spending 25_000
-    // to a foreign address and one returning 50_000 back to the wallet as change. The remaining 1000
-    // sats are the transaction fee.
+    // to a foreign address and one returning 50_000 back to the wallet as change. The remaining
+    // 1000 sats are the transaction fee.
     assert_eq!(wallet.balance().confirmed, Amount::from_sat(50_000));
 }
 
@@ -396,8 +395,8 @@ fn test_get_funded_wallet_sent_and_received() {
     let (sent, received) = wallet.sent_and_received(&tx);
 
     // The funded wallet contains a tx with a 76_000 sats input and two outputs, one spending 25_000
-    // to a foreign address and one returning 50_000 back to the wallet as change. The remaining 1000
-    // sats are the transaction fee.
+    // to a foreign address and one returning 50_000 back to the wallet as change. The remaining
+    // 1000 sats are the transaction fee.
     assert_eq!(sent.to_sat(), 76_000);
     assert_eq!(received.to_sat(), 50_000);
 }
@@ -410,8 +409,8 @@ fn test_get_funded_wallet_tx_fees() {
     let tx_fee = wallet.calculate_fee(&tx).expect("transaction fee");
 
     // The funded wallet contains a tx with a 76_000 sats input and two outputs, one spending 25_000
-    // to a foreign address and one returning 50_000 back to the wallet as change. The remaining 1000
-    // sats are the transaction fee.
+    // to a foreign address and one returning 50_000 back to the wallet as change. The remaining
+    // 1000 sats are the transaction fee.
     assert_eq!(tx_fee, Amount::from_sat(1000))
 }
 
@@ -425,8 +424,8 @@ fn test_get_funded_wallet_tx_fee_rate() {
         .expect("transaction fee rate");
 
     // The funded wallet contains a tx with a 76_000 sats input and two outputs, one spending 25_000
-    // to a foreign address and one returning 50_000 back to the wallet as change. The remaining 1000
-    // sats are the transaction fee.
+    // to a foreign address and one returning 50_000 back to the wallet as change. The remaining
+    // 1000 sats are the transaction fee.
 
     // tx weight = 452 wu, as vbytes = (452 + 3) / 4 = 113
     // fee_rate (sats per kwu) = fee / weight = 1000sat / 0.452kwu = 2212
@@ -3877,8 +3876,8 @@ fn test_spend_coinbase() {
     // to be included in block h + [100 = COINBASE_MATURITY] or higher.
     // Tx elibible to be included in the next block will be accepted in the mempool, used in block
     // templates and relayed on the network.
-    // Miners may include such tx in a block when their chaintip is at h + [99 = COINBASE_MATURITY - 1].
-    // This means these coins are available for selection at height h + 99.
+    // Miners may include such tx in a block when their chaintip is at h + [99 = COINBASE_MATURITY -
+    // 1]. This means these coins are available for selection at height h + 99.
     //
     // By https://bitcoin.stackexchange.com/a/119017
     let not_yet_mature_time = confirmation_height + COINBASE_MATURITY - 2;
@@ -4095,9 +4094,10 @@ fn test_taproot_load_descriptor_duplicated_keys() {
     );
 }
 
-/// In dev mode this test panics, but in release mode, or if the `debug_panic` in `TxOutIndex::replenish_inner_index`
-/// is commented out, there is no panic and the balance is calculated correctly. See issue [#1483]
-/// and PR [#1486] for discussion on mixing non-wildcard and wildcard descriptors.
+/// In dev mode this test panics, but in release mode, or if the `debug_panic` in
+/// `TxOutIndex::replenish_inner_index` is commented out, there is no panic and the balance is
+/// calculated correctly. See issue [#1483] and PR [#1486] for discussion on mixing non-wildcard and
+/// wildcard descriptors.
 ///
 /// [#1483]: https://github.com/bitcoindevkit/bdk/issues/1483
 /// [#1486]: https://github.com/bitcoindevkit/bdk/pull/1486
@@ -4134,7 +4134,8 @@ fn test_keychains_with_overlapping_spks() {
 }
 
 #[test]
-/// The wallet should re-use previously allocated change addresses when the tx using them is cancelled
+/// The wallet should re-use previously allocated change addresses when the tx using them is
+/// cancelled
 fn test_tx_cancellation() {
     macro_rules! new_tx {
         ($wallet:expr) => {{

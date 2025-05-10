@@ -69,7 +69,8 @@ pub type HdKeyPaths = BTreeMap<secp256k1::PublicKey, KeySource>;
 /// [`psbt::Output`]: bitcoin::psbt::Output
 pub type TapKeyOrigins = BTreeMap<XOnlyPublicKey, (Vec<taproot::TapLeafHash>, KeySource)>;
 
-/// Trait for types which can be converted into an [`ExtendedDescriptor`] and a [`KeyMap`] usable by a wallet in a specific [`Network`]
+/// Trait for types which can be converted into an [`ExtendedDescriptor`] and a [`KeyMap`] usable by
+/// a wallet in a specific [`Network`]
 pub trait IntoWalletDescriptor {
     /// Convert to wallet descriptor
     fn into_wallet_descriptor(
@@ -460,10 +461,11 @@ impl DescriptorMeta for ExtendedDescriptor {
         // using `for_any_key` should make this stop as soon as we return `true`
         self.for_any_key(|key| {
             if let DescriptorPublicKey::XPub(xpub) = key {
-                // Check if the key matches one entry in our `key_origins`. If it does, `matches()` will
-                // return the "prefix" that matched, so we remove that prefix from the full path
-                // found in `key_origins` and save it in `derive_path`. We expect this to be a derivation
-                // path of length 1 if the key is `wildcard` and an empty path otherwise.
+                // Check if the key matches one entry in our `key_origins`. If it does, `matches()`
+                // will return the "prefix" that matched, so we remove that prefix
+                // from the full path found in `key_origins` and save it in
+                // `derive_path`. We expect this to be a derivation path of length 1
+                // if the key is `wildcard` and an empty path otherwise.
                 let root_fingerprint = xpub.root_fingerprint(secp);
                 let derive_path = key_origins
                     .get_key_value(&root_fingerprint)
@@ -478,10 +480,11 @@ impl DescriptorMeta for ExtendedDescriptor {
                             .cloned()
                             .collect::<DerivationPath>();
 
-                        // `derive_path` only contains the replacement index for the wildcard, if present, or
-                        // an empty path for fixed descriptors. To verify the key we also need the normal steps
-                        // that come before the wildcard, so we take them directly from `xpub` and then append
-                        // the final index
+                        // `derive_path` only contains the replacement index for the wildcard, if
+                        // present, or an empty path for fixed descriptors.
+                        // To verify the key we also need the normal steps
+                        // that come before the wildcard, so we take them directly from `xpub` and
+                        // then append the final index
                         if verify_key(
                             xpub,
                             &xpub.derivation_path.extend(derive_path.clone()),

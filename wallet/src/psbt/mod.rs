@@ -21,7 +21,8 @@ use bitcoin::TxOut;
 
 /// Trait to add functions to extract utxos and calculate fees.
 pub trait PsbtUtils {
-    /// Get the `TxOut` for the specified input index, if it doesn't exist in the PSBT `None` is returned.
+    /// Get the `TxOut` for the specified input index, if it doesn't exist in the PSBT `None` is
+    /// returned.
     fn get_utxo_for(&self, input_index: usize) -> Option<TxOut>;
 
     /// The total transaction fee amount, sum of input amounts minus sum of output amounts, in sats.

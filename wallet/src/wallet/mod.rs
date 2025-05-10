@@ -84,8 +84,8 @@ pub use utils::IsDust;
 
 /// A Bitcoin wallet
 ///
-/// The `Wallet` acts as a way of coherently interfacing with output descriptors and related transactions.
-/// Its main components are:
+/// The `Wallet` acts as a way of coherently interfacing with output descriptors and related
+/// transactions. Its main components are:
 ///
 /// 1. output *descriptors* from which it can derive addresses.
 /// 2. [`signer`]s that can contribute signatures to addresses instantiated from the descriptors.
@@ -735,7 +735,8 @@ impl Wallet {
     /// derivation index that hasn't been used in a transaction.
     ///
     /// This will attempt to reveal a new address if all previously revealed addresses have
-    /// been used, in which case the returned address will be the same as calling [`Wallet::reveal_next_address`].
+    /// been used, in which case the returned address will be the same as calling
+    /// [`Wallet::reveal_next_address`].
     ///
     /// **WARNING**: To avoid address reuse you must persist the changes resulting from one or more
     /// calls to this method before closing the wallet. See [`Wallet::reveal_next_address`].
@@ -914,7 +915,8 @@ impl Wallet {
         self.stage.merge(additions.into());
     }
 
-    /// Calculates the fee of a given transaction. Returns [`Amount::ZERO`] if `tx` is a coinbase transaction.
+    /// Calculates the fee of a given transaction. Returns [`Amount::ZERO`] if `tx` is a coinbase
+    /// transaction.
     ///
     /// To calculate the fee for a [`Transaction`] with inputs not owned by this wallet you must
     /// manually insert the TxOut(s) into the tx graph using the [`insert_txout`] function.
@@ -947,8 +949,8 @@ impl Wallet {
 
     /// Calculate the [`FeeRate`] for a given transaction.
     ///
-    /// To calculate the fee rate for a [`Transaction`] with inputs not owned by this wallet you must
-    /// manually insert the TxOut(s) into the tx graph using the [`insert_txout`] function.
+    /// To calculate the fee rate for a [`Transaction`] with inputs not owned by this wallet you
+    /// must manually insert the TxOut(s) into the tx graph using the [`insert_txout`] function.
     ///
     /// Note `tx` does not have to be in the graph for this to work.
     ///
@@ -1117,8 +1119,8 @@ impl Wallet {
         txs
     }
 
-    /// Return the balance, separated into available, trusted-pending, untrusted-pending and immature
-    /// values.
+    /// Return the balance, separated into available, trusted-pending, untrusted-pending and
+    /// immature values.
     pub fn balance(&self) -> Balance {
         self.indexed_graph.graph().balance(
             &self.chain,
@@ -1195,7 +1197,8 @@ impl Wallet {
 
     /// Start building a transaction.
     ///
-    /// This returns a blank [`TxBuilder`] from which you can specify the parameters for the transaction.
+    /// This returns a blank [`TxBuilder`] from which you can specify the parameters for the
+    /// transaction.
     ///
     /// ## Example
     ///
@@ -1251,8 +1254,8 @@ impl Wallet {
             })
             .transpose()?;
 
-        // The policy allows spending external outputs, but it requires a policy path that hasn't been
-        // provided
+        // The policy allows spending external outputs, but it requires a policy path that hasn't
+        // been provided
         if params.change_policy != tx_builder::ChangeSpendPolicy::OnlyChange
             && external_policy.requires_path()
             && params.external_policy_path.is_none()
@@ -1327,7 +1330,8 @@ impl Wallet {
                 match requirements.timelock {
                     // No requirement, just use the fee_sniping_height
                     None => fee_sniping_height,
-                    // There's a block-based requirement, but the value is lower than the fee_sniping_height
+                    // There's a block-based requirement, but the value is lower than the
+                    // fee_sniping_height
                     Some(value @ absolute::LockTime::Blocks(_)) if value < fee_sniping_height => {
                         fee_sniping_height
                     }
@@ -1745,7 +1749,8 @@ impl Wallet {
     }
 
     /// Sign a transaction with all the wallet's signers, in the order specified by every signer's
-    /// [`SignerOrdering`]. This function returns the `Result` type with an encapsulated `bool` that has the value true if the PSBT was finalized, or false otherwise.
+    /// [`SignerOrdering`]. This function returns the `Result` type with an encapsulated `bool` that
+    /// has the value true if the PSBT was finalized, or false otherwise.
     ///
     /// The [`SignOptions`] can be used to tweak the behavior of the software signers, and the way
     /// the transaction is finalized at the end. Note that it can't be guaranteed that *every*
@@ -1777,8 +1782,8 @@ impl Wallet {
         self.update_psbt_with_descriptor(psbt)
             .map_err(SignerError::MiniscriptPsbt)?;
 
-        // If we aren't allowed to use `witness_utxo`, ensure that every input (except p2tr and finalized ones)
-        // has the `non_witness_utxo`
+        // If we aren't allowed to use `witness_utxo`, ensure that every input (except p2tr and
+        // finalized ones) has the `non_witness_utxo`
         if !sign_options.trust_witness_utxo
             && psbt
                 .inputs
@@ -1904,8 +1909,8 @@ impl Wallet {
 
             // - Try to derive the descriptor by looking at the txout. If it's in our database, we
             //   know exactly which `keychain` to use, and which derivation index it is
-            // - If that fails, try to derive it by looking at the psbt input: the complete logic
-            //   is in `src/descriptor/mod.rs`, but it will basically look at `bip32_derivation`,
+            // - If that fails, try to derive it by looking at the psbt input: the complete logic is
+            //   in `src/descriptor/mod.rs`, but it will basically look at `bip32_derivation`,
             //   `redeem_script` and `witness_script` to determine the right derivation
             // - If that also fails, it will try it on the internal descriptor, if present
             let desc = psbt
@@ -1968,13 +1973,14 @@ impl Wallet {
         &self.secp
     }
 
-    /// The derivation index of this wallet. It will return `None` if it has not derived any addresses.
-    /// Otherwise, it will return the index of the highest address it has derived.
+    /// The derivation index of this wallet. It will return `None` if it has not derived any
+    /// addresses. Otherwise, it will return the index of the highest address it has derived.
     pub fn derivation_index(&self, keychain: KeychainKind) -> Option<u32> {
         self.indexed_graph.index.last_revealed_index(keychain)
     }
 
-    /// The index of the next address that you would get if you were to ask the wallet for a new address
+    /// The index of the next address that you would get if you were to ask the wallet for a new
+    /// address
     pub fn next_derivation_index(&self, keychain: KeychainKind) -> u32 {
         self.indexed_graph
             .index
@@ -2031,10 +2037,11 @@ impl Wallet {
                         .is_mature(current_height)
                         .then(|| new_local_utxo(k, i, full_txo))
                 })
-                // only process UTxOs not selected manually, they will be considered later in the chain
-                // NOTE: this avoid UTxOs in both required and optional list
+                // only process UTxOs not selected manually, they will be considered later in the
+                // chain NOTE: this avoid UTxOs in both required and optional list
                 .filter(|may_spend| !params.utxos.contains_key(&may_spend.outpoint))
-                // only add to optional UTxOs those which satisfy the change policy if we reuse change
+                // only add to optional UTxOs those which satisfy the change policy if we reuse
+                // change
                 .filter(|local_output| {
                     self.keychains().count() == 1
                         || params.change_policy.is_satisfied_by(local_output)

@@ -240,8 +240,8 @@ impl<S: Sized + fmt::Debug + Clone> Deref for SignerWrapper<S> {
 pub trait SignerCommon: fmt::Debug + Send + Sync {
     /// Return the [`SignerId`] for this signer
     ///
-    /// The [`SignerId`] can be used to lookup a signer in the [`Wallet`](crate::Wallet)'s signers map or to
-    /// compare two signers.
+    /// The [`SignerId`] can be used to lookup a signer in the [`Wallet`](crate::Wallet)'s signers
+    /// map or to compare two signers.
     fn id(&self, secp: &SecpCtx) -> SignerId;
 
     /// Return the secret key for the signer
@@ -256,9 +256,9 @@ pub trait SignerCommon: fmt::Debug + Send + Sync {
 
 /// PSBT Input signer
 ///
-/// This trait can be implemented to provide custom signers to the wallet. If the signer supports signing
-/// individual inputs, this trait should be implemented and BDK will provide automatically an implementation
-/// for [`TransactionSigner`].
+/// This trait can be implemented to provide custom signers to the wallet. If the signer supports
+/// signing individual inputs, this trait should be implemented and BDK will provide automatically
+/// an implementation for [`TransactionSigner`].
 pub trait InputSigner: SignerCommon {
     /// Sign a single psbt input
     fn sign_input(
@@ -272,8 +272,8 @@ pub trait InputSigner: SignerCommon {
 
 /// PSBT signer
 ///
-/// This trait can be implemented when the signer can't sign inputs individually, but signs the whole transaction
-/// at once.
+/// This trait can be implemented when the signer can't sign inputs individually, but signs the
+/// whole transaction at once.
 pub trait TransactionSigner: SignerCommon {
     /// Sign all the inputs of the psbt
     fn sign_transaction(
@@ -766,8 +766,8 @@ pub struct SignOptions {
     /// a transaction
     ///
     /// The wallet will only "use" a timelock to satisfy the spending policy of an input if the
-    /// timelock height has already been reached. This option allows overriding the "current height" to let the
-    /// wallet use timelocks in the future to spend a coin.
+    /// timelock height has already been reached. This option allows overriding the "current
+    /// height" to let the wallet use timelocks in the future to spend a coin.
     pub assume_height: Option<u32>,
 
     /// Whether the signer should use the `sighash_type` set in the PSBT when signing, no matter

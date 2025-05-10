@@ -100,7 +100,8 @@ use crate::{KeychainKind, LocalOutput, Utxo, WeightedUtxo};
 /// ```
 ///
 /// At the moment [`coin_selection`] is an exception to the rule as it consumes `self`.
-/// This means it is usually best to call [`coin_selection`] on the return value of `build_tx` before assigning it.
+/// This means it is usually best to call [`coin_selection`] on the return value of `build_tx`
+/// before assigning it.
 ///
 /// For further examples see [this module](super::tx_builder)'s documentation;
 ///
@@ -202,16 +203,17 @@ impl<'a, Cs> TxBuilder<'a, Cs> {
     ///
     /// An example of when the policy path is needed is the following descriptor:
     /// `wsh(thresh(2,pk(A),sj:and_v(v:pk(B),n:older(6)),snj:and_v(v:pk(C),after(630000))))`,
-    /// derived from the miniscript policy `thresh(2,pk(A),and(pk(B),older(6)),and(pk(C),after(630000)))`.
-    /// It declares three descriptor fragments, and at the top level it uses `thresh()` to
-    /// ensure that at least two of them are satisfied. The individual fragments are:
+    /// derived from the miniscript policy
+    /// `thresh(2,pk(A),and(pk(B),older(6)),and(pk(C),after(630000)))`. It declares three
+    /// descriptor fragments, and at the top level it uses `thresh()` to ensure that at least
+    /// two of them are satisfied. The individual fragments are:
     ///
     /// 1. `pk(A)`
     /// 2. `and(pk(B),older(6))`
     /// 3. `and(pk(C),after(630000))`
     ///
-    /// When those conditions are combined in pairs, it's clear that the transaction needs to be created
-    /// differently depending on how the user intends to satisfy the policy afterwards:
+    /// When those conditions are combined in pairs, it's clear that the transaction needs to be
+    /// created differently depending on how the user intends to satisfy the policy afterwards:
     ///
     /// * If fragments `1` and `2` are used, the transaction will need to use a specific
     ///   `n_sequence` in order to spend an `OP_CSV` branch.
@@ -269,7 +271,8 @@ impl<'a, Cs> TxBuilder<'a, Cs> {
 
     /// Add the list of outpoints to the internal list of UTXOs that **must** be spent.
     ///
-    /// If an error occurs while adding any of the UTXOs then none of them are added and the error is returned.
+    /// If an error occurs while adding any of the UTXOs then none of them are added and the error
+    /// is returned.
     ///
     /// These have priority over the "unspendable" utxos, meaning that if a utxo is present both in
     /// the "utxos" and the "unspendable" list, it will be spent.
@@ -321,7 +324,8 @@ impl<'a, Cs> TxBuilder<'a, Cs> {
     ///
     /// 1. `outpoint`: To add it to the raw transaction.
     /// 2. `psbt_input`: To know the value.
-    /// 3. `satisfaction_weight`: To know how much weight/vbytes the input will add to the transaction for fee calculation.
+    /// 3. `satisfaction_weight`: To know how much weight/vbytes the input will add to the
+    ///    transaction for fee calculation.
     ///
     /// There are several security concerns about adding foreign UTXOs that application
     /// developers should consider. First, how do you know the value of the input is correct? If a
@@ -343,9 +347,9 @@ impl<'a, Cs> TxBuilder<'a, Cs> {
     ///
     /// This is an **EXPERIMENTAL** feature, API and other major changes are expected.
     ///
-    /// In order to use [`Wallet::calculate_fee`] or [`Wallet::calculate_fee_rate`] for a transaction
-    /// created with foreign UTXO(s) you must manually insert the corresponding TxOut(s) into the tx
-    /// graph using the [`Wallet::insert_txout`] function.
+    /// In order to use [`Wallet::calculate_fee`] or [`Wallet::calculate_fee_rate`] for a
+    /// transaction created with foreign UTXO(s) you must manually insert the corresponding
+    /// TxOut(s) into the tx graph using the [`Wallet::insert_txout`] function.
     ///
     /// # Errors
     ///
@@ -375,7 +379,8 @@ impl<'a, Cs> TxBuilder<'a, Cs> {
         )
     }
 
-    /// Same as [add_foreign_utxo](TxBuilder::add_foreign_utxo) but allows to set the nSequence value.
+    /// Same as [add_foreign_utxo](TxBuilder::add_foreign_utxo) but allows to set the nSequence
+    /// value.
     pub fn add_foreign_utxo_with_sequence(
         &mut self,
         outpoint: OutPoint,
@@ -513,8 +518,8 @@ impl<'a, Cs> TxBuilder<'a, Cs> {
         self
     }
 
-    /// Only Fill-in the [`psbt::Input::witness_utxo`](bitcoin::psbt::Input::witness_utxo) field when spending from
-    /// SegWit descriptors.
+    /// Only Fill-in the [`psbt::Input::witness_utxo`](bitcoin::psbt::Input::witness_utxo) field
+    /// when spending from SegWit descriptors.
     ///
     /// This reduces the size of the PSBT, but some signers might reject them due to the lack of
     /// the `non_witness_utxo`.
@@ -542,7 +547,8 @@ impl<'a, Cs> TxBuilder<'a, Cs> {
         self
     }
 
-    /// Spend all the available inputs. This respects filters like [`TxBuilder::unspendable`] and the change policy.
+    /// Spend all the available inputs. This respects filters like [`TxBuilder::unspendable`] and
+    /// the change policy.
     pub fn drain_wallet(&mut self) -> &mut Self {
         self.params.drain_wallet = true;
         self
@@ -552,7 +558,8 @@ impl<'a, Cs> TxBuilder<'a, Cs> {
     ///
     /// Overrides the [`CoinSelectionAlgorithm`].
     ///
-    /// Note that this function consumes the builder and returns it so it is usually best to put this as the first call on the builder.
+    /// Note that this function consumes the builder and returns it so it is usually best to put
+    /// this as the first call on the builder.
     pub fn coin_selection<P: CoinSelectionAlgorithm>(self, coin_selection: P) -> TxBuilder<'a, P> {
         TxBuilder {
             wallet: self.wallet,
@@ -573,12 +580,12 @@ impl<'a, Cs> TxBuilder<'a, Cs> {
     /// Set the current blockchain height.
     ///
     /// This will be used to:
-    /// 1. Set the nLockTime for preventing fee sniping.
-    ///    **Note**: This will be ignored if you manually specify a nlocktime using [`TxBuilder::nlocktime`].
-    /// 2. Decide whether coinbase outputs are mature or not. If the coinbase outputs are not
-    ///    mature at spending height, which is `current_height` + 1, we ignore them in the coin
-    ///    selection. If you want to create a transaction that spends immature coinbase inputs,
-    ///    manually add them using [`TxBuilder::add_utxos`].
+    /// 1. Set the nLockTime for preventing fee sniping. **Note**: This will be ignored if you
+    ///    manually specify a nlocktime using [`TxBuilder::nlocktime`].
+    /// 2. Decide whether coinbase outputs are mature or not. If the coinbase outputs are not mature
+    ///    at spending height, which is `current_height` + 1, we ignore them in the coin selection.
+    ///    If you want to create a transaction that spends immature coinbase inputs, manually add
+    ///    them using [`TxBuilder::add_utxos`].
     ///
     /// In both cases, if you don't provide a current height, we use the last sync height.
     pub fn current_height(&mut self, height: u32) -> &mut Self {
@@ -589,7 +596,8 @@ impl<'a, Cs> TxBuilder<'a, Cs> {
 
     /// Set whether or not the dust limit is checked.
     ///
-    /// **Note**: by avoiding a dust limit check you may end up with a transaction that is non-standard.
+    /// **Note**: by avoiding a dust limit check you may end up with a transaction that is
+    /// non-standard.
     pub fn allow_dust(&mut self, allow_dust: bool) -> &mut Self {
         self.params.allow_dust = allow_dust;
         self

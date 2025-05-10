@@ -204,14 +204,15 @@ pub trait CoinSelectionAlgorithm: core::fmt::Debug {
     /// Perform the coin selection
     ///
     /// - `required_utxos`: the utxos that must be spent regardless of `target_amount` with their
-    ///                     weight cost
+    ///   weight cost
     /// - `optional_utxos`: the remaining available utxos to satisfy `target_amount` with their
-    ///                     weight cost
+    ///   weight cost
     /// - `fee_rate`: fee rate to use
-    /// - `target_amount`: the outgoing amount and the fees already accumulated from adding
-    ///                    outputs and transaction’s header.
+    /// - `target_amount`: the outgoing amount and the fees already accumulated from adding outputs
+    ///   and transaction’s header.
     /// - `drain_script`: the script to use in case of change
-    /// - `rand`: random number generated used by some coin selection algorithms such as [`SingleRandomDraw`]
+    /// - `rand`: random number generated used by some coin selection algorithms such as
+    ///   [`SingleRandomDraw`]
     fn coin_select<R: RngCore>(
         &self,
         required_utxos: Vec<WeightedUtxo>,
@@ -254,10 +255,11 @@ impl CoinSelectionAlgorithm for LargestFirstCoinSelection {
     }
 }
 
-/// OldestFirstCoinSelection always picks the utxo with the smallest blockheight to add to the selected coins next
+/// OldestFirstCoinSelection always picks the utxo with the smallest blockheight to add to the
+/// selected coins next
 ///
-/// This coin selection algorithm sorts the available UTXOs by blockheight and then picks them starting
-/// from the oldest ones until the required amount is reached.
+/// This coin selection algorithm sorts the available UTXOs by blockheight and then picks them
+/// starting from the oldest ones until the required amount is reached.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct OldestFirstCoinSelection;
 
@@ -407,8 +409,8 @@ pub struct BranchAndBoundCoinSelection<Cs = SingleRandomDraw> {
 /// Error returned by branch and bound coin selection.
 #[derive(Debug)]
 enum BnbError {
-    /// Branch and bound coin selection tries to avoid needing a change by finding the right inputs for
-    /// the desired outputs plus fee, if there is not such combination this error is thrown
+    /// Branch and bound coin selection tries to avoid needing a change by finding the right inputs
+    /// for the desired outputs plus fee, if there is not such combination this error is thrown
     NoExactMatch,
     /// Branch and bound coin selection possible attempts with sufficiently big UTXO set could grow
     /// exponentially, thus a limit is set, and when hit, this error is thrown
@@ -608,15 +610,17 @@ impl<Cs> BranchAndBoundCoinSelection<Cs> {
 
             // Backtracking, moving backwards
             if backtrack {
-                // Walk backwards to find the last included UTXO that still needs to have its omission branch traversed.
+                // Walk backwards to find the last included UTXO that still needs to have its
+                // omission branch traversed.
                 while let Some(false) = current_selection.last() {
                     current_selection.pop();
                     curr_available_value += optional_utxos[current_selection.len()].effective_value;
                 }
 
                 if current_selection.last_mut().is_none() {
-                    // We have walked back to the first utxo and no branch is untraversed. All solutions searched
-                    // If best selection is empty, then there's no exact match
+                    // We have walked back to the first utxo and no branch is untraversed. All
+                    // solutions searched If best selection is empty, then
+                    // there's no exact match
                     if best_selection.is_empty() {
                         return Err(BnbError::NoExactMatch);
                     }

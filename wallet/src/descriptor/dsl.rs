@@ -404,7 +404,8 @@ macro_rules! apply_modifier {
 /// Macro to write full descriptors with code
 ///
 /// This macro expands to a `Result` of
-/// [`DescriptorTemplateOut`](super::template::DescriptorTemplateOut) and [`DescriptorError`](crate::descriptor::DescriptorError)
+/// [`DescriptorTemplateOut`](super::template::DescriptorTemplateOut) and
+/// [`DescriptorError`](crate::descriptor::DescriptorError)
 ///
 /// The syntax is very similar to the normal descriptor syntax, with the exception that modifiers
 /// cannot be grouped together. For instance, a descriptor fragment like `sdv:older(144)` has to be
@@ -429,9 +430,10 @@ macro_rules! apply_modifier {
 ///
 /// -------
 ///
-/// 2-of-3 that becomes a 1-of-3 after a timelock has expired. Both `descriptor_a` and `descriptor_b` are equivalent: the first
-/// syntax is more suitable for a fixed number of items known at compile time, while the other accepts a
-/// [`Vec`] of items, which makes it more suitable for writing dynamic descriptors.
+/// 2-of-3 that becomes a 1-of-3 after a timelock has expired. Both `descriptor_a` and
+/// `descriptor_b` are equivalent: the first syntax is more suitable for a fixed number of items
+/// known at compile time, while the other accepts a [`Vec`] of items, which makes it more suitable
+/// for writing dynamic descriptors.
 ///
 /// They both produce the descriptor: `wsh(thresh(2,pk(...),s:pk(...),sndv:older(...)))`
 ///
@@ -672,8 +674,9 @@ macro_rules! fragment_internal {
 
 /// Macro to write descriptor fragments with code
 ///
-/// This macro will be expanded to an object of type `Result<(Miniscript<DescriptorPublicKey, _>, KeyMap, ValidNetworks), DescriptorError>`. It allows writing
-/// fragments of larger descriptors that can be pieced together using `fragment!(thresh_vec(m, ...))`.
+/// This macro will be expanded to an object of type `Result<(Miniscript<DescriptorPublicKey, _>,
+/// KeyMap, ValidNetworks), DescriptorError>`. It allows writing fragments of larger descriptors
+/// that can be pieced together using `fragment!(thresh_vec(m, ...))`.
 ///
 /// The syntax to write macro fragment is the same as documented for the [`descriptor`] macro.
 #[macro_export]
@@ -846,11 +849,13 @@ mod test {
         }
     }
 
-    // - at least one of each "type" of operator; i.e. one modifier, one leaf_opcode, one leaf_opcode_value, etc.
+    // - at least one of each "type" of operator; i.e. one modifier, one leaf_opcode, one
+    //   leaf_opcode_value, etc.
     // - mixing up key types that implement IntoDescriptorKey in multi() or thresh()
 
     // expected script for pk and bare manually created
-    // expected addresses created with `bitcoin-cli getdescriptorinfo` (for hash) and `bitcoin-cli deriveaddresses`
+    // expected addresses created with `bitcoin-cli getdescriptorinfo` (for hash) and `bitcoin-cli
+    // deriveaddresses`
 
     #[test]
     fn test_fixed_legacy_descriptors() {
@@ -1105,7 +1110,8 @@ mod test {
         );
     }
 
-    // - verify the valid_networks returned is correctly computed based on the keys present in the descriptor
+    // - verify the valid_networks returned is correctly computed based on the keys present in the
+    //   descriptor
     #[test]
     fn test_valid_networks() {
         let xprv = bip32::Xpriv::from_str("tprv8ZgxMBicQKsPcx5nBGsR63Pe8KnRUqmbJNENAfGftF3yuXoMMoVJJcYeUw5eVkm9WBPjWYt6HMWYJNesB5HaNVBaFc1M6dRjWSYnmewUMYy").unwrap();
@@ -1162,7 +1168,8 @@ mod test {
         assert_eq!(key_map.get(&key3).unwrap().to_string(), "tprv8ZgxMBicQKsPdZXrcHNLf5JAJWFAoJ2TrstMRdSKtEggz6PddbuSkvHKM9oKJyFgZV1B7rw8oChspxyYbtmEXYyg1AjfWbL3ho3XHDpHRZf/10/20/30/40/*");
     }
 
-    // - verify the ScriptContext is correctly validated (i.e. passing a type that only impl IntoDescriptorKey<Segwitv0> to a pkh() descriptor should throw a compilation error
+    // - verify the ScriptContext is correctly validated (i.e. passing a type that only impl
+    //   IntoDescriptorKey<Segwitv0> to a pkh() descriptor should throw a compilation error
     #[test]
     fn test_script_context_validation() {
         // this compiles
@@ -1174,8 +1181,9 @@ mod test {
         assert_eq!(desc.to_string(), "pkh(tpubD6NzVbkrYhZ4WR7a4vY1VT3khMJMeAxVsfq9TBJyJWrNk247zCJtV7AWf6UJP7rAVsn8NNKdJi3gFyKPTmWZS9iukb91xbn2HbFSMQm2igY/0/*)#yrnz9pp2");
 
         // as expected this does not compile due to invalid context
-        //let desc_key:DescriptorKey<Segwitv0> = (xprv, path.clone()).into_descriptor_key().unwrap();
-        //let (desc, _key_map, _valid_networks) = descriptor!(pkh(desc_key)).unwrap();
+        //let desc_key:DescriptorKey<Segwitv0> = (xprv,
+        // path.clone()).into_descriptor_key().unwrap(); let (desc, _key_map,
+        // _valid_networks) = descriptor!(pkh(desc_key)).unwrap();
     }
 
     #[test]

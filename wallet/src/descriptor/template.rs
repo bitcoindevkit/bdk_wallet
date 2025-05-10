@@ -25,7 +25,8 @@ use crate::keys::{DerivableKey, IntoDescriptorKey, ValidNetworks};
 use crate::wallet::utils::SecpCtx;
 use crate::{descriptor, KeychainKind};
 
-/// Type alias for the return type of [`DescriptorTemplate`], [`descriptor!`](crate::descriptor!) and others
+/// Type alias for the return type of [`DescriptorTemplate`], [`descriptor!`](crate::descriptor!)
+/// and others
 pub type DescriptorTemplateOut = (ExtendedDescriptor, KeyMap, ValidNetworks);
 
 /// Trait for descriptor templates that can be built into a full descriptor
@@ -210,7 +211,8 @@ impl<K: IntoDescriptorKey<Tap>> DescriptorTemplate for P2TR<K> {
 
 /// BIP44 template. Expands to `pkh(key/44'/{0,1}'/0'/{0,1}/*)`
 ///
-/// Since there are hardened derivation steps, this template requires a private derivable key (generally a `xprv`/`tprv`).
+/// Since there are hardened derivation steps, this template requires a private derivable key
+/// (generally a `xprv`/`tprv`).
 ///
 /// See [`Bip44Public`] for a template that can work with a `xpub`/`tpub`.
 ///
@@ -242,7 +244,8 @@ impl<K: DerivableKey<Legacy>> DescriptorTemplate for Bip44<K> {
 
 /// BIP44 public template. Expands to `pkh(key/{0,1}/*)`
 ///
-/// This assumes that the key used has already been derived with `m/44'/0'/0'` for Mainnet or `m/44'/1'/0'` for Testnet.
+/// This assumes that the key used has already been derived with `m/44'/0'/0'` for Mainnet or
+/// `m/44'/1'/0'` for Testnet.
 ///
 /// This template requires the parent fingerprint to populate correctly the metadata of PSBTs.
 ///
@@ -284,7 +287,8 @@ impl<K: DerivableKey<Legacy>> DescriptorTemplate for Bip44Public<K> {
 
 /// BIP49 template. Expands to `sh(wpkh(key/49'/{0,1}'/0'/{0,1}/*))`
 ///
-/// Since there are hardened derivation steps, this template requires a private derivable key (generally a `xprv`/`tprv`).
+/// Since there are hardened derivation steps, this template requires a private derivable key
+/// (generally a `xprv`/`tprv`).
 ///
 /// See [`Bip49Public`] for a template that can work with a `xpub`/`tpub`.
 ///
@@ -319,7 +323,8 @@ impl<K: DerivableKey<Segwitv0>> DescriptorTemplate for Bip49<K> {
 
 /// BIP49 public template. Expands to `sh(wpkh(key/{0,1}/*))`
 ///
-/// This assumes that the key used has already been derived with `m/49'/0'/0'` for Mainnet or `m/49'/1'/0'` for Testnet.
+/// This assumes that the key used has already been derived with `m/49'/0'/0'` for Mainnet or
+/// `m/49'/1'/0'` for Testnet.
 ///
 /// This template requires the parent fingerprint to populate correctly the metadata of PSBTs.
 ///
@@ -361,7 +366,8 @@ impl<K: DerivableKey<Segwitv0>> DescriptorTemplate for Bip49Public<K> {
 
 /// BIP84 template. Expands to `wpkh(key/84'/{0,1}'/0'/{0,1}/*)`
 ///
-/// Since there are hardened derivation steps, this template requires a private derivable key (generally a `xprv`/`tprv`).
+/// Since there are hardened derivation steps, this template requires a private derivable key
+/// (generally a `xprv`/`tprv`).
 ///
 /// See [`Bip84Public`] for a template that can work with a `xpub`/`tpub`.
 ///
@@ -396,7 +402,8 @@ impl<K: DerivableKey<Segwitv0>> DescriptorTemplate for Bip84<K> {
 
 /// BIP84 public template. Expands to `wpkh(key/{0,1}/*)`
 ///
-/// This assumes that the key used has already been derived with `m/84'/0'/0'` for Mainnet or `m/84'/1'/0'` for Testnet.
+/// This assumes that the key used has already been derived with `m/84'/0'/0'` for Mainnet or
+/// `m/84'/1'/0'` for Testnet.
 ///
 /// This template requires the parent fingerprint to populate correctly the metadata of PSBTs.
 ///
@@ -438,7 +445,8 @@ impl<K: DerivableKey<Segwitv0>> DescriptorTemplate for Bip84Public<K> {
 
 /// BIP86 template. Expands to `tr(key/86'/{0,1}'/0'/{0,1}/*)`
 ///
-/// Since there are hardened derivation steps, this template requires a private derivable key (generally a `xprv`/`tprv`).
+/// Since there are hardened derivation steps, this template requires a private derivable key
+/// (generally a `xprv`/`tprv`).
 ///
 /// See [`Bip86Public`] for a template that can work with a `xpub`/`tpub`.
 ///
@@ -473,7 +481,8 @@ impl<K: DerivableKey<Tap>> DescriptorTemplate for Bip86<K> {
 
 /// BIP86 public template. Expands to `tr(key/{0,1}/*)`
 ///
-/// This assumes that the key used has already been derived with `m/86'/0'/0'` for Mainnet or `m/86'/1'/0'` for Testnet.
+/// This assumes that the key used has already been derived with `m/86'/0'/0'` for Mainnet or
+/// `m/86'/1'/0'` for Testnet.
 ///
 /// This template requires the parent fingerprint to populate correctly the metadata of PSBTs.
 ///

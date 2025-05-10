@@ -20,11 +20,11 @@ use bdk_wallet::signer::SignersContainer;
 ///
 /// Policy is higher abstraction representation of the wallet descriptor spending condition.
 /// This is useful to express complex miniscript spending conditions into more human readable form.
-/// The resulting `Policy` structure  can be used to derive spending conditions the wallet is capable
-/// to spend from.
+/// The resulting `Policy` structure  can be used to derive spending conditions the wallet is
+/// capable to spend from.
 ///
-/// This example demos a Policy output for a 2of2 multisig between between 2 parties, where the wallet holds
-/// one of the Extend Private key.
+/// This example demos a Policy output for a 2of2 multisig between between 2 parties, where the
+/// wallet holds one of the Extend Private key.
 #[allow(clippy::print_stdout)]
 fn main() -> Result<(), Box<dyn Error>> {
     let secp = bitcoin::secp256k1::Secp256k1::new();

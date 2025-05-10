@@ -105,9 +105,10 @@ impl<Ctx: ScriptContext> DescriptorKey<Ctx> {
         }
     }
 
-    // This method is used internally by `bdk_wallet::fragment!` and `bdk_wallet::descriptor!`. It has to be
-    // public because it is effectively called by external crates once the macros are expanded,
-    // but since it is not meant to be part of the public api we hide it from the docs.
+    // This method is used internally by `bdk_wallet::fragment!` and `bdk_wallet::descriptor!`. It
+    // has to be public because it is effectively called by external crates once the macros are
+    // expanded, but since it is not meant to be part of the public api we hide it from the
+    // docs.
     #[doc(hidden)]
     pub fn extract(
         self,
@@ -281,8 +282,8 @@ impl<Ctx: ScriptContext + 'static> ExtScriptContext for Ctx {
 /// }
 /// ```
 ///
-/// Key type that can only work within [`miniscript::Segwitv0`] context. Only the specialized version
-/// of the trait is implemented.
+/// Key type that can only work within [`miniscript::Segwitv0`] context. Only the specialized
+/// version of the trait is implemented.
 ///
 /// This example deliberately fails to compile, to demonstrate how the compiler can catch when keys
 /// are misused. In this case, the "segwit-only" key is used to build a `pkh()` descriptor, which
@@ -662,7 +663,8 @@ pub trait GeneratableKey<Ctx: ScriptContext>: Sized {
 
 /// Trait that allows generating a key with the default options
 ///
-/// This trait is automatically implemented if the [`GeneratableKey::Options`] implements [`Default`].
+/// This trait is automatically implemented if the [`GeneratableKey::Options`] implements
+/// [`Default`].
 pub trait GeneratableDefaultOptions<Ctx>: GeneratableKey<Ctx>
 where
     Ctx: ScriptContext,

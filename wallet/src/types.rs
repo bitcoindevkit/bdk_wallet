@@ -69,7 +69,8 @@ pub struct LocalOutput {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WeightedUtxo {
     /// The weight of the witness data and `scriptSig` expressed in [weight units]. This is used to
-    /// properly maintain the feerate when adding this input to a transaction during coin selection.
+    /// properly maintain the feerate when adding this input to a transaction during coin
+    /// selection.
     ///
     /// [weight units]: https://en.bitcoin.it/wiki/Weight_units
     pub satisfaction_weight: Weight,
