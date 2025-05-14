@@ -112,11 +112,11 @@ pub trait AsyncWalletPersister {
 ///
 /// * Ensure the persister is initialized before data is persisted.
 /// * Ensure there were no previously persisted wallet data before creating a fresh wallet and
-///     persisting it.
+///   persisting it.
 /// * Only clear the staged changes of [`Wallet`] after persisting succeeds.
 /// * Ensure the wallet is persisted to the same `P` type as when created/loaded. Note that this is
-///     not completely fool-proof as you can have multiple instances of the same `P` type that are
-///     connected to different databases.
+///   not completely fool-proof as you can have multiple instances of the same `P` type that are
+///   connected to different databases.
 #[derive(Debug)]
 pub struct PersistedWallet<P> {
     inner: Wallet,

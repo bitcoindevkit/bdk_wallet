@@ -134,6 +134,11 @@ pub fn get_funded_wallet_wpkh() -> (Wallet, Txid) {
     get_funded_wallet(desc, change_desc)
 }
 
+/// `pkh` single key descriptor
+pub fn get_test_pkh() -> &'static str {
+    "pkh(cNJFgo1driFnPcBdBX8BrJrpxchBWXwXCvNH5SoSkdcF6JXXwHMm)"
+}
+
 /// `wpkh` single key descriptor
 pub fn get_test_wpkh() -> &'static str {
     "wpkh(cVpPVruEDdmutPzisEsYvtST1usBR3ntr8pXSyt6D2YYqXRyPcFW)"
