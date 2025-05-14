@@ -253,19 +253,19 @@ impl<'a, Cs> TxBuilder<'a, Cs> {
     ///
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    pub fn policy_path(
-        &mut self,
-        policy_path: BTreeMap<String, Vec<usize>>,
-        keychain: KeychainKind,
-    ) -> &mut Self {
-        let to_update = match keychain {
-            KeychainKind::Internal => &mut self.params.internal_policy_path,
-            KeychainKind::External => &mut self.params.external_policy_path,
-        };
-
-        *to_update = Some(policy_path);
-        self
-    }
+    // pub fn policy_path(
+    //     &mut self,
+    //     policy_path: BTreeMap<String, Vec<usize>>,
+    //     keychain: KeychainKind,
+    // ) -> &mut Self {
+    //     let to_update = match keychain {
+    //         KeychainKind::Internal => &mut self.params.internal_policy_path,
+    //         KeychainKind::External => &mut self.params.external_policy_path,
+    //     };
+    //
+    //     *to_update = Some(policy_path);
+    //     self
+    // }
 
     /// Add the list of outpoints to the internal list of UTXOs that **must** be spent.
     ///
@@ -273,40 +273,40 @@ impl<'a, Cs> TxBuilder<'a, Cs> {
     ///
     /// These have priority over the "unspendable" utxos, meaning that if a utxo is present both in
     /// the "utxos" and the "unspendable" list, it will be spent.
-    pub fn add_utxos(&mut self, outpoints: &[OutPoint]) -> Result<&mut Self, AddUtxoError> {
-        let utxo_batch = outpoints
-            .iter()
-            .map(|outpoint| {
-                self.wallet
-                    .get_utxo(*outpoint)
-                    .ok_or(AddUtxoError::UnknownUtxo(*outpoint))
-                    .map(|output| {
-                        (
-                            *outpoint,
-                            WeightedUtxo {
-                                satisfaction_weight: self
-                                    .wallet
-                                    .public_descriptor(output.keychain)
-                                    .max_weight_to_satisfy()
-                                    .unwrap(),
-                                utxo: Utxo::Local(output),
-                            },
-                        )
-                    })
-            })
-            .collect::<Result<HashMap<OutPoint, WeightedUtxo>, AddUtxoError>>()?;
-        self.params.utxos.extend(utxo_batch);
-
-        Ok(self)
-    }
+    // pub fn add_utxos(&mut self, outpoints: &[OutPoint]) -> Result<&mut Self, AddUtxoError> {
+    //     let utxo_batch = outpoints
+    //         .iter()
+    //         .map(|outpoint| {
+    //             self.wallet
+    //                 .get_utxo(*outpoint)
+    //                 .ok_or(AddUtxoError::UnknownUtxo(*outpoint))
+    //                 .map(|output| {
+    //                     (
+    //                         *outpoint,
+    //                         WeightedUtxo {
+    //                             satisfaction_weight: self
+    //                                 .wallet
+    //                                 .public_descriptor(output.keychain)
+    //                                 .max_weight_to_satisfy()
+    //                                 .unwrap(),
+    //                             utxo: Utxo::Local(output),
+    //                         },
+    //                     )
+    //                 })
+    //         })
+    //         .collect::<Result<HashMap<OutPoint, WeightedUtxo>, AddUtxoError>>()?;
+    //     self.params.utxos.extend(utxo_batch);
+    //
+    //     Ok(self)
+    // }
 
     /// Add a utxo to the internal list of utxos that **must** be spent
     ///
     /// These have priority over the "unspendable" utxos, meaning that if a utxo is present both in
     /// the "utxos" and the "unspendable" list, it will be spent.
-    pub fn add_utxo(&mut self, outpoint: OutPoint) -> Result<&mut Self, AddUtxoError> {
-        self.add_utxos(&[outpoint])
-    }
+    // pub fn add_utxo(&mut self, outpoint: OutPoint) -> Result<&mut Self, AddUtxoError> {
+    //     self.add_utxos(&[outpoint])
+    // }
 
     /// Add a foreign UTXO i.e. a UTXO not known by this wallet.
     ///
@@ -669,34 +669,34 @@ impl<'a, Cs> TxBuilder<'a, Cs> {
 }
 
 impl<Cs: CoinSelectionAlgorithm> TxBuilder<'_, Cs> {
-    /// Finish building the transaction.
-    ///
-    /// Uses the thread-local random number generator (rng).
-    ///
-    /// Returns a new [`Psbt`] per [`BIP174`].
-    ///
-    /// [`BIP174`]: https://github.com/bitcoin/bips/blob/master/bip-0174.mediawiki
-    ///
-    /// **WARNING**: To avoid change address reuse you must persist the changes resulting from one
-    /// or more calls to this method before closing the wallet. See [`Wallet::reveal_next_address`].
-    #[cfg(feature = "std")]
-    pub fn finish(self) -> Result<Psbt, CreateTxError> {
-        self.finish_with_aux_rand(&mut bitcoin::key::rand::thread_rng())
-    }
+    // /// Finish building the transaction.
+    // ///
+    // /// Uses the thread-local random number generator (rng).
+    // ///
+    // /// Returns a new [`Psbt`] per [`BIP174`].
+    // ///
+    // /// [`BIP174`]: https://github.com/bitcoin/bips/blob/master/bip-0174.mediawiki
+    // ///
+    // /// **WARNING**: To avoid change address reuse you must persist the changes resulting from one
+    // /// or more calls to this method before closing the wallet. See [`Wallet::reveal_next_address`].
+    // #[cfg(feature = "std")]
+    // pub fn finish(self) -> Result<Psbt, CreateTxError> {
+    //     self.finish_with_aux_rand(&mut bitcoin::key::rand::thread_rng())
+    // }
 
-    /// Finish building the transaction.
-    ///
-    /// Uses a provided random number generator (rng).
-    ///
-    /// Returns a new [`Psbt`] per [`BIP174`].
-    ///
-    /// [`BIP174`]: https://github.com/bitcoin/bips/blob/master/bip-0174.mediawiki
-    ///
-    /// **WARNING**: To avoid change address reuse you must persist the changes resulting from one
-    /// or more calls to this method before closing the wallet. See [`Wallet::reveal_next_address`].
-    pub fn finish_with_aux_rand(self, rng: &mut impl RngCore) -> Result<Psbt, CreateTxError> {
-        self.wallet.create_tx(self.coin_selection, self.params, rng)
-    }
+    // /// Finish building the transaction.
+    // ///
+    // /// Uses a provided random number generator (rng).
+    // ///
+    // /// Returns a new [`Psbt`] per [`BIP174`].
+    // ///
+    // /// [`BIP174`]: https://github.com/bitcoin/bips/blob/master/bip-0174.mediawiki
+    // ///
+    // /// **WARNING**: To avoid change address reuse you must persist the changes resulting from one
+    // /// or more calls to this method before closing the wallet. See [`Wallet::reveal_next_address`].
+    // pub fn finish_with_aux_rand(self, rng: &mut impl RngCore) -> Result<Psbt, CreateTxError> {
+    //     self.wallet.create_tx(self.coin_selection, self.params, rng)
+    // }
 }
 
 #[derive(Debug)]
@@ -820,6 +820,7 @@ impl TxOrdering {
     }
 }
 
+// TODO: This doesn't make as much sense if you have N keychains. Needs reworking.
 /// Policy regarding the use of change outputs when creating a transaction
 #[derive(Default, Debug, Ord, PartialOrd, Eq, PartialEq, Hash, Clone, Copy)]
 pub enum ChangeSpendPolicy {
@@ -836,8 +837,8 @@ impl ChangeSpendPolicy {
     pub(crate) fn is_satisfied_by(&self, utxo: &LocalOutput) -> bool {
         match self {
             ChangeSpendPolicy::ChangeAllowed => true,
-            ChangeSpendPolicy::OnlyChange => utxo.keychain == KeychainKind::Internal,
-            ChangeSpendPolicy::ChangeForbidden => utxo.keychain == KeychainKind::External,
+            ChangeSpendPolicy::OnlyChange => utxo.keychain == KeychainKind::Change,
+            ChangeSpendPolicy::ChangeForbidden => utxo.keychain == KeychainKind::Default,
         }
     }
 }

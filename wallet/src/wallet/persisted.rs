@@ -160,20 +160,20 @@ impl<P: WalletPersister> PersistedWallet<P> {
     }
 
     /// Load a previously [`PersistedWallet`] from the given `persister` and `params`.
-    pub fn load(
-        persister: &mut P,
-        params: LoadParams,
-    ) -> Result<Option<Self>, LoadWithPersistError<P::Error>> {
-        let changeset = P::initialize(persister).map_err(LoadWithPersistError::Persist)?;
-        Wallet::load_with_params(changeset, params)
-            .map(|opt| {
-                opt.map(|inner| PersistedWallet {
-                    inner,
-                    _marker: PhantomData,
-                })
-            })
-            .map_err(LoadWithPersistError::InvalidChangeSet)
-    }
+    // pub fn load(
+    //     persister: &mut P,
+    //     params: LoadParams,
+    // ) -> Result<Option<Self>, LoadWithPersistError<P::Error>> {
+    //     let changeset = P::initialize(persister).map_err(LoadWithPersistError::Persist)?;
+    //     Wallet::load_with_params(changeset, params)
+    //         .map(|opt| {
+    //             opt.map(|inner| PersistedWallet {
+    //                 inner,
+    //                 _marker: PhantomData,
+    //             })
+    //         })
+    //         .map_err(LoadWithPersistError::InvalidChangeSet)
+    // }
 
     /// Persist staged changes of wallet into `persister`.
     ///
@@ -219,22 +219,22 @@ impl<P: AsyncWalletPersister> PersistedWallet<P> {
     }
 
     /// Load a previously [`PersistedWallet`] from the given async `persister` and `params`.
-    pub async fn load_async(
-        persister: &mut P,
-        params: LoadParams,
-    ) -> Result<Option<Self>, LoadWithPersistError<P::Error>> {
-        let changeset = P::initialize(persister)
-            .await
-            .map_err(LoadWithPersistError::Persist)?;
-        Wallet::load_with_params(changeset, params)
-            .map(|opt| {
-                opt.map(|inner| PersistedWallet {
-                    inner,
-                    _marker: PhantomData,
-                })
-            })
-            .map_err(LoadWithPersistError::InvalidChangeSet)
-    }
+    // pub async fn load_async(
+    //     persister: &mut P,
+    //     params: LoadParams,
+    // ) -> Result<Option<Self>, LoadWithPersistError<P::Error>> {
+    //     let changeset = P::initialize(persister)
+    //         .await
+    //         .map_err(LoadWithPersistError::Persist)?;
+    //     Wallet::load_with_params(changeset, params)
+    //         .map(|opt| {
+    //             opt.map(|inner| PersistedWallet {
+    //                 inner,
+    //                 _marker: PhantomData,
+    //             })
+    //         })
+    //         .map_err(LoadWithPersistError::InvalidChangeSet)
+    // }
 
     /// Persist staged changes of wallet into an async `persister`.
     ///
