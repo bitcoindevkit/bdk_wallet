@@ -238,7 +238,10 @@ pub struct Bip44<K: DerivableKey<Legacy>>(pub K, pub KeychainKind);
 
 impl<K: DerivableKey<Legacy>> DescriptorTemplate for Bip44<K> {
     fn build(self, network: Network) -> Result<DescriptorTemplateOut, DescriptorError> {
-        P2Pkh(legacy::make_bipxx_private(44, self.0, self.1, network)?).build(network)
+        P2Pkh(legacy::make_bipxx_private(
+            44, self.0, self.1, network, None,
+        )?)
+        .build(network)
     }
 }
 
@@ -317,7 +320,10 @@ pub struct Bip49<K: DerivableKey<Segwitv0>>(pub K, pub KeychainKind);
 
 impl<K: DerivableKey<Segwitv0>> DescriptorTemplate for Bip49<K> {
     fn build(self, network: Network) -> Result<DescriptorTemplateOut, DescriptorError> {
-        P2Wpkh_P2Sh(segwit_v0::make_bipxx_private(49, self.0, self.1, network)?).build(network)
+        P2Wpkh_P2Sh(segwit_v0::make_bipxx_private(
+            49, self.0, self.1, network, None,
+        )?)
+        .build(network)
     }
 }
 
@@ -396,7 +402,10 @@ pub struct Bip84<K: DerivableKey<Segwitv0>>(pub K, pub KeychainKind);
 
 impl<K: DerivableKey<Segwitv0>> DescriptorTemplate for Bip84<K> {
     fn build(self, network: Network) -> Result<DescriptorTemplateOut, DescriptorError> {
-        P2Wpkh(segwit_v0::make_bipxx_private(84, self.0, self.1, network)?).build(network)
+        P2Wpkh(segwit_v0::make_bipxx_private(
+            84, self.0, self.1, network, None,
+        )?)
+        .build(network)
     }
 }
 
@@ -475,7 +484,10 @@ pub struct Bip86<K: DerivableKey<Tap>>(pub K, pub KeychainKind);
 
 impl<K: DerivableKey<Tap>> DescriptorTemplate for Bip86<K> {
     fn build(self, network: Network) -> Result<DescriptorTemplateOut, DescriptorError> {
-        P2TR(segwit_v1::make_bipxx_private(86, self.0, self.1, network)?).build(network)
+        P2TR(segwit_v1::make_bipxx_private(
+            86, self.0, self.1, network, None,
+        )?)
+        .build(network)
     }
 }
 
@@ -522,6 +534,43 @@ impl<K: DerivableKey<Tap>> DescriptorTemplate for Bip86Public<K> {
     }
 }
 
+/// BIP48 Member template. Expands to `pkh(key/48'/{0,1}'/0'/{1, 2}'/{0,1}/*)`
+///
+/// Since there are hardened derivation steps, this template requires a private derivable key (generally a `xprv`/`tprv`).
+///
+/// ## Example
+///
+/// ```rust
+/// # use std::str::FromStr;
+/// # use bdk_wallet::bitcoin::{PrivateKey, Network};
+/// # use bdk_wallet::{Wallet, KeychainKind};
+/// use bdk_wallet::template::Bip48Member;
+///
+/// let key = bitcoin::bip32::Xpriv::from_str("tprv8ZgxMBicQKsPeZRHk4rTG6orPS2CRNFX3njhUXx5vj9qGog5ZMH4uGReDWN5kCkY3jmWEtWause41CDvBRXD1shKknAMKxT99o9qUTRVC6m")?;
+/// let mut wallet = Wallet::create(Bip48Member(key.clone(), KeychainKind::External, 2), Bip48Member(key, KeychainKind::Internal, 2))
+///     .network(Network::Testnet)
+///     .create_wallet_no_persist()?;
+///
+/// assert_eq!(wallet.next_unused_address(KeychainKind::External).to_string(), "mjJSQ3dNtt3JrJFW7CBKLdwrhQCc6ysEqe");
+/// assert_eq!(wallet.public_descriptor(KeychainKind::External).to_string(), "pkh([c55b303f/48'/1'/0'/2']tpubDEU3eBekc59Yw68Nb3dmoXcinikF3qhGW9ymz39kMuBFSHFqX8MFuyt4mC3y9EiCWDmVw1rmQ3s7GjERKkARjGFwA2dAWRLpeMCU5oUuMXU/0/*)#anlze67a");
+/// # Ok::<_, Box<dyn std::error::Error>>(())
+/// ```
+#[derive(Debug, Clone)]
+pub struct Bip48Member<K: DerivableKey<Legacy>>(pub K, pub KeychainKind, pub u32);
+
+impl<K: DerivableKey<Legacy>> DescriptorTemplate for Bip48Member<K> {
+    fn build(self, network: Network) -> Result<DescriptorTemplateOut, DescriptorError> {
+        P2Pkh(legacy::make_bipxx_private(
+            48,
+            self.0,
+            self.1,
+            network,
+            Some(self.2),
+        )?)
+        .build(network)
+    }
+}
+
 macro_rules! expand_make_bipxx {
     ( $mod_name:ident, $ctx:ty ) => {
         mod $mod_name {
@@ -532,6 +581,7 @@ macro_rules! expand_make_bipxx {
                 key: K,
                 keychain: KeychainKind,
                 network: Network,
+                script: Option<u32>,
             ) -> Result<impl IntoDescriptorKey<$ctx>, DescriptorError> {
                 let mut derivation_path = alloc::vec::Vec::with_capacity(4);
                 derivation_path.push(bip32::ChildNumber::from_hardened_idx(bip)?);
@@ -545,6 +595,10 @@ macro_rules! expand_make_bipxx {
                     }
                 }
                 derivation_path.push(bip32::ChildNumber::from_hardened_idx(0)?);
+
+                if let Some(s) = script {
+                    derivation_path.push(bip32::ChildNumber::from_hardened_idx(s)?);
+                }
 
                 match keychain {
                     KeychainKind::External => {
