@@ -1690,15 +1690,19 @@ impl Wallet {
                     .ok_or(BuildFeeBumpError::UnknownUtxo(txin.previous_output))
                     // Get chain position
                     .and_then(|prev_tx| {
-                        chain_positions
+                        let chain_position = chain_positions
                             .get(&txin.previous_output.txid)
                             .cloned()
-                            .ok_or(BuildFeeBumpError::UnknownUtxo(txin.previous_output))
-                            .map(|chain_position| (prev_tx, chain_position))
+                            .ok_or(BuildFeeBumpError::UnknownUtxo(txin.previous_output))?;
+                        let prev_txout = prev_tx
+                            .output
+                            .get(txin.previous_output.vout as usize)
+                            .ok_or(BuildFeeBumpError::InvalidOutputIndex(txin.previous_output))
+                            .cloned()?;
+                        Ok((prev_tx, prev_txout, chain_position))
                     })
-                    .map(|(prev_tx, chain_position)| {
-                        let txout = prev_tx.output[txin.previous_output.vout as usize].clone();
-                        match txout_index.index_of_spk(txout.script_pubkey.clone()) {
+                    .map(|(prev_tx, prev_txout, chain_position)| {
+                        match txout_index.index_of_spk(prev_txout.script_pubkey.clone()) {
                             Some(&(keychain, derivation_index)) => (
                                 txin.previous_output,
                                 WeightedUtxo {
@@ -1708,7 +1712,7 @@ impl Wallet {
                                         .unwrap(),
                                     utxo: Utxo::Local(LocalOutput {
                                         outpoint: txin.previous_output,
-                                        txout: txout.clone(),
+                                        txout: prev_txout.clone(),
                                         keychain,
                                         is_spent: true,
                                         derivation_index,
@@ -1729,10 +1733,10 @@ impl Wallet {
                                             outpoint: txin.previous_output,
                                             sequence: txin.sequence,
                                             psbt_input: Box::new(psbt::Input {
-                                                witness_utxo: txout
+                                                witness_utxo: prev_txout
                                                     .script_pubkey
                                                     .witness_version()
-                                                    .map(|_| txout.clone()),
+                                                    .map(|_| prev_txout.clone()),
                                                 non_witness_utxo: Some(prev_tx.as_ref().clone()),
                                                 ..Default::default()
                                             }),
@@ -2211,8 +2215,12 @@ impl Wallet {
 
         let prev_output = utxo.outpoint;
         if let Some(prev_tx) = self.indexed_graph.graph().get_tx(prev_output.txid) {
+            // We want to check that the prevout actually exists in the tx before continuing.
+            let prevout = prev_tx.output.get(prev_output.vout as usize).ok_or(
+                MiniscriptPsbtError::UtxoUpdate(miniscript::psbt::UtxoUpdateError::UtxoCheck),
+            )?;
             if desc.is_witness() || desc.is_taproot() {
-                psbt_input.witness_utxo = Some(prev_tx.output[prev_output.vout as usize].clone());
+                psbt_input.witness_utxo = Some(prevout.clone());
             }
             if !desc.is_taproot() && (!desc.is_witness() || !only_witness_utxo) {
                 psbt_input.non_witness_utxo = Some(prev_tx.as_ref().clone());
