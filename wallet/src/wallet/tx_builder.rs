@@ -1104,7 +1104,7 @@ mod test {
             },
         );
 
-        receive_output_in_latest_block(&mut wallet, Amount::ONE_BTC.to_sat());
+        receive_output_in_latest_block(&mut wallet, Amount::ONE_BTC);
 
         // tx1 sending 15k sat to a recipient
         let recip = ScriptBuf::from_hex(

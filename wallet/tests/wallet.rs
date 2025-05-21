@@ -1422,12 +1422,12 @@ fn test_create_tx_increment_change_index() {
         descriptor: &'static str,
         change_descriptor: Option<&'static str>,
         // amount to send
-        to_send: u64,
+        to_send: Amount,
         // (derivation index, next unused index) of *change keychain*
         expect: (Option<u32>, u32),
     }
     // total wallet funds
-    let amount = 10_000;
+    let amount = Amount::from_sat(10_000);
     let recipient = Address::from_str("bcrt1q3qtze4ys45tgdvguj66zrk4fu6hq3a3v9pfly5")
         .unwrap()
         .assume_checked()
@@ -1438,7 +1438,7 @@ fn test_create_tx_increment_change_index() {
             name: "two wildcard, builder error",
             descriptor: desc,
             change_descriptor: Some(change_desc),
-            to_send: amount + 1,
+            to_send: amount + Amount::from_sat(1),
             // should not use or derive change index
             expect: (None, 0),
         },
@@ -1446,7 +1446,7 @@ fn test_create_tx_increment_change_index() {
             name: "two wildcard, create change",
             descriptor: desc,
             change_descriptor: Some(change_desc),
-            to_send: 5_000,
+            to_send: Amount::from_sat(5_000),
             // should use change index
             expect: (Some(0), 1),
         },
@@ -1454,7 +1454,7 @@ fn test_create_tx_increment_change_index() {
             name: "two wildcard, no change",
             descriptor: desc,
             change_descriptor: Some(change_desc),
-            to_send: 9_850,
+            to_send: Amount::from_sat(9_850),
             // should not use change index
             expect: (None, 0),
         },
@@ -1462,7 +1462,7 @@ fn test_create_tx_increment_change_index() {
             name: "one wildcard, create change",
             descriptor: desc,
             change_descriptor: None,
-            to_send: 5_000,
+            to_send: Amount::from_sat(5_000),
             // should use change index of external keychain
             expect: (Some(1), 2),
         },
@@ -1470,7 +1470,7 @@ fn test_create_tx_increment_change_index() {
             name: "one wildcard, no change",
             descriptor: desc,
             change_descriptor: None,
-            to_send: 9_850,
+            to_send: Amount::from_sat(9_850),
             // should not use change index
             expect: (Some(0), 1),
         },
@@ -1478,7 +1478,7 @@ fn test_create_tx_increment_change_index() {
             name: "single key, create change",
             descriptor: get_test_tr_single_sig(),
             change_descriptor: None,
-            to_send: 5_000,
+            to_send: Amount::from_sat(5_000),
             // single key only has one derivation index (0)
             expect: (Some(0), 0),
         },
@@ -1486,7 +1486,7 @@ fn test_create_tx_increment_change_index() {
             name: "single key, no change",
             descriptor: get_test_tr_single_sig(),
             change_descriptor: None,
-            to_send: 9_850,
+            to_send: Amount::from_sat(9_850),
             expect: (Some(0), 0),
         },
     ]
@@ -1511,7 +1511,7 @@ fn test_create_tx_increment_change_index() {
         receive_output(&mut wallet, amount, ReceiveTo::Mempool(0));
         // create tx
         let mut builder = wallet.build_tx();
-        builder.add_recipient(recipient.clone(), Amount::from_sat(test.to_send));
+        builder.add_recipient(recipient.clone(), test.to_send);
         let res = builder.finish();
         if !test.name.contains("error") {
             assert!(res.is_ok());
@@ -2284,7 +2284,7 @@ fn test_bump_fee_add_input() {
 #[test]
 fn test_bump_fee_absolute_add_input() {
     let (mut wallet, _) = get_funded_wallet_wpkh();
-    receive_output_in_latest_block(&mut wallet, 25_000);
+    receive_output_in_latest_block(&mut wallet, Amount::from_sat(25_000));
     let addr = Address::from_str("2N1Ffz3WaNzbeLFBb51xyFMHYSEUXcbiSoX")
         .unwrap()
         .assume_checked();
@@ -2338,7 +2338,7 @@ fn test_bump_fee_absolute_add_input() {
 #[test]
 fn test_bump_fee_no_change_add_input_and_change() {
     let (mut wallet, _) = get_funded_wallet_wpkh();
-    let op = receive_output_in_latest_block(&mut wallet, 25_000);
+    let op = receive_output_in_latest_block(&mut wallet, Amount::from_sat(25_000));
 
     // initially make a tx without change by using `drain_to`
     let addr = Address::from_str("2N1Ffz3WaNzbeLFBb51xyFMHYSEUXcbiSoX")
@@ -2404,7 +2404,7 @@ fn test_bump_fee_no_change_add_input_and_change() {
 #[test]
 fn test_bump_fee_add_input_change_dust() {
     let (mut wallet, _) = get_funded_wallet_wpkh();
-    receive_output_in_latest_block(&mut wallet, 25_000);
+    receive_output_in_latest_block(&mut wallet, Amount::from_sat(25_000));
     let addr = Address::from_str("2N1Ffz3WaNzbeLFBb51xyFMHYSEUXcbiSoX")
         .unwrap()
         .assume_checked();
@@ -2476,7 +2476,7 @@ fn test_bump_fee_add_input_change_dust() {
 #[test]
 fn test_bump_fee_force_add_input() {
     let (mut wallet, _) = get_funded_wallet_wpkh();
-    let incoming_op = receive_output_in_latest_block(&mut wallet, 25_000);
+    let incoming_op = receive_output_in_latest_block(&mut wallet, Amount::from_sat(25_000));
 
     let addr = Address::from_str("2N1Ffz3WaNzbeLFBb51xyFMHYSEUXcbiSoX")
         .unwrap()
@@ -2538,7 +2538,7 @@ fn test_bump_fee_force_add_input() {
 #[test]
 fn test_bump_fee_absolute_force_add_input() {
     let (mut wallet, _) = get_funded_wallet_wpkh();
-    let incoming_op = receive_output_in_latest_block(&mut wallet, 25_000);
+    let incoming_op = receive_output_in_latest_block(&mut wallet, Amount::from_sat(25_000));
 
     let addr = Address::from_str("2N1Ffz3WaNzbeLFBb51xyFMHYSEUXcbiSoX")
         .unwrap()
@@ -2617,7 +2617,7 @@ fn test_bump_fee_unconfirmed_inputs_only() {
     let psbt = builder.finish().unwrap();
     // Now we receive one transaction with 0 confirmations. We won't be able to use that for
     // fee bumping, as it's still unconfirmed!
-    receive_output(&mut wallet, 25_000, ReceiveTo::Mempool(0));
+    receive_output(&mut wallet, Amount::from_sat(25_000), ReceiveTo::Mempool(0));
     let mut tx = psbt.extract_tx().expect("failed to extract tx");
     let txid = tx.compute_txid();
     for txin in &mut tx.input {
@@ -2642,7 +2642,7 @@ fn test_bump_fee_unconfirmed_input() {
         .assume_checked();
     // We receive a tx with 0 confirmations, which will be used as an input
     // in the drain tx.
-    receive_output(&mut wallet, 25_000, ReceiveTo::Mempool(0));
+    receive_output(&mut wallet, Amount::from_sat(25_000), ReceiveTo::Mempool(0));
     let mut builder = wallet.build_tx();
     builder.drain_wallet().drain_to(addr.script_pubkey());
     let psbt = builder.finish().unwrap();
@@ -2680,7 +2680,7 @@ fn test_fee_amount_negative_drain_val() {
         .unwrap()
         .assume_checked();
     let fee_rate = FeeRate::from_sat_per_kwu(500);
-    let incoming_op = receive_output_in_latest_block(&mut wallet, 8859);
+    let incoming_op = receive_output_in_latest_block(&mut wallet, Amount::from_sat(8859));
 
     let mut builder = wallet.build_tx();
     builder
@@ -3052,7 +3052,7 @@ fn test_next_unused_address() {
     assert_eq!(next_unused_addr.index, 0);
 
     // use the above address
-    receive_output(&mut wallet, 25_000, ReceiveTo::Mempool(0));
+    receive_output(&mut wallet, Amount::from_sat(25_000), ReceiveTo::Mempool(0));
 
     assert_eq!(
         wallet
@@ -4129,7 +4129,7 @@ fn test_keychains_with_overlapping_spks() {
         },
         confirmation_time: 0,
     };
-    let _outpoint = receive_output_to_address(&mut wallet, addr, 8000, anchor);
+    let _outpoint = receive_output_to_address(&mut wallet, addr, Amount::from_sat(8000), anchor);
     assert_eq!(wallet.balance().confirmed, Amount::from_sat(58000));
 }
 
@@ -4219,14 +4219,14 @@ fn single_descriptor_wallet_can_create_tx_and_receive_change() {
         .create_wallet_no_persist()
         .unwrap();
     assert_eq!(wallet.keychains().count(), 1);
-    let amt = Amount::from_sat(5_000);
-    receive_output(&mut wallet, 2 * amt.to_sat(), ReceiveTo::Mempool(2));
+    let amount = Amount::from_sat(5_000);
+    receive_output(&mut wallet, amount * 2, ReceiveTo::Mempool(2));
     // create spend tx that produces a change output
     let addr = Address::from_str("bcrt1qc6fweuf4xjvz4x3gx3t9e0fh4hvqyu2qw4wvxm")
         .unwrap()
         .assume_checked();
     let mut builder = wallet.build_tx();
-    builder.add_recipient(addr.script_pubkey(), amt);
+    builder.add_recipient(addr.script_pubkey(), amount);
     let mut psbt = builder.finish().unwrap();
     assert!(wallet.sign(&mut psbt, SignOptions::default()).unwrap());
     let tx = psbt.extract_tx().unwrap();
@@ -4235,7 +4235,7 @@ fn single_descriptor_wallet_can_create_tx_and_receive_change() {
     let unspent: Vec<_> = wallet.list_unspent().collect();
     assert_eq!(unspent.len(), 1);
     let utxo = unspent.first().unwrap();
-    assert!(utxo.txout.value < amt);
+    assert!(utxo.txout.value < amount);
     assert_eq!(
         utxo.keychain,
         KeychainKind::External,
@@ -4246,7 +4246,7 @@ fn single_descriptor_wallet_can_create_tx_and_receive_change() {
 #[test]
 fn test_transactions_sort_by() {
     let (mut wallet, _txid) = get_funded_wallet_wpkh();
-    receive_output(&mut wallet, 25_000, ReceiveTo::Mempool(0));
+    receive_output(&mut wallet, Amount::from_sat(25_000), ReceiveTo::Mempool(0));
 
     // sort by chain position, unconfirmed then confirmed by descending block height
     let sorted_txs: Vec<WalletTx> =

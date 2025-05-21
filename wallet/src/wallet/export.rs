@@ -214,6 +214,7 @@ impl FullyNodedExport {
 #[cfg(test)]
 mod test {
     use alloc::string::ToString;
+    use bitcoin::Amount;
     use core::str::FromStr;
 
     use bdk_chain::BlockId;
@@ -233,7 +234,7 @@ mod test {
             hash: BlockHash::all_zeros(),
         };
         insert_checkpoint(&mut wallet, block);
-        receive_output_in_latest_block(&mut wallet, 10_000);
+        receive_output_in_latest_block(&mut wallet, Amount::from_sat(10_000));
 
         wallet
     }

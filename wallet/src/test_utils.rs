@@ -246,7 +246,7 @@ impl From<ConfirmationBlockTime> for ReceiveTo {
 }
 
 /// Receive a tx output with the given value in the latest block
-pub fn receive_output_in_latest_block(wallet: &mut Wallet, value: u64) -> OutPoint {
+pub fn receive_output_in_latest_block(wallet: &mut Wallet, value: Amount) -> OutPoint {
     let latest_cp = wallet.latest_checkpoint();
     let height = latest_cp.height();
     assert!(height > 0, "cannot receive tx into genesis block");
@@ -263,7 +263,7 @@ pub fn receive_output_in_latest_block(wallet: &mut Wallet, value: u64) -> OutPoi
 /// Receive a tx output with the given value and chain position
 pub fn receive_output(
     wallet: &mut Wallet,
-    value: u64,
+    value: Amount,
     receive_to: impl Into<ReceiveTo>,
 ) -> OutPoint {
     let addr = wallet.next_unused_address(KeychainKind::External).address;
@@ -274,7 +274,7 @@ pub fn receive_output(
 pub fn receive_output_to_address(
     wallet: &mut Wallet,
     addr: Address,
-    value: u64,
+    value: Amount,
     receive_to: impl Into<ReceiveTo>,
 ) -> OutPoint {
     let tx = Transaction {
@@ -283,7 +283,7 @@ pub fn receive_output_to_address(
         input: vec![],
         output: vec![TxOut {
             script_pubkey: addr.script_pubkey(),
-            value: Amount::from_sat(value),
+            value,
         }],
     };
 
