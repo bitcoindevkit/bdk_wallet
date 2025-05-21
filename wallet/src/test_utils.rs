@@ -3,14 +3,157 @@
 use alloc::string::ToString;
 use alloc::sync::Arc;
 use core::str::FromStr;
+use miniscript::{
+    descriptor::{DescriptorSecretKey, KeyMap},
+    DescriptorPublicKey,
+};
+use std::collections::BTreeMap;
 
 use bdk_chain::{BlockId, ConfirmationBlockTime, TxUpdate};
 use bitcoin::{
-    absolute, hashes::Hash, transaction, Address, Amount, BlockHash, FeeRate, Network, OutPoint,
-    Transaction, TxIn, TxOut, Txid,
+    absolute,
+    hashes::Hash,
+    key::Secp256k1,
+    psbt::{GetKey, GetKeyError, KeyRequest},
+    transaction, Address, Amount, BlockHash, FeeRate, Network, OutPoint, Transaction, TxIn, TxOut,
+    Txid,
 };
 
-use crate::{KeychainKind, Update, Wallet};
+use crate::{descriptor::check_wallet_descriptor, KeychainKind, Update, Wallet};
+
+#[derive(Debug, Clone)]
+/// A wrapper over the [`KeyMap`] type that has the `GetKey` trait implementation for signing.
+pub struct SignerWrapper {
+    key_map: KeyMap,
+}
+
+impl SignerWrapper {
+    /// Creates a new [`SignerWrapper`] for the given [`KeyMap`].
+    pub fn new(key_map: KeyMap) -> Self {
+        Self { key_map }
+    }
+}
+
+impl GetKey for SignerWrapper {
+    type Error = GetKeyError;
+
+    fn get_key<C: bitcoin::secp256k1::Signing>(
+        &self,
+        key_request: KeyRequest,
+        secp: &bitcoin::key::Secp256k1<C>,
+    ) -> Result<Option<bitcoin::PrivateKey>, Self::Error> {
+        for (descriptor_pk, descriptor_sk) in self.key_map.iter() {
+            match (descriptor_sk, key_request.clone()) {
+                (DescriptorSecretKey::Single(single_priv), key_request) => {
+                    let private_key = single_priv.key;
+                    let public_key = private_key.public_key(secp);
+                    let keys = BTreeMap::from([(public_key, private_key)]);
+                    match keys.get_key(key_request, secp) {
+                        Ok(Some(pk)) => return Ok(Some(pk)),
+                        Ok(None) => continue,
+                        Err(e) => return Err(e),
+                    }
+                }
+                (DescriptorSecretKey::XPrv(descriptor_xkey), KeyRequest::Pubkey(public_key)) => {
+                    match descriptor_pk {
+                        DescriptorPublicKey::XPub(descriptor_xpub) => {
+                            let xpub = descriptor_xpub.xkey;
+                            match xpub.public_key.eq(&public_key.inner) {
+                                true => {
+                                    return Ok(Some(
+                                        descriptor_xkey
+                                            .xkey
+                                            .derive_priv(secp, &descriptor_xkey.derivation_path)?
+                                            .to_priv(),
+                                    ))
+                                }
+                                false => continue,
+                            }
+                        }
+                        _ => unreachable!(),
+                    }
+                }
+                (
+                    DescriptorSecretKey::XPrv(descriptor_xkey),
+                    ref key_request @ KeyRequest::Bip32(ref key_source),
+                ) => {
+                    let xpriv = descriptor_xkey.xkey;
+                    match xpriv.get_key(key_request.clone(), secp) {
+                        Ok(Some(private_key)) => return Ok(Some(private_key)),
+                        Ok(None) => match descriptor_xkey.matches(key_source, secp) {
+                            Some(_derivation_path) => match &descriptor_xkey.origin {
+                                Some((_origin_fingerprint, origin_derivation_path)) => {
+                                    let (_fingerprint, derivation_path) = key_source;
+                                    let derivation_path =
+                                        &derivation_path[origin_derivation_path.len()..];
+                                    return Ok(Some(
+                                        descriptor_xkey
+                                            .xkey
+                                            .derive_priv(secp, &derivation_path)?
+                                            .to_priv(),
+                                    ));
+                                }
+                                None => {
+                                    let (_fingerprint, derivation_path) = key_source;
+                                    return Ok(Some(
+                                        descriptor_xkey
+                                            .xkey
+                                            .derive_priv(secp, &derivation_path)?
+                                            .to_priv(),
+                                    ));
+                                }
+                            },
+                            None => continue,
+                        },
+                        Err(e) => return Err(e),
+                    }
+                }
+                (
+                    DescriptorSecretKey::XPrv(_descriptor_xkey),
+                    KeyRequest::XOnlyPubkey(_xonly_public_key),
+                ) => return Err(GetKeyError::NotSupported), // TODO: (@leonardo) should we handle this ?
+                (DescriptorSecretKey::MultiXPrv(_descriptor_multi_xkey), _) => unimplemented!(),
+                _ => unreachable!(),
+            }
+        }
+        Ok(None)
+    }
+}
+
+/// Create the [`CreateParams`] for the provided testing `descriptor` and `change_descriptor`.
+pub fn get_wallet_params(descriptor: &str, change_descriptor: Option<&str>) -> crate::CreateParams {
+    if let Some(change_desc) = change_descriptor {
+        Wallet::create(descriptor.to_string(), change_desc.to_string())
+    } else {
+        Wallet::create_single(descriptor.to_string())
+    }
+}
+
+/// Create a new [`SignerWrapper`] for the provided testing `descriptor` and `change_descriptor`.
+pub fn get_wallet_signer(descriptor: &str, change_descriptor: Option<&str>) -> SignerWrapper {
+    let secp = Secp256k1::new();
+    let params = get_wallet_params(descriptor, change_descriptor).network(Network::Regtest);
+
+    let network = params.network;
+
+    let (descriptor, mut descriptor_keymap) = (params.descriptor)(&secp, network).unwrap();
+    check_wallet_descriptor(&descriptor).unwrap();
+    descriptor_keymap.extend(params.descriptor_keymap);
+
+    if let Some(change_descriptor) = params.change_descriptor {
+        let (change_descriptor, mut change_keymap) = change_descriptor(&secp, network).unwrap();
+        check_wallet_descriptor(&change_descriptor).unwrap();
+        change_keymap.extend(params.change_descriptor_keymap);
+        descriptor_keymap.extend(change_keymap)
+    }
+
+    SignerWrapper::new(descriptor_keymap)
+}
+
+/// Create a new [`SignerWrapper`] for the provided testing `descriptor`.
+pub fn get_wallet_signer_single(descriptor: &str) -> SignerWrapper {
+    get_wallet_signer(descriptor, None)
+}
 
 /// Return a fake wallet that appears to be funded for testing.
 ///
