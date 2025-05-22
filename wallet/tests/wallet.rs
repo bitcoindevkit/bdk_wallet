@@ -19,7 +19,6 @@ use bdk_wallet::{KeychainKind, LoadError, LoadMismatch, LoadWithPersistError};
 use bitcoin::constants::{ChainHash, COINBASE_MATURITY};
 use bitcoin::hashes::Hash;
 use bitcoin::key::Secp256k1;
-use bitcoin::psbt;
 use bitcoin::script::PushBytesBuf;
 use bitcoin::sighash::{EcdsaSighashType, TapSighashType};
 use bitcoin::taproot::TapNodeHash;
@@ -27,6 +26,7 @@ use bitcoin::{
     absolute, transaction, Address, Amount, BlockHash, FeeRate, Network, OutPoint, ScriptBuf,
     Sequence, Transaction, TxIn, TxOut, Txid, Weight,
 };
+use bitcoin::{psbt, SignedAmount};
 use miniscript::{descriptor::KeyMap, Descriptor, DescriptorPublicKey};
 use rand::rngs::StdRng;
 use rand::SeedableRng;
@@ -4314,4 +4314,28 @@ fn test_wallet_transactions_relevant() {
         .any(|wallet_tx| wallet_tx.tx_node.txid == other_txid));
     assert!(full_tx_count_before < full_tx_count_after);
     assert!(canonical_tx_count_before < canonical_tx_count_after);
+}
+
+#[test]
+fn test_tx_details_method() {
+    let (test_wallet, txid_1) = get_funded_wallet_wpkh();
+    let tx_details_1_option = test_wallet.tx_details(txid_1);
+    dbg!(&tx_details_1_option);
+
+    assert!(tx_details_1_option.is_some());
+    let tx_details_1 = tx_details_1_option.unwrap();
+
+    assert_eq!(
+        tx_details_1.txid.to_string(),
+        "f2a03cdfe1bb6a295b0a4bb4385ca42f95e4b2c6d9a7a59355d32911f957a5b3"
+    );
+    assert_eq!(tx_details_1.received, Amount::from_sat(50000));
+    assert_eq!(tx_details_1.sent, Amount::from_sat(76000));
+    assert_eq!(tx_details_1.fee.unwrap(), Amount::from_sat(1000));
+    assert_eq!(tx_details_1.balance_delta, SignedAmount::from_sat(-26000));
+
+    // Transaction id not part of the TxGraph
+    let txid_2 = Txid::from_raw_hash(Hash::all_zeros());
+    let tx_details_2_option = test_wallet.tx_details(txid_2);
+    assert!(tx_details_2_option.is_none());
 }
