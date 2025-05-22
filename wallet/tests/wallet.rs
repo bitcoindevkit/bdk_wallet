@@ -36,12 +36,15 @@ fn parse_descriptor(s: &str) -> (Descriptor<DescriptorPublicKey>, KeyMap) {
         .expect("failed to parse descriptor")
 }
 
-// The satisfaction size of a P2WPKH is 112 WU =
-// 1 (elements in witness) + 1 (OP_PUSH) + 33 (pk) + 1 (OP_PUSH) + 72 (signature + sighash) + 1*4
-// (script len) On the witness itself, we have to push once for the pk (33WU) and once for signature
-// + sighash (72WU), for a total of 105 WU. Here, we push just once for simplicity, so we have to
-// add an extra byte for the missing OP_PUSH.
-const P2WPKH_FAKE_WITNESS_SIZE: usize = 106;
+/// The satisfaction size of P2WPKH is 108 WU =
+/// 1 (elements in witness) + 1 (size)
+/// + 72 (signature + sighash) + 1 (size) + 33 (pubkey).
+const P2WPKH_FAKE_PK_SIZE: usize = 72;
+const P2WPKH_FAKE_SIG_SIZE: usize = 33;
+
+/// The satisfaction size of P2PKH is 107 =
+/// 1 (OP_PUSH) + 72 (signature + sighash) + 1 (OP_PUSH) + 33 (pubkey).
+const P2PKH_FAKE_SCRIPT_SIG_SIZE: usize = 107;
 
 const DB_MAGIC: &[u8] = &[0x21, 0x24, 0x48];
 
@@ -435,6 +438,26 @@ fn test_get_funded_wallet_tx_fee_rate() {
 }
 
 #[test]
+fn test_legacy_get_funded_wallet_tx_fee_rate() {
+    let (wallet, txid) = get_funded_wallet_single(get_test_pkh());
+
+    let tx = wallet.get_tx(txid).expect("transaction").tx_node.tx;
+    let tx_fee_rate = wallet
+        .calculate_fee_rate(&tx)
+        .expect("transaction fee rate");
+
+    // The funded wallet contains a tx with a 76_000 sats input and two outputs, one spending 25_000
+    // to a foreign address and one returning 50_000 back to the wallet as change. The remaining
+    // 1000 sats are the transaction fee.
+
+    // tx weight = 464 wu, as vbytes = (464)/4 = 116
+    // fee rate (sats per kwu) = fee / weight = 1000sat / 0.464kwu = 2155
+    // fee rate (sats per vbyte ceil) = fee / kwu = 1000 / 116 = 8.621
+    assert_eq!(tx_fee_rate.to_sat_per_kwu(), 2155);
+    assert_eq!(tx_fee_rate.to_sat_per_vb_ceil(), 9);
+}
+
+#[test]
 fn test_list_output() {
     let (wallet, txid) = get_funded_wallet_wpkh();
     let txos = wallet
@@ -458,14 +481,16 @@ macro_rules! assert_fee_rate {
         let psbt = $psbt.clone();
         #[allow(unused_mut)]
         let mut tx = $psbt.clone().extract_tx().expect("failed to extract tx");
+
         $(
             $( $add_signature )*
                 for txin in &mut tx.input {
-                    txin.witness.push([0x00; P2WPKH_FAKE_WITNESS_SIZE]); // fake signature
+                    txin.witness.push([0x00; P2WPKH_FAKE_SIG_SIZE]); // sig (72)
+                    txin.witness.push([0x00; P2WPKH_FAKE_PK_SIZE]); // pk (33)
                 }
         )*
 
-            #[allow(unused_mut)]
+        #[allow(unused_mut)]
         #[allow(unused_assignments)]
         let mut dust_change = false;
         $(
@@ -473,15 +498,7 @@ macro_rules! assert_fee_rate {
                 dust_change = true;
         )*
 
-            let fee_amount = psbt
-            .inputs
-            .iter()
-            .fold(Amount::ZERO, |acc, i| acc + i.witness_utxo.as_ref().unwrap().value)
-            - psbt
-            .unsigned_tx
-            .output
-            .iter()
-            .fold(Amount::ZERO, |acc, o| acc + o.value);
+        let fee_amount = psbt.fee().expect("failed to calculate fee");
 
         assert_eq!(fee_amount, $fees);
 
@@ -493,9 +510,52 @@ macro_rules! assert_fee_rate {
             .to_sat_per_kwu();
 
         if !dust_change {
-            assert!(tx_fee_rate >= fee_rate && tx_fee_rate - fee_rate < half_default, "Expected fee rate of {:?}, the tx has {:?}", fee_rate, tx_fee_rate);
+            assert!(tx_fee_rate >= fee_rate && tx_fee_rate - fee_rate < half_default,
+                "Expected fee rate of {:?}, the tx has {:?}", fee_rate, tx_fee_rate);
         } else {
-            assert!(tx_fee_rate >= fee_rate, "Expected fee rate of at least {:?}, the tx has {:?}", fee_rate, tx_fee_rate);
+            assert!(tx_fee_rate >= fee_rate,
+                "Expected fee rate of at least {:?}, the tx has {:?}", fee_rate, tx_fee_rate);
+        }
+    });
+}
+
+macro_rules! assert_fee_rate_legacy {
+    ($psbt:expr, $fees:expr, $fee_rate:expr $( ,@dust_change $( $dust_change:expr )* )* $( ,@add_signature $( $add_signature:expr )* )* ) => ({
+        let psbt = $psbt.clone();
+        #[allow(unused_mut)]
+        let mut tx = $psbt.clone().extract_tx().expect("failed to extract tx");
+
+        $(
+            $( $add_signature )*
+                for txin in &mut tx.input {
+                    txin.script_sig = ScriptBuf::from_bytes([0x00; P2PKH_FAKE_SCRIPT_SIG_SIZE].to_vec()); // fake signature
+                }
+        )*
+
+        #[allow(unused_mut)]
+        #[allow(unused_assignments)]
+        let mut dust_change = false;
+        $(
+            $( $dust_change )*
+                dust_change = true;
+        )*
+
+        let fee_amount = psbt.fee().expect("failed to calculate fee");
+        assert_eq!(fee_amount, $fees);
+
+        let tx_fee_rate = (fee_amount / tx.weight())
+            .to_sat_per_kwu();
+        let fee_rate = $fee_rate.to_sat_per_kwu();
+        let half_default = FeeRate::BROADCAST_MIN.checked_div(2)
+            .unwrap()
+            .to_sat_per_kwu();
+
+        if !dust_change {
+            assert!(tx_fee_rate >= fee_rate && tx_fee_rate - fee_rate < half_default,
+                "Expected fee rate of {:?}, the tx has {:?}", fee_rate, tx_fee_rate);
+        } else {
+            assert!(tx_fee_rate >= fee_rate,
+                "Expected fee rate of at least {:?}, the tx has {:?}", fee_rate, tx_fee_rate);
         }
     });
 }
@@ -774,11 +834,14 @@ fn test_create_tx_default_sequence() {
     assert_eq!(psbt.unsigned_tx.input[0].sequence, Sequence(0xFFFFFFFD));
 }
 
+/// Validate and return the transaction fee from a PSBT.
+/// Panics if extraction fails, fee calculation fails, or if calculated fee doesn't match PSBT's
+/// fee.
 macro_rules! check_fee {
     ($wallet:expr, $psbt: expr) => {{
         let tx = $psbt.clone().extract_tx().expect("failed to extract tx");
-        let tx_fee = $wallet.calculate_fee(&tx).ok();
-        assert_eq!(tx_fee, $psbt.fee_amount());
+        let tx_fee = $wallet.calculate_fee(&tx).expect("failed to calculate fee");
+        assert_eq!(Some(tx_fee), $psbt.fee_amount());
         tx_fee
     }};
 }
@@ -795,7 +858,7 @@ fn test_create_tx_drain_wallet_and_drain_to() {
     assert_eq!(psbt.unsigned_tx.output.len(), 1);
     assert_eq!(
         psbt.unsigned_tx.output[0].value,
-        Amount::from_sat(50_000) - fee.unwrap_or(Amount::ZERO)
+        Amount::from_sat(50_000) - fee
     );
 }
 
@@ -825,10 +888,7 @@ fn test_create_tx_drain_wallet_and_drain_to_and_with_recipient() {
         .find(|x| x.script_pubkey == drain_addr.script_pubkey())
         .unwrap();
     assert_eq!(main_output.value, Amount::from_sat(20_000));
-    assert_eq!(
-        drain_output.value,
-        Amount::from_sat(30_000) - fee.unwrap_or(Amount::ZERO)
-    );
+    assert_eq!(drain_output.value, Amount::from_sat(30_000) - fee);
 }
 
 #[test]
@@ -847,7 +907,7 @@ fn test_create_tx_drain_to_and_utxos() {
     assert_eq!(psbt.unsigned_tx.output.len(), 1);
     assert_eq!(
         psbt.unsigned_tx.output[0].value,
-        Amount::from_sat(50_000) - fee.unwrap_or(Amount::ZERO)
+        Amount::from_sat(50_000) - fee
     );
 }
 
@@ -870,7 +930,7 @@ fn test_create_tx_default_fee_rate() {
     let psbt = builder.finish().unwrap();
     let fee = check_fee!(wallet, psbt);
 
-    assert_fee_rate!(psbt, fee.unwrap_or(Amount::ZERO), FeeRate::BROADCAST_MIN, @add_signature);
+    assert_fee_rate!(psbt, fee, FeeRate::BROADCAST_MIN, @add_signature);
 }
 
 #[test]
@@ -884,7 +944,21 @@ fn test_create_tx_custom_fee_rate() {
     let psbt = builder.finish().unwrap();
     let fee = check_fee!(wallet, psbt);
 
-    assert_fee_rate!(psbt, fee.unwrap_or(Amount::ZERO), FeeRate::from_sat_per_vb_unchecked(5), @add_signature);
+    assert_fee_rate!(psbt, fee, FeeRate::from_sat_per_vb_unchecked(5), @add_signature);
+}
+
+#[test]
+fn test_legacy_create_tx_custom_fee_rate() {
+    let (mut wallet, _) = get_funded_wallet_single(get_test_pkh());
+    let addr = wallet.next_unused_address(KeychainKind::External);
+    let mut builder = wallet.build_tx();
+    builder
+        .add_recipient(addr.script_pubkey(), Amount::from_sat(25_000))
+        .fee_rate(FeeRate::from_sat_per_vb_unchecked(5));
+    let psbt = builder.finish().unwrap();
+    let fee = check_fee!(wallet, psbt);
+
+    assert_fee_rate_legacy!(psbt, fee, FeeRate::from_sat_per_vb_unchecked(5), @add_signature);
 }
 
 #[test]
@@ -899,11 +973,31 @@ fn test_create_tx_absolute_fee() {
     let psbt = builder.finish().unwrap();
     let fee = check_fee!(wallet, psbt);
 
-    assert_eq!(fee.unwrap_or(Amount::ZERO), Amount::from_sat(100));
+    assert_eq!(fee, Amount::from_sat(100));
     assert_eq!(psbt.unsigned_tx.output.len(), 1);
     assert_eq!(
         psbt.unsigned_tx.output[0].value,
-        Amount::from_sat(50_000) - fee.unwrap_or(Amount::ZERO)
+        Amount::from_sat(50_000) - fee
+    );
+}
+
+#[test]
+fn test_legacy_create_tx_absolute_fee() {
+    let (mut wallet, _) = get_funded_wallet_single(get_test_pkh());
+    let addr = wallet.next_unused_address(KeychainKind::External);
+    let mut builder = wallet.build_tx();
+    builder
+        .drain_to(addr.script_pubkey())
+        .drain_wallet()
+        .fee_absolute(Amount::from_sat(100));
+    let psbt = builder.finish().unwrap();
+    let fee = check_fee!(wallet, psbt);
+
+    assert_eq!(fee, Amount::from_sat(100));
+    assert_eq!(psbt.unsigned_tx.output.len(), 1);
+    assert_eq!(
+        psbt.unsigned_tx.output[0].value,
+        Amount::from_sat(50_000) - fee
     );
 }
 
@@ -919,11 +1013,31 @@ fn test_create_tx_absolute_zero_fee() {
     let psbt = builder.finish().unwrap();
     let fee = check_fee!(wallet, psbt);
 
-    assert_eq!(fee.unwrap_or(Amount::ZERO), Amount::ZERO);
+    assert_eq!(fee, Amount::ZERO);
     assert_eq!(psbt.unsigned_tx.output.len(), 1);
     assert_eq!(
         psbt.unsigned_tx.output[0].value,
-        Amount::from_sat(50_000) - fee.unwrap_or(Amount::ZERO)
+        Amount::from_sat(50_000) - fee
+    );
+}
+
+#[test]
+fn test_legacy_create_tx_absolute_zero_fee() {
+    let (mut wallet, _) = get_funded_wallet_single(get_test_pkh());
+    let addr = wallet.next_unused_address(KeychainKind::External);
+    let mut builder = wallet.build_tx();
+    builder
+        .drain_to(addr.script_pubkey())
+        .drain_wallet()
+        .fee_absolute(Amount::ZERO);
+    let psbt = builder.finish().unwrap();
+    let fee = check_fee!(wallet, psbt);
+
+    assert_eq!(fee, Amount::ZERO);
+    assert_eq!(psbt.unsigned_tx.output.len(), 1);
+    assert_eq!(
+        psbt.unsigned_tx.output[0].value,
+        Amount::from_sat(50_000) - fee
     );
 }
 
@@ -931,6 +1045,19 @@ fn test_create_tx_absolute_zero_fee() {
 #[should_panic(expected = "InsufficientFunds")]
 fn test_create_tx_absolute_high_fee() {
     let (mut wallet, _) = get_funded_wallet_wpkh();
+    let addr = wallet.next_unused_address(KeychainKind::External);
+    let mut builder = wallet.build_tx();
+    builder
+        .drain_to(addr.script_pubkey())
+        .drain_wallet()
+        .fee_absolute(Amount::from_sat(60_000));
+    let _ = builder.finish().unwrap();
+}
+
+#[test]
+#[should_panic(expected = "InsufficientFunds")]
+fn test_legacy_create_tx_absolute_high_fee() {
+    let (mut wallet, _) = get_funded_wallet_single(get_test_pkh());
     let addr = wallet.next_unused_address(KeychainKind::External);
     let mut builder = wallet.build_tx();
     builder
@@ -958,7 +1085,7 @@ fn test_create_tx_add_change() {
     assert_eq!(psbt.unsigned_tx.output[0].value, Amount::from_sat(25_000));
     assert_eq!(
         psbt.unsigned_tx.output[1].value,
-        Amount::from_sat(25_000) - fee.unwrap_or(Amount::ZERO)
+        Amount::from_sat(25_000) - fee
     );
 }
 
@@ -973,7 +1100,7 @@ fn test_create_tx_skip_change_dust() {
 
     assert_eq!(psbt.unsigned_tx.output.len(), 1);
     assert_eq!(psbt.unsigned_tx.output[0].value.to_sat(), 49_800);
-    assert_eq!(fee.unwrap_or(Amount::ZERO), Amount::from_sat(200));
+    assert_eq!(fee, Amount::from_sat(200));
 }
 
 #[test]
@@ -1022,7 +1149,7 @@ fn test_create_tx_ordering_respected() {
     assert_eq!(psbt.unsigned_tx.output.len(), 3);
     assert_eq!(
         psbt.unsigned_tx.output[0].value,
-        Amount::from_sat(10_000) - fee.unwrap_or(Amount::ZERO)
+        Amount::from_sat(10_000) - fee
     );
     assert_eq!(psbt.unsigned_tx.output[1].value, Amount::from_sat(10_000));
     assert_eq!(psbt.unsigned_tx.output[2].value, Amount::from_sat(30_000));
@@ -1040,8 +1167,35 @@ fn test_create_tx_default_sighash() {
 }
 
 #[test]
+fn test_legacy_create_tx_default_sighash() {
+    let (mut wallet, _) = get_funded_wallet_single(get_test_pkh());
+    let addr = wallet.next_unused_address(KeychainKind::External);
+    let mut builder = wallet.build_tx();
+    builder.add_recipient(addr.script_pubkey(), Amount::from_sat(30_000));
+    let psbt = builder.finish().unwrap();
+
+    assert_eq!(psbt.inputs[0].sighash_type, None);
+}
+
+#[test]
 fn test_create_tx_custom_sighash() {
     let (mut wallet, _) = get_funded_wallet_wpkh();
+    let addr = wallet.next_unused_address(KeychainKind::External);
+    let mut builder = wallet.build_tx();
+    builder
+        .add_recipient(addr.script_pubkey(), Amount::from_sat(30_000))
+        .sighash(EcdsaSighashType::Single.into());
+    let psbt = builder.finish().unwrap();
+
+    assert_eq!(
+        psbt.inputs[0].sighash_type,
+        Some(EcdsaSighashType::Single.into())
+    );
+}
+
+#[test]
+fn test_legacy_create_tx_custom_sighash() {
+    let (mut wallet, _) = get_funded_wallet_single(get_test_pkh());
     let addr = wallet.next_unused_address(KeychainKind::External);
     let mut builder = wallet.build_tx();
     builder
@@ -1249,7 +1403,7 @@ fn test_create_tx_add_utxo() {
         .add_utxo(OutPoint { txid, vout: 0 })
         .unwrap();
     let psbt = builder.finish().unwrap();
-    let sent_received =
+    let (sent, _received) =
         wallet.sent_and_received(&psbt.clone().extract_tx().expect("failed to extract tx"));
 
     assert_eq!(
@@ -1258,7 +1412,7 @@ fn test_create_tx_add_utxo() {
         "should add an additional input since 25_000 < 30_000"
     );
     assert_eq!(
-        sent_received.0,
+        sent,
         Amount::from_sat(75_000),
         "total should be sum of both inputs"
     );
@@ -1561,12 +1715,12 @@ fn test_add_foreign_utxo() {
     let mut psbt = builder.finish().unwrap();
     wallet1.insert_txout(utxo.outpoint, utxo.txout);
     let fee = check_fee!(wallet1, psbt);
-    let sent_received =
+    let (sent, received) =
         wallet1.sent_and_received(&psbt.clone().extract_tx().expect("failed to extract tx"));
 
     assert_eq!(
-        (sent_received.0 - sent_received.1),
-        Amount::from_sat(10_000) + fee.unwrap_or(Amount::ZERO),
+        (sent - received),
+        Amount::from_sat(10_000) + fee,
         "we should have only net spent ~10_000"
     );
 
@@ -1918,6 +2072,24 @@ fn test_bump_fee_zero_abs() {
 }
 
 #[test]
+#[should_panic(expected = "FeeTooLow")]
+fn test_legacy_bump_fee_zero_abs() {
+    let (mut wallet, _) = get_funded_wallet_single(get_test_pkh());
+    let addr = wallet.next_unused_address(KeychainKind::External);
+    let mut builder = wallet.build_tx();
+    builder.add_recipient(addr.script_pubkey(), Amount::from_sat(25_000));
+    let psbt = builder.finish().unwrap();
+
+    let tx = psbt.extract_tx().expect("failed to extract tx");
+    let txid = tx.compute_txid();
+    insert_tx(&mut wallet, tx);
+
+    let mut builder = wallet.build_fee_bump(txid).unwrap();
+    builder.fee_absolute(Amount::ZERO);
+    builder.finish().unwrap();
+}
+
+#[test]
 fn test_bump_fee_reduce_change() {
     let (mut wallet, _) = get_funded_wallet_wpkh();
     let addr = Address::from_str("2N1Ffz3WaNzbeLFBb51xyFMHYSEUXcbiSoX")
@@ -1938,16 +2110,13 @@ fn test_bump_fee_reduce_change() {
     let mut builder = wallet.build_fee_bump(txid).unwrap();
     builder.fee_rate(feerate);
     let psbt = builder.finish().unwrap();
-    let sent_received =
+    let (sent, received) =
         wallet.sent_and_received(&psbt.clone().extract_tx().expect("failed to extract tx"));
     let fee = check_fee!(wallet, psbt);
 
-    assert_eq!(sent_received.0, original_sent_received.0);
-    assert_eq!(
-        sent_received.1 + fee.unwrap_or(Amount::ZERO),
-        original_sent_received.1 + original_fee.unwrap_or(Amount::ZERO)
-    );
-    assert!(fee.unwrap_or(Amount::ZERO) > original_fee.unwrap_or(Amount::ZERO));
+    assert_eq!(sent, original_sent_received.0);
+    assert_eq!(received + fee, original_sent_received.1 + original_fee);
+    assert!(fee > original_fee);
 
     let tx = &psbt.unsigned_tx;
     assert_eq!(tx.output.len(), 2);
@@ -1965,29 +2134,21 @@ fn test_bump_fee_reduce_change() {
             .find(|txout| txout.script_pubkey != addr.script_pubkey())
             .unwrap()
             .value,
-        sent_received.1
+        received
     );
 
-    assert_fee_rate!(psbt, fee.unwrap_or(Amount::ZERO), feerate, @add_signature);
+    assert_fee_rate!(psbt, fee, feerate, @add_signature);
 
     let mut builder = wallet.build_fee_bump(txid).unwrap();
     builder.fee_absolute(Amount::from_sat(200));
     let psbt = builder.finish().unwrap();
-    let sent_received =
+    let (sent, received) =
         wallet.sent_and_received(&psbt.clone().extract_tx().expect("failed to extract tx"));
     let fee = check_fee!(wallet, psbt);
 
-    assert_eq!(sent_received.0, original_sent_received.0);
-    assert_eq!(
-        sent_received.1 + fee.unwrap_or(Amount::ZERO),
-        original_sent_received.1 + original_fee.unwrap_or(Amount::ZERO)
-    );
-    assert!(
-        fee.unwrap_or(Amount::ZERO) > original_fee.unwrap_or(Amount::ZERO),
-        "{} > {}",
-        fee.unwrap_or(Amount::ZERO),
-        original_fee.unwrap_or(Amount::ZERO)
-    );
+    assert_eq!(sent, original_sent_received.0);
+    assert_eq!(received + fee, original_sent_received.1 + original_fee);
+    assert!(fee > original_fee, "{} > {}", fee, original_fee);
 
     let tx = &psbt.unsigned_tx;
     assert_eq!(tx.output.len(), 2);
@@ -2005,10 +2166,10 @@ fn test_bump_fee_reduce_change() {
             .find(|txout| txout.script_pubkey != addr.script_pubkey())
             .unwrap()
             .value,
-        sent_received.1
+        received
     );
 
-    assert_eq!(fee.unwrap_or(Amount::ZERO), Amount::from_sat(200));
+    assert_eq!(fee, Amount::from_sat(200));
 }
 
 #[test]
@@ -2037,21 +2198,18 @@ fn test_bump_fee_reduce_single_recipient() {
         // drain wallet output amount will be re-calculated with new fee rate
         .drain_wallet();
     let psbt = builder.finish().unwrap();
-    let sent_received =
+    let (sent, _received) =
         wallet.sent_and_received(&psbt.clone().extract_tx().expect("failed to extract tx"));
     let fee = check_fee!(wallet, psbt);
 
-    assert_eq!(sent_received.0, original_sent_received.0);
-    assert!(fee.unwrap_or(Amount::ZERO) > original_fee.unwrap_or(Amount::ZERO));
+    assert_eq!(sent, original_sent_received.0);
+    assert!(fee > original_fee);
 
     let tx = &psbt.unsigned_tx;
     assert_eq!(tx.output.len(), 1);
-    assert_eq!(
-        tx.output[0].value + fee.unwrap_or(Amount::ZERO),
-        sent_received.0
-    );
+    assert_eq!(tx.output[0].value + fee, sent);
 
-    assert_fee_rate!(psbt, fee.unwrap_or(Amount::ZERO), feerate, @add_signature);
+    assert_fee_rate!(psbt, fee, feerate, @add_signature);
 }
 
 #[test]
@@ -2080,19 +2238,16 @@ fn test_bump_fee_absolute_reduce_single_recipient() {
         .drain_wallet();
     let psbt = builder.finish().unwrap();
     let tx = &psbt.unsigned_tx;
-    let sent_received = wallet.sent_and_received(tx);
+    let (sent, _received) = wallet.sent_and_received(tx);
     let fee = check_fee!(wallet, psbt);
 
-    assert_eq!(sent_received.0, original_sent_received.0);
-    assert!(fee.unwrap_or(Amount::ZERO) > original_fee.unwrap_or(Amount::ZERO));
+    assert_eq!(sent, original_sent_received.0);
+    assert!(fee > original_fee);
 
     assert_eq!(tx.output.len(), 1);
-    assert_eq!(
-        tx.output[0].value + fee.unwrap_or(Amount::ZERO),
-        sent_received.0
-    );
+    assert_eq!(tx.output[0].value + fee, sent);
 
-    assert_eq!(fee.unwrap_or(Amount::ZERO), Amount::from_sat(300));
+    assert_eq!(fee, Amount::from_sat(300));
 }
 
 #[test]
@@ -2146,9 +2301,67 @@ fn test_bump_fee_drain_wallet() {
         .drain_wallet()
         .fee_rate(FeeRate::from_sat_per_vb_unchecked(5));
     let psbt = builder.finish().unwrap();
-    let sent_received = wallet.sent_and_received(&psbt.extract_tx().expect("failed to extract tx"));
+    let (sent, _received) =
+        wallet.sent_and_received(&psbt.extract_tx().expect("failed to extract tx"));
 
-    assert_eq!(sent_received.0, Amount::from_sat(75_000));
+    assert_eq!(sent, Amount::from_sat(75_000));
+}
+
+#[test]
+fn test_legacy_bump_fee_drain_wallet() {
+    let (mut wallet, _) = get_funded_wallet_single(get_test_pkh());
+    // receive an extra tx so that our wallet has two utxos.
+    let tx = Transaction {
+        version: transaction::Version::ONE,
+        lock_time: absolute::LockTime::ZERO,
+        input: vec![],
+        output: vec![TxOut {
+            value: Amount::from_sat(25_000),
+            script_pubkey: wallet
+                .next_unused_address(KeychainKind::External)
+                .script_pubkey(),
+        }],
+    };
+    let txid = tx.compute_txid();
+    insert_tx(&mut wallet, tx.clone());
+    let anchor = ConfirmationBlockTime {
+        block_id: wallet.latest_checkpoint().block_id(),
+        confirmation_time: 42_000,
+    };
+    insert_anchor(&mut wallet, txid, anchor);
+
+    let addr = Address::from_str("2N1Ffz3WaNzbeLFBb51xyFMHYSEUXcbiSoX")
+        .unwrap()
+        .assume_checked();
+
+    let mut builder = wallet.build_tx();
+    builder
+        .drain_to(addr.script_pubkey())
+        .add_utxo(OutPoint {
+            txid: tx.compute_txid(),
+            vout: 0,
+        })
+        .unwrap()
+        .manually_selected_only();
+    let psbt = builder.finish().unwrap();
+    let tx = psbt.extract_tx().expect("failed to extract tx");
+    let original_sent_received = wallet.sent_and_received(&tx);
+
+    let txid = tx.compute_txid();
+    insert_tx(&mut wallet, tx);
+    assert_eq!(original_sent_received.0, Amount::from_sat(25_000));
+
+    // for the new feerate, it should be enough to reduce the output, but since we specify
+    // `drain_wallet` we expect to spend everything
+    let mut builder = wallet.build_fee_bump(txid).unwrap();
+    builder
+        .drain_wallet()
+        .fee_rate(FeeRate::from_sat_per_vb_unchecked(5));
+    let psbt = builder.finish().unwrap();
+    let (sent, _received) =
+        wallet.sent_and_received(&psbt.extract_tx().expect("failed to extract tx"));
+
+    assert_eq!(sent, Amount::from_sat(75_000));
 }
 
 #[test]
@@ -2246,17 +2459,11 @@ fn test_bump_fee_add_input() {
     let mut builder = wallet.build_fee_bump(txid).unwrap();
     builder.fee_rate(FeeRate::from_sat_per_vb_unchecked(50));
     let psbt = builder.finish().unwrap();
-    let sent_received =
+    let (sent, received) =
         wallet.sent_and_received(&psbt.clone().extract_tx().expect("failed to extract tx"));
     let fee = check_fee!(wallet, psbt);
-    assert_eq!(
-        sent_received.0,
-        original_details.0 + Amount::from_sat(25_000)
-    );
-    assert_eq!(
-        fee.unwrap_or(Amount::ZERO) + sent_received.1,
-        Amount::from_sat(30_000)
-    );
+    assert_eq!(sent, original_details.0 + Amount::from_sat(25_000));
+    assert_eq!(fee + received, Amount::from_sat(30_000));
 
     let tx = &psbt.unsigned_tx;
     assert_eq!(tx.input.len(), 2);
@@ -2275,10 +2482,76 @@ fn test_bump_fee_add_input() {
             .find(|txout| txout.script_pubkey != addr.script_pubkey())
             .unwrap()
             .value,
-        sent_received.1
+        received
     );
 
-    assert_fee_rate!(psbt, fee.unwrap_or(Amount::ZERO), FeeRate::from_sat_per_vb_unchecked(50), @add_signature);
+    assert_fee_rate!(psbt, fee, FeeRate::from_sat_per_vb_unchecked(50), @add_signature);
+}
+
+#[test]
+fn test_legacy_bump_fee_add_input() {
+    let (mut wallet, _) = get_funded_wallet_single(get_test_pkh());
+    let init_tx = Transaction {
+        version: transaction::Version::ONE,
+        lock_time: absolute::LockTime::ZERO,
+        input: vec![],
+        output: vec![TxOut {
+            script_pubkey: wallet
+                .next_unused_address(KeychainKind::External)
+                .script_pubkey(),
+            value: Amount::from_sat(25_000),
+        }],
+    };
+    let txid = init_tx.compute_txid();
+    let pos: ChainPosition<ConfirmationBlockTime> =
+        wallet.transactions().last().unwrap().chain_position;
+    insert_tx(&mut wallet, init_tx);
+    match pos {
+        ChainPosition::Confirmed { anchor, .. } => insert_anchor(&mut wallet, txid, anchor),
+        other => panic!("all wallet txs must be confirmed: {:?}", other),
+    }
+
+    let addr = Address::from_str("2N1Ffz3WaNzbeLFBb51xyFMHYSEUXcbiSoX")
+        .unwrap()
+        .assume_checked();
+    let mut builder = wallet.build_tx().coin_selection(LargestFirstCoinSelection);
+    builder.add_recipient(addr.script_pubkey(), Amount::from_sat(45_000));
+    let psbt = builder.finish().unwrap();
+    let tx = psbt.extract_tx().expect("failed to extract tx");
+    let original_details = wallet.sent_and_received(&tx);
+    let txid = tx.compute_txid();
+    insert_tx(&mut wallet, tx);
+
+    let mut builder = wallet.build_fee_bump(txid).unwrap();
+    builder.fee_rate(FeeRate::from_sat_per_vb_unchecked(50));
+    let psbt = builder.finish().unwrap();
+    let (sent, received) =
+        wallet.sent_and_received(&psbt.clone().extract_tx().expect("failed to extract tx"));
+    let fee = check_fee!(wallet, psbt);
+    assert_eq!(sent, original_details.0 + Amount::from_sat(25_000));
+    assert_eq!(fee + received, Amount::from_sat(30_000));
+
+    let tx = &psbt.unsigned_tx;
+    assert_eq!(tx.input.len(), 2);
+    assert_eq!(tx.output.len(), 2);
+    assert_eq!(
+        tx.output
+            .iter()
+            .find(|txout| txout.script_pubkey == addr.script_pubkey())
+            .unwrap()
+            .value,
+        Amount::from_sat(45_000)
+    );
+    assert_eq!(
+        tx.output
+            .iter()
+            .find(|txout| txout.script_pubkey != addr.script_pubkey())
+            .unwrap()
+            .value,
+        received
+    );
+
+    assert_fee_rate_legacy!(psbt, fee, FeeRate::from_sat_per_vb_unchecked(50), @add_signature);
 }
 
 #[test]
@@ -2299,18 +2572,12 @@ fn test_bump_fee_absolute_add_input() {
     let mut builder = wallet.build_fee_bump(txid).unwrap();
     builder.fee_absolute(Amount::from_sat(6_000));
     let psbt = builder.finish().unwrap();
-    let sent_received =
+    let (sent, received) =
         wallet.sent_and_received(&psbt.clone().extract_tx().expect("failed to extract tx"));
     let fee = check_fee!(wallet, psbt);
 
-    assert_eq!(
-        sent_received.0,
-        original_sent_received.0 + Amount::from_sat(25_000)
-    );
-    assert_eq!(
-        fee.unwrap_or(Amount::ZERO) + sent_received.1,
-        Amount::from_sat(30_000)
-    );
+    assert_eq!(sent, original_sent_received.0 + Amount::from_sat(25_000));
+    assert_eq!(fee + received, Amount::from_sat(30_000));
 
     let tx = &psbt.unsigned_tx;
     assert_eq!(tx.input.len(), 2);
@@ -2329,10 +2596,58 @@ fn test_bump_fee_absolute_add_input() {
             .find(|txout| txout.script_pubkey != addr.script_pubkey())
             .unwrap()
             .value,
-        sent_received.1
+        received
     );
 
-    assert_eq!(fee.unwrap_or(Amount::ZERO), Amount::from_sat(6_000));
+    assert_eq!(fee, Amount::from_sat(6_000));
+}
+
+#[test]
+fn test_legacy_bump_fee_absolute_add_input() {
+    let (mut wallet, _) = get_funded_wallet_single(get_test_pkh());
+    receive_output_in_latest_block(&mut wallet, 25_000);
+    let addr = Address::from_str("2N1Ffz3WaNzbeLFBb51xyFMHYSEUXcbiSoX")
+        .unwrap()
+        .assume_checked();
+    let mut builder = wallet.build_tx().coin_selection(LargestFirstCoinSelection);
+    builder.add_recipient(addr.script_pubkey(), Amount::from_sat(45_000));
+    let psbt = builder.finish().unwrap();
+    let tx = psbt.extract_tx().expect("failed to extract tx");
+    let (original_sent, _original_received) = wallet.sent_and_received(&tx);
+    let txid = tx.compute_txid();
+    insert_tx(&mut wallet, tx);
+
+    let mut builder = wallet.build_fee_bump(txid).unwrap();
+    builder.fee_absolute(Amount::from_sat(6_000));
+    let psbt = builder.finish().unwrap();
+    let (sent, received) =
+        wallet.sent_and_received(&psbt.clone().extract_tx().expect("failed to extract tx"));
+    let fee = check_fee!(wallet, psbt);
+
+    assert_eq!(sent, original_sent + Amount::from_sat(25_000));
+    assert_eq!(fee + received, Amount::from_sat(30_000));
+
+    let tx = &psbt.unsigned_tx;
+    assert_eq!(tx.input.len(), 2);
+    assert_eq!(tx.output.len(), 2);
+    assert_eq!(
+        tx.output
+            .iter()
+            .find(|txout| txout.script_pubkey == addr.script_pubkey())
+            .unwrap()
+            .value,
+        Amount::from_sat(45_000)
+    );
+    assert_eq!(
+        tx.output
+            .iter()
+            .find(|txout| txout.script_pubkey != addr.script_pubkey())
+            .unwrap()
+            .value,
+        received
+    );
+
+    assert_eq!(fee, Amount::from_sat(6_000));
 }
 
 #[test]
@@ -2364,18 +2679,15 @@ fn test_bump_fee_no_change_add_input_and_change() {
     let mut builder = wallet.build_fee_bump(txid).unwrap();
     builder.fee_rate(FeeRate::from_sat_per_vb_unchecked(50));
     let psbt = builder.finish().unwrap();
-    let sent_received =
+    let (sent, received) =
         wallet.sent_and_received(&psbt.clone().extract_tx().expect("failed to extract tx"));
     let fee = check_fee!(wallet, psbt);
 
-    let original_send_all_amount = original_sent_received.0 - original_fee.unwrap_or(Amount::ZERO);
+    let original_send_all_amount = original_sent_received.0 - original_fee;
+    assert_eq!(sent, original_sent_received.0 + Amount::from_sat(50_000));
     assert_eq!(
-        sent_received.0,
-        original_sent_received.0 + Amount::from_sat(50_000)
-    );
-    assert_eq!(
-        sent_received.1,
-        Amount::from_sat(75_000) - original_send_all_amount - fee.unwrap_or(Amount::ZERO)
+        received,
+        Amount::from_sat(75_000) - original_send_all_amount - fee
     );
 
     let tx = &psbt.unsigned_tx;
@@ -2395,10 +2707,10 @@ fn test_bump_fee_no_change_add_input_and_change() {
             .find(|txout| txout.script_pubkey != addr.script_pubkey())
             .unwrap()
             .value,
-        Amount::from_sat(75_000) - original_send_all_amount - fee.unwrap_or(Amount::ZERO)
+        Amount::from_sat(75_000) - original_send_all_amount - fee
     );
 
-    assert_fee_rate!(psbt, fee.unwrap_or(Amount::ZERO), FeeRate::from_sat_per_vb_unchecked(50), @add_signature);
+    assert_fee_rate!(psbt, fee, FeeRate::from_sat_per_vb_unchecked(50), @add_signature);
 }
 
 #[test]
@@ -2417,7 +2729,8 @@ fn test_bump_fee_add_input_change_dust() {
 
     let mut tx = psbt.extract_tx().expect("failed to extract tx");
     for txin in &mut tx.input {
-        txin.witness.push([0x00; P2WPKH_FAKE_WITNESS_SIZE]); // to get realistic weight
+        txin.witness.push([0x00; P2WPKH_FAKE_SIG_SIZE]); // sig (72)
+        txin.witness.push([0x00; P2WPKH_FAKE_PK_SIZE]); // pk (33)
     }
     let original_tx_weight = tx.weight();
     assert_eq!(tx.input.len(), 1);
@@ -2442,21 +2755,18 @@ fn test_bump_fee_add_input_change_dust() {
     let fee_abs = 50_000 + 25_000 - 45_000 - 10;
     builder.fee_rate(Amount::from_sat(fee_abs) / new_tx_weight);
     let psbt = builder.finish().unwrap();
-    let sent_received =
+    let (sent, received) =
         wallet.sent_and_received(&psbt.clone().extract_tx().expect("failed to extract tx"));
     let fee = check_fee!(wallet, psbt);
 
     assert_eq!(
         original_sent_received.1,
-        Amount::from_sat(5_000) - original_fee.unwrap_or(Amount::ZERO)
+        Amount::from_sat(5_000) - original_fee
     );
 
-    assert_eq!(
-        sent_received.0,
-        original_sent_received.0 + Amount::from_sat(25_000)
-    );
-    assert_eq!(fee.unwrap_or(Amount::ZERO), Amount::from_sat(30_000));
-    assert_eq!(sent_received.1, Amount::ZERO);
+    assert_eq!(sent, original_sent_received.0 + Amount::from_sat(25_000));
+    assert_eq!(fee, Amount::from_sat(30_000));
+    assert_eq!(received, Amount::ZERO);
 
     let tx = &psbt.unsigned_tx;
     assert_eq!(tx.input.len(), 2);
@@ -2470,7 +2780,7 @@ fn test_bump_fee_add_input_change_dust() {
         Amount::from_sat(45_000)
     );
 
-    assert_fee_rate!(psbt, fee.unwrap_or(Amount::ZERO), FeeRate::from_sat_per_vb_unchecked(140), @dust_change, @add_signature);
+    assert_fee_rate!(psbt, fee, FeeRate::from_sat_per_vb_unchecked(140), @dust_change, @add_signature);
 }
 
 #[test]
@@ -2488,7 +2798,8 @@ fn test_bump_fee_force_add_input() {
     let original_sent_received = wallet.sent_and_received(&tx);
     let txid = tx.compute_txid();
     for txin in &mut tx.input {
-        txin.witness.push([0x00; P2WPKH_FAKE_WITNESS_SIZE]); // fake signature
+        txin.witness.push([0x00; P2WPKH_FAKE_SIG_SIZE]); // sig (72)
+        txin.witness.push([0x00; P2WPKH_FAKE_PK_SIZE]); // pk (33)
     }
     insert_tx(&mut wallet, tx.clone());
     // the new fee_rate is low enough that just reducing the change would be fine, but we force
@@ -2499,18 +2810,12 @@ fn test_bump_fee_force_add_input() {
         .unwrap()
         .fee_rate(FeeRate::from_sat_per_vb_unchecked(5));
     let psbt = builder.finish().unwrap();
-    let sent_received =
+    let (sent, received) =
         wallet.sent_and_received(&psbt.clone().extract_tx().expect("failed to extract tx"));
     let fee = check_fee!(wallet, psbt);
 
-    assert_eq!(
-        sent_received.0,
-        original_sent_received.0 + Amount::from_sat(25_000)
-    );
-    assert_eq!(
-        fee.unwrap_or(Amount::ZERO) + sent_received.1,
-        Amount::from_sat(30_000)
-    );
+    assert_eq!(sent, original_sent_received.0 + Amount::from_sat(25_000));
+    assert_eq!(fee + received, Amount::from_sat(30_000));
 
     let tx = &psbt.unsigned_tx;
     assert_eq!(tx.input.len(), 2);
@@ -2529,10 +2834,10 @@ fn test_bump_fee_force_add_input() {
             .find(|txout| txout.script_pubkey != addr.script_pubkey())
             .unwrap()
             .value,
-        sent_received.1
+        received
     );
 
-    assert_fee_rate!(psbt, fee.unwrap_or(Amount::ZERO), FeeRate::from_sat_per_vb_unchecked(5), @add_signature);
+    assert_fee_rate!(psbt, fee, FeeRate::from_sat_per_vb_unchecked(5), @add_signature);
 }
 
 #[test]
@@ -2551,7 +2856,8 @@ fn test_bump_fee_absolute_force_add_input() {
     let txid = tx.compute_txid();
     // skip saving the new utxos, we know they can't be used anyways
     for txin in &mut tx.input {
-        txin.witness.push([0x00; P2WPKH_FAKE_WITNESS_SIZE]); // fake signature
+        txin.witness.push([0x00; P2WPKH_FAKE_SIG_SIZE]); // sig (72)
+        txin.witness.push([0x00; P2WPKH_FAKE_PK_SIZE]); // pk (33)
     }
     insert_tx(&mut wallet, tx.clone());
 
@@ -2563,18 +2869,12 @@ fn test_bump_fee_absolute_force_add_input() {
         .unwrap()
         .fee_absolute(Amount::from_sat(250));
     let psbt = builder.finish().unwrap();
-    let sent_received =
+    let (sent, received) =
         wallet.sent_and_received(&psbt.clone().extract_tx().expect("failed to extract tx"));
     let fee = check_fee!(wallet, psbt);
 
-    assert_eq!(
-        sent_received.0,
-        original_sent_received.0 + Amount::from_sat(25_000)
-    );
-    assert_eq!(
-        fee.unwrap_or(Amount::ZERO) + sent_received.1,
-        Amount::from_sat(30_000)
-    );
+    assert_eq!(sent, original_sent_received.0 + Amount::from_sat(25_000));
+    assert_eq!(fee + received, Amount::from_sat(30_000));
 
     let tx = &psbt.unsigned_tx;
     assert_eq!(tx.input.len(), 2);
@@ -2593,10 +2893,10 @@ fn test_bump_fee_absolute_force_add_input() {
             .find(|txout| txout.script_pubkey != addr.script_pubkey())
             .unwrap()
             .value,
-        sent_received.1
+        received
     );
 
-    assert_eq!(fee.unwrap_or(Amount::ZERO), Amount::from_sat(250));
+    assert_eq!(fee, Amount::from_sat(250));
 }
 
 #[test]
@@ -2621,7 +2921,8 @@ fn test_bump_fee_unconfirmed_inputs_only() {
     let mut tx = psbt.extract_tx().expect("failed to extract tx");
     let txid = tx.compute_txid();
     for txin in &mut tx.input {
-        txin.witness.push([0x00; P2WPKH_FAKE_WITNESS_SIZE]); // fake signature
+        txin.witness.push([0x00; P2WPKH_FAKE_SIG_SIZE]); // sig (72)
+        txin.witness.push([0x00; P2WPKH_FAKE_PK_SIZE]); // pk (33)
     }
     insert_tx(&mut wallet, tx);
     let mut builder = wallet.build_fee_bump(txid).unwrap();
@@ -2649,7 +2950,8 @@ fn test_bump_fee_unconfirmed_input() {
     let mut tx = psbt.extract_tx().expect("failed to extract tx");
     let txid = tx.compute_txid();
     for txin in &mut tx.input {
-        txin.witness.push([0x00; P2WPKH_FAKE_WITNESS_SIZE]); // fake signature
+        txin.witness.push([0x00; P2WPKH_FAKE_SIG_SIZE]); // sig (72)
+        txin.witness.push([0x00; P2WPKH_FAKE_PK_SIZE]); // pk (33)
     }
     insert_tx(&mut wallet, tx);
 
@@ -2692,7 +2994,7 @@ fn test_fee_amount_negative_drain_val() {
     let fee = check_fee!(wallet, psbt);
 
     assert_eq!(psbt.inputs.len(), 1);
-    assert_fee_rate!(psbt, fee.unwrap_or(Amount::ZERO), fee_rate, @add_signature);
+    assert_fee_rate!(psbt, fee, fee_rate, @add_signature);
 }
 
 #[test]
@@ -3516,14 +3818,14 @@ fn test_taproot_foreign_utxo() {
         .add_foreign_utxo(utxo.outpoint, psbt_input, foreign_utxo_satisfaction)
         .unwrap();
     let psbt = builder.finish().unwrap();
-    let sent_received =
+    let (sent, received) =
         wallet1.sent_and_received(&psbt.clone().extract_tx().expect("failed to extract tx"));
     wallet1.insert_txout(utxo.outpoint, utxo.txout);
     let fee = check_fee!(wallet1, psbt);
 
     assert_eq!(
-        sent_received.0 - sent_received.1,
-        Amount::from_sat(10_000) + fee.unwrap_or(Amount::ZERO),
+        sent - received,
+        Amount::from_sat(10_000) + fee,
         "we should have only net spent ~10_000"
     );
 
@@ -4039,7 +4341,7 @@ fn test_fee_rate_sign_no_grinding_high_r() {
         )
         .unwrap();
     // ...and checking that everything is fine
-    assert_fee_rate!(psbt, fee.unwrap_or(Amount::ZERO), fee_rate);
+    assert_fee_rate!(psbt, fee, fee_rate);
 }
 
 #[test]
@@ -4076,7 +4378,7 @@ fn test_fee_rate_sign_grinding_low_r() {
         .serialize_der()
         .len();
     assert_eq!(sig_len, 70);
-    assert_fee_rate!(psbt, fee.unwrap_or(Amount::ZERO), fee_rate);
+    assert_fee_rate!(psbt, fee, fee_rate);
 }
 
 #[test]
