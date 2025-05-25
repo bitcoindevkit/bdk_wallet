@@ -16,7 +16,7 @@ rust-version = "1.63"
 workspace = true
 
 [dependencies]
-rand_core = { version = "0.6.0" }
+rand = { version = "0.9.1" }
 miniscript = { version = "12.3.1", features = [ "serde" ], default-features = false }
 bitcoin = { version = "0.32.4", features = [ "serde", "base64" ], default-features = false }
 serde = { version = "^1.0", features = ["derive"] }
@@ -43,7 +43,6 @@ tempfile = "3"
 bdk_chain = { version = "0.22.0", features = ["rusqlite"] }
 bdk_wallet = { path = ".", features = ["rusqlite", "file_store", "test-utils"] }
 anyhow = "1"
-rand = "^0.8"
 
 [package.metadata.docs.rs]
 all-features = true

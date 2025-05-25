@@ -14,7 +14,7 @@ use bitcoin::{absolute, relative, Amount, Script, Sequence};
 
 use miniscript::{MiniscriptKey, Satisfier, ToPublicKey};
 
-use rand_core::RngCore;
+use rand::RngCore;
 
 /// Trait to check if a value is below the dust limit.
 /// We are performing dust value calculation for a given script public key using rust-bitcoin to
@@ -143,7 +143,7 @@ mod test {
     use crate::bitcoin::{Address, Network, Sequence};
     use alloc::vec::Vec;
     use core::str::FromStr;
-    use rand::{rngs::StdRng, thread_rng, SeedableRng};
+    use rand::{rng, rngs::StdRng, SeedableRng};
 
     #[test]
     fn test_is_dust() {
@@ -210,14 +210,14 @@ mod test {
     #[cfg(feature = "std")]
     fn test_shuffle_slice_empty_vec() {
         let mut test: Vec<u8> = vec![];
-        shuffle_slice(&mut test, &mut thread_rng());
+        shuffle_slice(&mut test, &mut rng());
     }
 
     #[test]
     #[cfg(feature = "std")]
     fn test_shuffle_slice_single_vec() {
         let mut test: Vec<u8> = vec![0];
-        shuffle_slice(&mut test, &mut thread_rng());
+        shuffle_slice(&mut test, &mut rng());
     }
 
     #[test]

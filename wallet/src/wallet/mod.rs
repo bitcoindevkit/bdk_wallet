@@ -47,7 +47,7 @@ use miniscript::{
     descriptor::KeyMap,
     psbt::{PsbtExt, PsbtInputExt, PsbtInputSatisfier},
 };
-use rand_core::RngCore;
+use rand::RngCore;
 
 mod changeset;
 pub mod coin_selection;

@@ -47,7 +47,7 @@ use bitcoin::{
     absolute, transaction::Version, Amount, FeeRate, OutPoint, ScriptBuf, Sequence, Transaction,
     TxIn, TxOut, Txid, Weight,
 };
-use rand_core::RngCore;
+use rand::RngCore;
 
 use super::coin_selection::CoinSelectionAlgorithm;
 use super::utils::shuffle_slice;
@@ -689,7 +689,7 @@ impl<Cs: CoinSelectionAlgorithm> TxBuilder<'_, Cs> {
     /// or more calls to this method before closing the wallet. See [`Wallet::reveal_next_address`].
     #[cfg(feature = "std")]
     pub fn finish(self) -> Result<Psbt, CreateTxError> {
-        self.finish_with_aux_rand(&mut bitcoin::key::rand::thread_rng())
+        self.finish_with_aux_rand(&mut rand::rng())
     }
 
     /// Finish building the transaction.
@@ -804,7 +804,7 @@ impl TxOrdering {
     /// Uses the thread-local random number generator (rng).
     #[cfg(feature = "std")]
     pub fn sort_tx(&self, tx: &mut Transaction) {
-        self.sort_tx_with_aux_rand(tx, &mut bitcoin::key::rand::thread_rng())
+        self.sort_tx_with_aux_rand(tx, &mut rand::rng())
     }
 
     /// Sort transaction inputs and outputs by [`TxOrdering`] variant.

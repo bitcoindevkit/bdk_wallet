@@ -31,7 +31,7 @@
 //! # use bdk_wallet::*;
 //! # use bdk_wallet::coin_selection::decide_change;
 //! # use anyhow::Error;
-//! # use rand_core::RngCore;
+//! # use rand::RngCore;
 //! #[derive(Debug)]
 //! struct AlwaysSpendEverything;
 //!
@@ -113,7 +113,7 @@ use bitcoin::{Script, Weight};
 
 use core::convert::TryInto;
 use core::fmt::{self, Formatter};
-use rand_core::RngCore;
+use rand::RngCore;
 
 use super::utils::shuffle_slice;
 /// Default coin selection algorithm used by [`TxBuilder`](super::tx_builder::TxBuilder) if not
@@ -737,7 +737,7 @@ mod test {
     use crate::types::*;
 
     use rand::prelude::SliceRandom;
-    use rand::{thread_rng, Rng, RngCore, SeedableRng};
+    use rand::{rng, Rng, RngCore, SeedableRng};
 
     // signature len (1WU) + signature and sighash (72WU)
     // + pubkey len (1WU) + pubkey (33WU)
@@ -832,13 +832,13 @@ mod test {
                     ))
                     .unwrap(),
                     txout: TxOut {
-                        value: Amount::from_sat(rng.gen_range(0..200000000)),
+                        value: Amount::from_sat(rng.random_range(0..200000000)),
                         script_pubkey: ScriptBuf::new(),
                     },
                     keychain: KeychainKind::External,
                     is_spent: false,
                     derivation_index: rng.next_u32(),
-                    chain_position: if rng.gen_bool(0.5) {
+                    chain_position: if rng.random_bool(0.5) {
                         ChainPosition::Confirmed {
                             anchor: ConfirmationBlockTime {
                                 block_id: chain::BlockId {
@@ -882,7 +882,7 @@ mod test {
     }
 
     fn sum_random_utxos(mut rng: &mut StdRng, utxos: &mut [WeightedUtxo]) -> Amount {
-        let utxos_picked_len = rng.gen_range(2..utxos.len() / 2);
+        let utxos_picked_len = rng.random_range(2..utxos.len() / 2);
         utxos.shuffle(&mut rng);
         utxos[..utxos_picked_len]
             .iter()
@@ -913,7 +913,7 @@ mod test {
                 FeeRate::from_sat_per_vb_unchecked(1),
                 target_amount,
                 &drain_script,
-                &mut thread_rng(),
+                &mut rng(),
             )
             .unwrap();
 
@@ -935,7 +935,7 @@ mod test {
                 FeeRate::from_sat_per_vb_unchecked(1),
                 target_amount,
                 &drain_script,
-                &mut thread_rng(),
+                &mut rng(),
             )
             .unwrap();
 
@@ -957,7 +957,7 @@ mod test {
                 FeeRate::from_sat_per_vb_unchecked(1),
                 target_amount,
                 &drain_script,
-                &mut thread_rng(),
+                &mut rng(),
             )
             .unwrap();
 
@@ -978,7 +978,7 @@ mod test {
             FeeRate::from_sat_per_vb_unchecked(1),
             target_amount,
             &drain_script,
-            &mut thread_rng(),
+            &mut rng(),
         );
         assert!(matches!(result, Err(InsufficientFunds { .. })));
     }
@@ -995,7 +995,7 @@ mod test {
             FeeRate::from_sat_per_vb_unchecked(1000),
             target_amount,
             &drain_script,
-            &mut thread_rng(),
+            &mut rng(),
         );
         assert!(matches!(result, Err(InsufficientFunds { .. })));
     }
@@ -1013,7 +1013,7 @@ mod test {
                 FeeRate::from_sat_per_vb_unchecked(1),
                 target_amount,
                 &drain_script,
-                &mut thread_rng(),
+                &mut rng(),
             )
             .unwrap();
 
@@ -1035,7 +1035,7 @@ mod test {
                 FeeRate::from_sat_per_vb_unchecked(1),
                 target_amount,
                 &drain_script,
-                &mut thread_rng(),
+                &mut rng(),
             )
             .unwrap();
 
@@ -1057,7 +1057,7 @@ mod test {
                 FeeRate::from_sat_per_vb_unchecked(1),
                 target_amount,
                 &drain_script,
-                &mut thread_rng(),
+                &mut rng(),
             )
             .unwrap();
 
@@ -1078,7 +1078,7 @@ mod test {
             FeeRate::from_sat_per_vb_unchecked(1),
             target_amount,
             &drain_script,
-            &mut thread_rng(),
+            &mut rng(),
         );
         assert!(matches!(result, Err(InsufficientFunds { .. })));
     }
@@ -1097,7 +1097,7 @@ mod test {
             FeeRate::from_sat_per_vb_unchecked(1000),
             target_amount,
             &drain_script,
-            &mut thread_rng(),
+            &mut rng(),
         );
         assert!(matches!(result, Err(InsufficientFunds { .. })));
     }
@@ -1117,7 +1117,7 @@ mod test {
                 FeeRate::from_sat_per_vb_unchecked(1),
                 target_amount,
                 &drain_script,
-                &mut thread_rng(),
+                &mut rng(),
             )
             .unwrap();
 
@@ -1139,7 +1139,7 @@ mod test {
                 FeeRate::from_sat_per_vb_unchecked(1),
                 target_amount,
                 &drain_script,
-                &mut thread_rng(),
+                &mut rng(),
             )
             .unwrap();
 
@@ -1163,7 +1163,7 @@ mod test {
                 fee_rate,
                 target_amount,
                 &drain_script,
-                &mut thread_rng(),
+                &mut rng(),
             )
             .unwrap();
 
@@ -1187,7 +1187,7 @@ mod test {
             fee_rate,
             target_amount,
             &drain_script,
-            &mut thread_rng(),
+            &mut rng,
         );
 
         assert!(
@@ -1258,7 +1258,7 @@ mod test {
                 fee_rate,
                 target_amount,
                 &drain_script,
-                &mut thread_rng(),
+                &mut rng(),
             )
             .unwrap();
 
@@ -1279,7 +1279,7 @@ mod test {
             FeeRate::from_sat_per_vb_unchecked(1),
             target_amount,
             &drain_script,
-            &mut thread_rng(),
+            &mut rng(),
         );
 
         assert!(matches!(result, Err(InsufficientFunds { .. })));
@@ -1297,7 +1297,7 @@ mod test {
             FeeRate::from_sat_per_vb_unchecked(1000),
             target_amount,
             &drain_script,
-            &mut thread_rng(),
+            &mut rng(),
         );
         assert!(matches!(result, Err(InsufficientFunds { .. })));
     }
@@ -1317,7 +1317,7 @@ mod test {
                 fee_rate,
                 target_amount,
                 &drain_script,
-                &mut thread_rng(),
+                &mut rng(),
             )
             .unwrap();
 
@@ -1346,7 +1346,7 @@ mod test {
                     FeeRate::ZERO,
                     target_amount,
                     &drain_script,
-                    &mut thread_rng(),
+                    &mut rng,
                 )
                 .unwrap();
             assert_eq!(result.selected_amount(), target_amount);
@@ -1515,7 +1515,7 @@ mod test {
             FeeRate::from_sat_per_vb_unchecked(10),
             Amount::from_sat(500_000),
             &drain_script,
-            &mut thread_rng(),
+            &mut rng(),
         );
 
         assert_matches!(
@@ -1542,7 +1542,7 @@ mod test {
             FeeRate::from_sat_per_vb_unchecked(10),
             Amount::from_sat(500_000),
             &drain_script,
-            &mut thread_rng(),
+            &mut rng(),
         );
 
         assert_matches!(
@@ -1565,7 +1565,7 @@ mod test {
             FeeRate::from_sat_per_vb_unchecked(10_000),
             Amount::from_sat(500_000),
             &drain_script,
-            &mut thread_rng(),
+            &mut rng(),
         );
 
         assert_matches!(
@@ -1595,7 +1595,7 @@ mod test {
                 feerate,
                 target_amount,
                 &drain_script,
-                &mut thread_rng(),
+                &mut rng(),
             )
             .unwrap();
         assert_eq!(res.selected_amount(), Amount::from_sat(200_000));
@@ -1652,7 +1652,7 @@ mod test {
                         fee_rate,
                         target_amount,
                         &drain_script,
-                        &mut thread_rng(),
+                        &mut rng(),
                     )
                 }
                 CoinSelectionAlgo::OldestFirst => OldestFirstCoinSelection.coin_select(
@@ -1661,7 +1661,7 @@ mod test {
                     fee_rate,
                     target_amount,
                     &drain_script,
-                    &mut thread_rng(),
+                    &mut rng(),
                 ),
                 CoinSelectionAlgo::LargestFirst => LargestFirstCoinSelection.coin_select(
                     vec![],
@@ -1669,7 +1669,7 @@ mod test {
                     fee_rate,
                     target_amount,
                     &drain_script,
-                    &mut thread_rng(),
+                    &mut rng(),
                 ),
             };
 
