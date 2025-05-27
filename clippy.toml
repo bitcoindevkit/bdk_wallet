@@ -1,1 +1,4 @@
-msrv="1.63.0"
+# TODO fix, see: https://rust-lang.github.io/rust-clippy/master/index.html#large_enum_variant
+enum-variant-size-threshold = 1000
+# TODO fix, see: https://rust-lang.github.io/rust-clippy/master/index.html#result_large_err
+large-error-threshold = 1000
