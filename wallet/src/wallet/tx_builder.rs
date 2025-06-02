@@ -52,7 +52,7 @@ use rand_core::RngCore;
 use super::coin_selection::CoinSelectionAlgorithm;
 use super::utils::shuffle_slice;
 use super::{CreateTxError, Wallet};
-use crate::collections::{BTreeMap, HashMap, HashSet};
+use crate::collections::{BTreeMap, HashSet};
 use crate::{KeychainKind, LocalOutput, Utxo, WeightedUtxo};
 
 /// A transaction builder
@@ -126,7 +126,7 @@ pub(crate) struct TxParams {
     pub(crate) fee_policy: Option<FeePolicy>,
     pub(crate) internal_policy_path: Option<BTreeMap<String, Vec<usize>>>,
     pub(crate) external_policy_path: Option<BTreeMap<String, Vec<usize>>>,
-    pub(crate) utxos: HashMap<OutPoint, WeightedUtxo>,
+    pub(crate) utxos: indexmap::IndexMap<OutPoint, WeightedUtxo>,
     pub(crate) unspendable: HashSet<OutPoint>,
     pub(crate) manually_selected_only: bool,
     pub(crate) sighash: Option<psbt::PsbtSighashType>,
@@ -297,7 +297,7 @@ impl<'a, Cs> TxBuilder<'a, Cs> {
                         )
                     })
             })
-            .collect::<Result<HashMap<OutPoint, WeightedUtxo>, AddUtxoError>>()?;
+            .collect::<Result<indexmap::IndexMap<OutPoint, WeightedUtxo>, AddUtxoError>>()?;
         self.params.utxos.extend(utxo_batch);
 
         Ok(self)
