@@ -281,7 +281,7 @@ impl<'a, Cs> TxBuilder<'a, Cs> {
             .iter()
             .map(|outpoint| {
                 self.wallet
-                    .get_utxo(*outpoint)
+                    .get_utxo_include_unbroadcasted(*outpoint)
                     .ok_or(AddUtxoError::UnknownUtxo(*outpoint))
                     .map(|output| {
                         (
@@ -1029,6 +1029,7 @@ mod test {
                     last_seen: Some(1),
                 },
                 derivation_index: 0,
+                needs_broadcast: false,
             },
             LocalOutput {
                 outpoint: OutPoint {
@@ -1049,6 +1050,7 @@ mod test {
                     transitively: None,
                 },
                 derivation_index: 1,
+                needs_broadcast: false,
             },
         ]
     }

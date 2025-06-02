@@ -73,6 +73,8 @@ pub struct LocalOutput {
     pub derivation_index: u32,
     /// The position of the output in the blockchain.
     pub chain_position: ChainPosition<ConfirmationBlockTime>,
+    /// Whether this output exists in a transaction that is yet to be broadcasted.
+    pub needs_broadcast: bool,
 }
 
 /// A [`Utxo`] with its `satisfaction_weight`.

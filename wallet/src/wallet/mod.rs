@@ -22,7 +22,6 @@ use alloc::{
 use core::{cmp::Ordering, fmt, mem, ops::Deref};
 
 use bdk_chain::{
-    indexed_tx_graph,
     indexer::keychain_txout::KeychainTxOutIndex,
     local_chain::{ApplyHeaderError, CannotConnectError, CheckPoint, CheckPointIter, LocalChain},
     spk_client::{
@@ -49,6 +48,7 @@ use miniscript::{
 };
 use rand_core::RngCore;
 
+pub mod broadcast_queue;
 mod changeset;
 pub mod coin_selection;
 pub mod error;
@@ -77,6 +77,7 @@ use crate::wallet::{
 
 // re-exports
 pub use bdk_chain::Balance;
+pub use broadcast_queue::BroadcastQueue;
 pub use changeset::ChangeSet;
 pub use params::*;
 pub use persisted::*;
@@ -106,6 +107,7 @@ pub struct Wallet {
     change_signers: Arc<SignersContainer>,
     chain: LocalChain,
     indexed_graph: IndexedTxGraph<ConfirmationBlockTime, KeychainTxOutIndex<KeychainKind>>,
+    broadcast_queue: BroadcastQueue,
     stage: ChangeSet,
     network: Network,
     secp: SecpCtx,
@@ -450,12 +452,16 @@ impl Wallet {
         let indexed_graph = IndexedTxGraph::new(index);
         let indexed_graph_changeset = indexed_graph.initial_changeset();
 
+        let broadcast_queue = BroadcastQueue::default();
+        let broadcast_queue_changeset = broadcast_queue.initial_changeset();
+
         let stage = ChangeSet {
             descriptor,
             change_descriptor,
             local_chain: chain_changeset,
             tx_graph: indexed_graph_changeset.tx_graph,
             indexer: indexed_graph_changeset.indexer,
+            broadcast_queue: broadcast_queue_changeset,
             network: Some(network),
         };
 
@@ -465,6 +471,7 @@ impl Wallet {
             network,
             chain,
             indexed_graph,
+            broadcast_queue,
             stage,
             secp,
         })
@@ -654,6 +661,8 @@ impl Wallet {
         indexed_graph.apply_changeset(changeset.indexer.into());
         indexed_graph.apply_changeset(changeset.tx_graph.into());
 
+        let broadcast_queue = BroadcastQueue::from_changeset(changeset.broadcast_queue);
+
         let stage = ChangeSet::default();
 
         Ok(Some(Wallet {
@@ -661,6 +670,7 @@ impl Wallet {
             change_signers,
             chain,
             indexed_graph,
+            broadcast_queue,
             stage,
             network,
             secp,
@@ -733,14 +743,14 @@ impl Wallet {
     /// ```
     pub fn reveal_next_address(&mut self, keychain: KeychainKind) -> AddressInfo {
         let keychain = self.map_keychain(keychain);
-        let index = &mut self.indexed_graph.index;
-        let stage = &mut self.stage;
 
-        let ((index, spk), index_changeset) = index
+        let ((index, spk), index_changeset) = self
+            .indexed_graph
+            .index
             .reveal_next_spk(keychain)
             .expect("keychain must exist");
 
-        stage.merge(index_changeset.into());
+        self.stage_changes(index_changeset);
 
         AddressInfo {
             index,
@@ -771,7 +781,7 @@ impl Wallet {
             .reveal_to_target(keychain, index)
             .expect("keychain must exist");
 
-        self.stage.merge(index_changeset.into());
+        self.stage_changes(index_changeset);
 
         spks.into_iter().map(move |(index, spk)| AddressInfo {
             index,
@@ -797,8 +807,7 @@ impl Wallet {
             .next_unused_spk(keychain)
             .expect("keychain must exist");
 
-        self.stage
-            .merge(indexed_tx_graph::ChangeSet::from(index_changeset).into());
+        self.stage_changes(index_changeset);
 
         AddressInfo {
             index,
@@ -859,17 +868,32 @@ impl Wallet {
         self.indexed_graph.index.index_of_spk(spk).cloned()
     }
 
-    /// Return the list of unspent outputs of this wallet
+    /// Return the list of unspent outputs of this wallet.
     pub fn list_unspent(&self) -> impl Iterator<Item = LocalOutput> + '_ {
+        self._list_unspent(CanonicalizationParams::default())
+    }
+
+    /// List unspent outputs (UTXOs) of this wallet assuming that unbroadcasted transactions are
+    /// canonical.
+    ///
+    /// TODO: Better docs here.
+    pub fn list_unspent_with_unbroadcasted(&self) -> impl Iterator<Item = LocalOutput> + '_ {
+        self._list_unspent(self.include_unbroadcasted_canonicalization_params())
+    }
+
+    fn _list_unspent(
+        &self,
+        params: CanonicalizationParams,
+    ) -> impl Iterator<Item = LocalOutput> + '_ {
         self.indexed_graph
             .graph()
             .filter_chain_unspents(
                 &self.chain,
                 self.chain.tip().block_id(),
-                CanonicalizationParams::default(),
+                params,
                 self.indexed_graph.index.outpoints().iter().cloned(),
             )
-            .map(|((k, i), full_txo)| new_local_utxo(k, i, full_txo))
+            .map(|((k, i), full_txo)| new_local_utxo(&self.broadcast_queue, k, i, full_txo))
     }
 
     /// Get the [`TxDetails`] of a wallet transaction.
@@ -911,7 +935,7 @@ impl Wallet {
                 CanonicalizationParams::default(),
                 self.indexed_graph.index.outpoints().iter().cloned(),
             )
-            .map(|((k, i), full_txo)| new_local_utxo(k, i, full_txo))
+            .map(|((k, i), full_txo)| new_local_utxo(&self.broadcast_queue, k, i, full_txo))
     }
 
     /// Get all the checkpoints the wallet is currently storing indexed by height.
@@ -955,17 +979,29 @@ impl Wallet {
 
     /// Returns the utxo owned by this wallet corresponding to `outpoint` if it exists in the
     /// wallet's database.
-    pub fn get_utxo(&self, op: OutPoint) -> Option<LocalOutput> {
+    pub fn get_utxo(&self, outpoint: OutPoint) -> Option<LocalOutput> {
+        self._get_utxo(CanonicalizationParams::default(), outpoint)
+    }
+
+    /// Returns the utxo owned by this wallet corresponding to `outpoint`.
+    pub fn get_utxo_include_unbroadcasted(&self, outpoint: OutPoint) -> Option<LocalOutput> {
+        self._get_utxo(
+            self.include_unbroadcasted_canonicalization_params(),
+            outpoint,
+        )
+    }
+
+    fn _get_utxo(&self, params: CanonicalizationParams, op: OutPoint) -> Option<LocalOutput> {
         let ((keychain, index), _) = self.indexed_graph.index.txout(op)?;
         self.indexed_graph
             .graph()
             .filter_chain_unspents(
                 &self.chain,
                 self.chain.tip().block_id(),
-                CanonicalizationParams::default(),
+                params,
                 core::iter::once(((), op)),
             )
-            .map(|(_, full_txo)| new_local_utxo(keychain, index, full_txo))
+            .map(|(_, full_txo)| new_local_utxo(&self.broadcast_queue, keychain, index, full_txo))
             .next()
     }
 
@@ -988,7 +1024,7 @@ impl Wallet {
     /// [`list_output`]: Self::list_output
     pub fn insert_txout(&mut self, outpoint: OutPoint, txout: TxOut) {
         let additions = self.indexed_graph.insert_txout(outpoint, txout);
-        self.stage.merge(additions.into());
+        self.stage_changes(additions);
     }
 
     /// Calculates the fee of a given transaction. Returns [`Amount::ZERO`] if `tx` is a coinbase
@@ -1149,9 +1185,13 @@ impl Wallet {
 
     /// Iterate over relevant and canonical transactions in the wallet.
     ///
-    /// A transaction is relevant when it spends from or spends to at least one tracked output. A
-    /// transaction is canonical when it is confirmed in the best chain, or does not conflict
-    /// with any transaction confirmed in the best chain.
+    /// A transaction is relevant when it spends from or spends to at least one tracked output.
+    ///
+    /// A transaction is canonical when either:
+    /// * It is confirmed in the best chain and does not conflict with a transaction in the
+    ///   broadcast queue.
+    /// * It seen in the mempool, is not evicted and does not conflict with a transaction that is
+    ///   confirmed or seen later in the mempool.
     ///
     /// To iterate over all transactions, including those that are irrelevant and not canonical, use
     /// [`TxGraph::full_txs`].
@@ -1198,10 +1238,19 @@ impl Wallet {
     /// Return the balance, separated into available, trusted-pending, untrusted-pending and
     /// immature values.
     pub fn balance(&self) -> Balance {
+        self._balance(CanonicalizationParams::default())
+    }
+
+    /// Return the balance that includes unbroadcasted transactions.
+    pub fn balance_with_unbroadcasted(&self) -> Balance {
+        self._balance(self.include_unbroadcasted_canonicalization_params())
+    }
+
+    fn _balance(&self, params: CanonicalizationParams) -> Balance {
         self.indexed_graph.graph().balance(
             &self.chain,
             self.chain.tip().block_id(),
-            CanonicalizationParams::default(),
+            params,
             self.indexed_graph.index.outpoints().iter().cloned(),
             |&(k, _), _| k == KeychainKind::Internal,
         )
@@ -1624,7 +1673,7 @@ impl Wallet {
             if let Some((_, index_changeset)) =
                 self.indexed_graph.index.reveal_to_target(keychain, index)
             {
-                self.stage.merge(index_changeset.into());
+                self.stage_changes(index_changeset);
                 self.mark_used(keychain, index);
             }
         }
@@ -1681,7 +1730,11 @@ impl Wallet {
         let txout_index = &self.indexed_graph.index;
         let chain_tip = self.chain.tip().block_id();
         let chain_positions = graph
-            .list_canonical_txs(&self.chain, chain_tip, CanonicalizationParams::default())
+            .list_canonical_txs(
+                &self.chain,
+                chain_tip,
+                self.include_unbroadcasted_canonicalization_params(),
+            )
             .map(|canon_tx| (canon_tx.tx_node.txid, canon_tx.chain_position))
             .collect::<HashMap<Txid, _>>();
 
@@ -1754,6 +1807,9 @@ impl Wallet {
                                         is_spent: true,
                                         derivation_index,
                                         chain_position,
+                                        needs_broadcast: self
+                                            .broadcast_queue
+                                            .contains(txin.previous_output.txid),
                                     }),
                                 },
                             ),
@@ -1954,7 +2010,11 @@ impl Wallet {
         let confirmation_heights = self
             .indexed_graph
             .graph()
-            .list_canonical_txs(&self.chain, chain_tip, CanonicalizationParams::default())
+            .list_canonical_txs(
+                &self.chain,
+                chain_tip,
+                self.include_unbroadcasted_canonicalization_params(),
+            )
             .filter(|canon_tx| prev_txids.contains(&canon_tx.tx_node.txid))
             // This is for a small performance gain. Although `.filter` filters out excess txs, it
             // will still consume the internal `CanonicalIter` entirely. Having a `.take` here
@@ -2107,14 +2167,14 @@ impl Wallet {
                 .filter_chain_unspents(
                     &self.chain,
                     self.chain.tip().block_id(),
-                    CanonicalizationParams::default(),
+                    self.include_unbroadcasted_canonicalization_params(),
                     self.indexed_graph.index.outpoints().iter().cloned(),
                 )
                 // only create LocalOutput if UTxO is mature
                 .filter_map(move |((k, i), full_txo)| {
                     full_txo
                         .is_mature(current_height)
-                        .then(|| new_local_utxo(k, i, full_txo))
+                        .then(|| new_local_utxo(&self.broadcast_queue, k, i, full_txo))
                 })
                 // only process UTxOs not selected manually, they will be considered later in the
                 // chain NOTE: this avoid UTxOs in both required and optional list
@@ -2335,7 +2395,7 @@ impl Wallet {
             .reveal_to_target_multi(&update.last_active_indices);
         changeset.merge(index_changeset.into());
         changeset.merge(self.indexed_graph.apply_update(update.tx_update).into());
-        self.stage.merge(changeset);
+        self.stage_changes(changeset);
         Ok(())
     }
 
@@ -2431,7 +2491,7 @@ impl Wallet {
                 .apply_block_relevant(block, height)
                 .into(),
         );
-        self.stage.merge(changeset);
+        self.stage_changes(changeset);
         Ok(())
     }
 
@@ -2454,7 +2514,7 @@ impl Wallet {
         let indexed_graph_changeset = self
             .indexed_graph
             .batch_insert_relevant_unconfirmed(unconfirmed_txs);
-        self.stage.merge(indexed_graph_changeset.into());
+        self.stage_changes(indexed_graph_changeset);
     }
 
     /// Apply evictions of the given txids with their associated timestamps.
@@ -2472,7 +2532,7 @@ impl Wallet {
             .list_canonical_txs(
                 chain,
                 chain.tip().block_id(),
-                CanonicalizationParams::default(),
+                self.include_unbroadcasted_canonicalization_params(),
             )
             .map(|c| c.tx_node.txid)
             .collect();
@@ -2496,6 +2556,121 @@ impl Wallet {
         } else {
             keychain
         }
+    }
+}
+
+/// Methods to interact with the broadcast queue.
+impl Wallet {
+    pub(crate) fn stage_changes<C: Into<ChangeSet>>(&mut self, changeset: C) {
+        let changeset: ChangeSet = changeset.into();
+        if !changeset.tx_graph.is_empty() {
+            self.stage.merge(
+                self.broadcast_queue
+                    .filter_from_graph_changeset(&changeset.tx_graph)
+                    .into(),
+            );
+        }
+        self.stage.merge(changeset);
+    }
+
+    /// [`CanonicalizationParams`] which includes transactions in the broadcast queue.
+    pub fn include_unbroadcasted_canonicalization_params(&self) -> CanonicalizationParams {
+        CanonicalizationParams {
+            assume_canonical: self.broadcast_queue.txids().collect(),
+        }
+    }
+
+    /// Add a transaction to the broadcast queue transaction for broadcast.
+    ///
+    /// Unsigned transactions can be inserted and later reinserted when signed.
+    ///
+    /// Conflicts of the inserted transaction will be removed from the broadcast queue.
+    pub fn add_tx_to_broadcast_queue<T: Into<Arc<Transaction>>>(&mut self, tx: T) {
+        let tx: Arc<Transaction> = tx.into();
+        let txid = tx.compute_txid();
+
+        self.stage.merge(self.indexed_graph.insert_tx(tx).into());
+
+        // TODO: Figure out whether we should displace conflicting txs in the queue on insertion.
+        // let queue_changeset = self.broadcast_queue.push(txid);
+        let queue_changeset = self
+            .broadcast_queue
+            .push_and_displace_conflicts(self.indexed_graph.graph(), txid);
+
+        self.stage.merge(queue_changeset.into());
+    }
+
+    /// Remove transaction from the broadcast queue.
+    ///
+    /// This will also remove all descendants of this transaction in the broadcast queue.
+    ///
+    /// Returns `true` if the transaction is successfully removed.
+    pub fn remove_tx_from_broadcast_queue(&mut self, txid: Txid) -> bool {
+        // // TODO: Figure out whether we should displace descendants of removed txs as well.
+        let queue_changeset = self
+            .broadcast_queue
+            .remove_and_displace_dependants(self.indexed_graph.graph(), txid);
+        // let queue_changeset = self.broadcast_queue.remove(txid);
+        let is_removed = !queue_changeset.is_empty();
+        self.stage.merge(queue_changeset.into());
+        is_removed
+    }
+
+    /// Broadcast queue.
+    ///
+    /// Elements are in broadcast order.
+    pub fn broadcast_queue(&self) -> impl Iterator<Item = Arc<Transaction>> + '_ {
+        self.broadcast_queue.txids().filter_map(|txid| {
+            let tx_opt = self.indexed_graph.graph().get_tx(txid);
+            debug_assert!(
+                tx_opt.is_some(),
+                "A txid in the broadcast queue must exist in the graph"
+            );
+            tx_opt
+        })
+    }
+
+    /// Number of transactions in the broadcast queue.
+    pub fn broadcast_queue_len(&self) -> usize {
+        self.broadcast_queue.txids().len()
+    }
+
+    /// Mark a transaction as successfully broadcasted.
+    pub fn mark_tx_as_broadcasted_at(&mut self, txid: Txid, at: u64) {
+        let mut update = TxUpdate::default();
+        update.seen_ats.insert((txid, at));
+        let changeset = self.indexed_graph.apply_update(update);
+        self.stage_changes(changeset);
+    }
+
+    /// Get `tx` descendants that are in the broadcast queue.
+    ///
+    /// This can be used to check which transactions will no longer be broadcastable if `tx` is
+    /// becomes unavailable.
+    pub fn descendants_in_broadcast_queue(
+        &self,
+        tx: &Transaction,
+    ) -> impl Iterator<Item = Arc<Transaction>> + '_ {
+        self.indexed_graph
+            .graph()
+            .walk_descendants(tx.compute_txid(), |_, txid| Some(txid))
+            .filter(|&txid| self.broadcast_queue.contains(txid))
+            .filter_map(|txid| self.indexed_graph.graph().get_tx(txid))
+    }
+
+    /// Get `tx` conflicts that are in the broadcast queue.
+    ///
+    /// This can be used to check which transactions will be removed from the broadcast queue if
+    /// `tx` is inserted.
+    pub fn conflicts_in_broadcast_queue<'t>(
+        &'t self,
+        tx: &'t Transaction,
+    ) -> impl Iterator<Item = Arc<Transaction>> + 't {
+        self.indexed_graph
+            .graph()
+            .walk_conflicts(tx, |_, txid| Some(txid))
+            .filter(|&txid| self.broadcast_queue.contains(txid))
+            .filter_map(|txid| self.indexed_graph.graph().get_tx(txid))
     }
 }
 
@@ -2610,6 +2785,7 @@ where
 }
 
 fn new_local_utxo(
+    broadcast_queue: &BroadcastQueue,
     keychain: KeychainKind,
     derivation_index: u32,
     full_txo: FullTxOut<ConfirmationBlockTime>,
@@ -2621,6 +2797,7 @@ fn new_local_utxo(
         chain_position: full_txo.chain_position,
         keychain,
         derivation_index,
+        needs_broadcast: broadcast_queue.contains(full_txo.outpoint.txid),
     }
 }
 
