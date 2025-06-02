@@ -1,8 +1,11 @@
 use bdk_chain::{
     indexed_tx_graph, keychain_txout, local_chain, tx_graph, ConfirmationBlockTime, Merge,
 };
+use bitcoin::Txid;
 use miniscript::{Descriptor, DescriptorPublicKey};
 use serde::{Deserialize, Serialize};
+
+use super::broadcast_queue;
 
 type IndexedTxGraphChangeSet =
     indexed_tx_graph::ChangeSet<ConfirmationBlockTime, keychain_txout::ChangeSet>;
@@ -114,6 +117,9 @@ pub struct ChangeSet {
     pub tx_graph: tx_graph::ChangeSet<ConfirmationBlockTime>,
     /// Changes to [`KeychainTxOutIndex`](keychain_txout::KeychainTxOutIndex).
     pub indexer: keychain_txout::ChangeSet,
+    /// Changes to [`BroadcastQueue`](broadcast_queue::BroadcastQueue).
+    #[serde(default)]
+    pub broadcast_queue: broadcast_queue::ChangeSet,
 }
 
 impl Merge for ChangeSet {
@@ -145,6 +151,7 @@ impl Merge for ChangeSet {
         Merge::merge(&mut self.local_chain, other.local_chain);
         Merge::merge(&mut self.tx_graph, other.tx_graph);
         Merge::merge(&mut self.indexer, other.indexer);
+        Merge::merge(&mut self.broadcast_queue, other.broadcast_queue);
     }
 
     fn is_empty(&self) -> bool {
@@ -154,6 +161,7 @@ impl Merge for ChangeSet {
             && self.local_chain.is_empty()
             && self.tx_graph.is_empty()
             && self.indexer.is_empty()
+            && self.broadcast_queue.is_empty()
     }
 }
 
@@ -163,6 +171,8 @@ impl ChangeSet {
     pub const WALLET_SCHEMA_NAME: &'static str = "bdk_wallet";
     /// Name of table to store wallet descriptors and network.
     pub const WALLET_TABLE_NAME: &'static str = "bdk_wallet";
+    /// Name of table to store broadcast queue txids.
+    pub const WALLET_BROADCAST_QUEUE_TABLE_NAME: &'static str = "bdk_wallet_broadcast_queue";
 
     /// Get v0 sqlite [ChangeSet] schema
     pub fn schema_v0() -> alloc::string::String {
@@ -177,12 +187,23 @@ impl ChangeSet {
         )
     }
 
+    /// Get v1 sqlite [`ChangeSet`] schema.
+    pub fn schema_v1() -> alloc::string::String {
+        format!(
+            "CREATE TABLE {} ( \
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            txid TEXT NOT NULL UNIQUE \
+            ) STRICT;",
+            Self::WALLET_BROADCAST_QUEUE_TABLE_NAME,
+        )
+    }
+
     /// Initialize sqlite tables for wallet tables.
     pub fn init_sqlite_tables(db_tx: &chain::rusqlite::Transaction) -> chain::rusqlite::Result<()> {
         crate::rusqlite_impl::migrate_schema(
             db_tx,
             Self::WALLET_SCHEMA_NAME,
-            &[&Self::schema_v0()],
+            &[&Self::schema_v0(), &Self::schema_v1()],
         )?;
 
         bdk_chain::local_chain::ChangeSet::init_sqlite_tables(db_tx)?;
@@ -218,6 +239,19 @@ impl ChangeSet {
             changeset.descriptor = desc.map(Impl::into_inner);
             changeset.change_descriptor = change_desc.map(Impl::into_inner);
             changeset.network = network.map(Impl::into_inner);
+        }
+
+        let mut queue_statement = db_tx.prepare(&format!(
+            "SELECT txid FROM {} ORDER BY id ASC",
+            Self::WALLET_BROADCAST_QUEUE_TABLE_NAME
+        ))?;
+        let row_iter = queue_statement.query_map([], |row| row.get::<_, Impl<Txid>>("txid"))?;
+        for row in row_iter {
+            let Impl(txid) = row?;
+            changeset
+                .broadcast_queue
+                .mutations
+                .push(broadcast_queue::Mutation::Push(txid));
         }
 
         changeset.local_chain = local_chain::ChangeSet::from_sqlite(db_tx)?;
@@ -268,6 +302,25 @@ impl ChangeSet {
             })?;
         }
 
+        let mut queue_insert_statement = db_tx.prepare_cached(&format!(
+            "INSERT OR IGNORE INTO {}(txid) VALUES(:txid)",
+            Self::WALLET_BROADCAST_QUEUE_TABLE_NAME
+        ))?;
+        let mut queue_remove_statement = db_tx.prepare_cached(&format!(
+            "DELETE FROM {} WHERE txid=:txid",
+            Self::WALLET_BROADCAST_QUEUE_TABLE_NAME
+        ))?;
+        for mutation in &self.broadcast_queue.mutations {
+            match mutation {
+                broadcast_queue::Mutation::Push(txid) => {
+                    queue_insert_statement.execute(named_params! { ":txid": Impl(*txid) })?;
+                }
+                broadcast_queue::Mutation::Remove(txid) => {
+                    queue_remove_statement.execute(named_params! { ":txid": Impl(*txid) })?;
+                }
+            }
+        }
+
         self.local_chain.persist_to_sqlite(db_tx)?;
         self.tx_graph.persist_to_sqlite(db_tx)?;
         self.indexer.persist_to_sqlite(db_tx)?;
@@ -307,6 +360,15 @@ impl From<keychain_txout::ChangeSet> for ChangeSet {
     fn from(indexer: keychain_txout::ChangeSet) -> Self {
         Self {
             indexer,
+            ..Default::default()
+        }
+    }
+}
+
+impl From<broadcast_queue::ChangeSet> for ChangeSet {
+    fn from(broadcast_queue: broadcast_queue::ChangeSet) -> Self {
+        Self {
+            broadcast_queue,
             ..Default::default()
         }
     }

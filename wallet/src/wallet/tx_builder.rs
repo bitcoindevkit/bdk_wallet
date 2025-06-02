@@ -52,7 +52,7 @@ use rand_core::RngCore;
 use super::coin_selection::CoinSelectionAlgorithm;
 use super::utils::shuffle_slice;
 use super::{CreateTxError, Wallet};
-use crate::collections::{BTreeMap, HashMap, HashSet};
+use crate::collections::{BTreeMap, HashSet};
 use crate::{KeychainKind, LocalOutput, Utxo, WeightedUtxo};
 
 /// A transaction builder
@@ -279,13 +279,6 @@ impl<'a, Cs> TxBuilder<'a, Cs> {
     ///
     /// If a UTXO is inserted multiple times, only the final insertion will take effect.
     pub fn add_utxos(&mut self, outpoints: &[OutPoint]) -> Result<&mut Self, AddUtxoError> {
-        // Canonicalize once, instead of once for every call to `get_utxo`.
-        let unspent: HashMap<OutPoint, LocalOutput> = self
-            .wallet
-            .list_unspent()
-            .map(|output| (output.outpoint, output))
-            .collect();
-
         // Ensure that only unique outpoints are added, but keep insertion order.
         let mut visited = <HashSet<OutPoint>>::new();
 
@@ -293,9 +286,9 @@ impl<'a, Cs> TxBuilder<'a, Cs> {
             .iter()
             .filter(|&&op| visited.insert(op))
             .map(|&op| -> Result<_, AddUtxoError> {
-                let output = unspent
-                    .get(&op)
-                    .cloned()
+                let output = self
+                    .wallet
+                    .get_utxo_include_unbroadcasted(op)
                     .ok_or(AddUtxoError::UnknownUtxo(op))?;
                 Ok(WeightedUtxo {
                     satisfaction_weight: self
@@ -1106,6 +1099,7 @@ mod test {
                     last_seen: Some(1),
                 },
                 derivation_index: 0,
+                needs_broadcast: false,
             },
             LocalOutput {
                 outpoint: OutPoint {
@@ -1126,6 +1120,7 @@ mod test {
                     transitively: None,
                 },
                 derivation_index: 1,
+                needs_broadcast: false,
             },
         ]
     }
