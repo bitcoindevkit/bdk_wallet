@@ -689,6 +689,15 @@ impl SignersContainer {
 
         container
     }
+
+    /// Extends this container with all signers from another container.
+    /// If a signer with the same key (id and ordering) exists in both containers,
+    /// the one from the other container will overwrite the existing one.
+    pub fn extend(&mut self, other: &SignersContainer) {
+        for (key, signer) in other.0.iter() {
+            self.0.insert(key.clone(), signer.clone());
+        }
+    }
 }
 
 impl SignersContainer {

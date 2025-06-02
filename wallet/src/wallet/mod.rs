@@ -103,7 +103,6 @@ pub use utils::TxDetails;
 #[derive(Debug)]
 pub struct Wallet {
     signers: Arc<SignersContainer>,
-    change_signers: Arc<SignersContainer>,
     chain: LocalChain,
     indexed_graph: IndexedTxGraph<ConfirmationBlockTime, KeychainTxOutIndex<KeychainKind>>,
     stage: ChangeSet,
@@ -417,25 +416,21 @@ impl Wallet {
         check_wallet_descriptor(&descriptor)?;
         descriptor_keymap.extend(params.descriptor_keymap);
 
-        let signers = Arc::new(SignersContainer::build(
-            descriptor_keymap,
-            &descriptor,
-            &secp,
-        ));
+        let mut signers = SignersContainer::build(descriptor_keymap, &descriptor, &secp);
 
-        let (change_descriptor, change_signers) = match params.change_descriptor {
+        let change_descriptor = match params.change_descriptor {
             Some(make_desc) => {
                 let (change_descriptor, mut internal_keymap) = make_desc(&secp, network)?;
                 check_wallet_descriptor(&change_descriptor)?;
                 internal_keymap.extend(params.change_descriptor_keymap);
-                let change_signers = Arc::new(SignersContainer::build(
-                    internal_keymap,
-                    &change_descriptor,
-                    &secp,
-                ));
-                (Some(change_descriptor), change_signers)
+
+                let change_signers =
+                    SignersContainer::build(internal_keymap, &change_descriptor, &secp);
+                signers.extend(&change_signers);
+
+                Some(change_descriptor)
             }
-            None => (None, Arc::new(SignersContainer::new())),
+            None => None,
         };
 
         let index = create_indexer(
@@ -460,8 +455,7 @@ impl Wallet {
         };
 
         Ok(Wallet {
-            signers,
-            change_signers,
+            signers: Arc::new(signers),
             network,
             chain,
             indexed_graph,
@@ -580,7 +574,7 @@ impl Wallet {
                 }));
             }
         }
-        let signers = Arc::new(SignersContainer::build(external_keymap, &descriptor, &secp));
+        let mut signers = SignersContainer::build(external_keymap, &descriptor, &secp);
 
         let mut change_descriptor = None;
         let mut internal_keymap = params.change_descriptor_keymap;
@@ -634,13 +628,13 @@ impl Wallet {
         }
 
         let change_signers = match change_descriptor {
-            Some(ref change_descriptor) => Arc::new(SignersContainer::build(
-                internal_keymap,
-                change_descriptor,
-                &secp,
-            )),
-            None => Arc::new(SignersContainer::new()),
+            Some(ref change_descriptor) => {
+                SignersContainer::build(internal_keymap, change_descriptor, &secp)
+            }
+            None => SignersContainer::new(),
         };
+
+        signers.extend(&change_signers);
 
         let index = create_indexer(
             descriptor,
@@ -657,8 +651,7 @@ impl Wallet {
         let stage = ChangeSet::default();
 
         Ok(Some(Wallet {
-            signers,
-            change_signers,
+            signers: Arc::new(signers),
             chain,
             indexed_graph,
             stage,
@@ -1210,17 +1203,8 @@ impl Wallet {
     /// Add an external signer
     ///
     /// See [the `signer` module](signer) for an example.
-    pub fn add_signer(
-        &mut self,
-        keychain: KeychainKind,
-        ordering: SignerOrdering,
-        signer: Arc<dyn TransactionSigner>,
-    ) {
-        let signers = match keychain {
-            KeychainKind::External => Arc::make_mut(&mut self.signers),
-            KeychainKind::Internal => Arc::make_mut(&mut self.change_signers),
-        };
-
+    pub fn add_signer(&mut self, ordering: SignerOrdering, signer: Arc<dyn TransactionSigner>) {
+        let signers = Arc::make_mut(&mut self.signers);
         signers.add_external(signer.id(&self.secp), ordering, signer);
     }
 
@@ -1229,10 +1213,7 @@ impl Wallet {
     /// Note this does nothing if the given keychain has no descriptor because we won't
     /// know the context (segwit, taproot, etc) in which to create signatures.
     pub fn set_keymap(&mut self, keychain: KeychainKind, keymap: KeyMap) {
-        let wallet_signers = match keychain {
-            KeychainKind::External => Arc::make_mut(&mut self.signers),
-            KeychainKind::Internal => Arc::make_mut(&mut self.change_signers),
-        };
+        let wallet_signers = Arc::make_mut(&mut self.signers);
         if let Some(descriptor) = self.indexed_graph.index.get_descriptor(keychain) {
             *wallet_signers = SignersContainer::build(keymap, descriptor, &self.secp)
         }
@@ -1250,25 +1231,22 @@ impl Wallet {
     /// ## Example
     ///
     /// ```
-    /// # use bdk_wallet::{Wallet, KeychainKind};
+    /// # use bdk_wallet::{Wallet};
     /// # use bdk_wallet::bitcoin::Network;
     /// let descriptor = "wpkh(tprv8ZgxMBicQKsPe73PBRSmNbTfbcsZnwWhz5eVmhHpi31HW29Z7mc9B4cWGRQzopNUzZUT391DeDJxL2PefNunWyLgqCKRMDkU1s2s8bAfoSk/84'/1'/0'/0/*)";
     /// let change_descriptor = "wpkh(tprv8ZgxMBicQKsPe73PBRSmNbTfbcsZnwWhz5eVmhHpi31HW29Z7mc9B4cWGRQzopNUzZUT391DeDJxL2PefNunWyLgqCKRMDkU1s2s8bAfoSk/84'/1'/0'/1/*)";
     /// let wallet = Wallet::create(descriptor, change_descriptor)
     ///     .network(Network::Testnet)
     ///     .create_wallet_no_persist()?;
-    /// for secret_key in wallet.get_signers(KeychainKind::External).signers().iter().filter_map(|s| s.descriptor_secret_key()) {
+    /// for secret_key in wallet.get_signers().signers().iter().filter_map(|s| s.descriptor_secret_key()) {
     ///     // secret_key: tprv8ZgxMBicQKsPe73PBRSmNbTfbcsZnwWhz5eVmhHpi31HW29Z7mc9B4cWGRQzopNUzZUT391DeDJxL2PefNunWyLgqCKRMDkU1s2s8bAfoSk/84'/0'/0'/0/*
     ///     println!("secret_key: {}", secret_key);
     /// }
     ///
     /// Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    pub fn get_signers(&self, keychain: KeychainKind) -> Arc<SignersContainer> {
-        match keychain {
-            KeychainKind::External => Arc::clone(&self.signers),
-            KeychainKind::Internal => Arc::clone(&self.change_signers),
-        }
+    pub fn get_signers(&self) -> Arc<SignersContainer> {
+        Arc::clone(&self.signers)
     }
 
     /// Start building a transaction.
@@ -1324,7 +1302,7 @@ impl Wallet {
         let internal_policy = internal_descriptor
             .map(|desc| {
                 Ok::<_, CreateTxError>(
-                    desc.extract_policy(&self.change_signers, BuildSatisfaction::None, &self.secp)?
+                    desc.extract_policy(&self.signers, BuildSatisfaction::None, &self.secp)?
                         .unwrap(),
                 )
             })
@@ -1887,12 +1865,7 @@ impl Wallet {
             return Err(SignerError::NonStandardSighash);
         }
 
-        for signer in self
-            .signers
-            .signers()
-            .iter()
-            .chain(self.change_signers.signers().iter())
-        {
+        for signer in self.signers.signers().iter() {
             signer.sign_transaction(psbt, &sign_options, &self.secp)?;
         }
 
@@ -1906,13 +1879,8 @@ impl Wallet {
 
     /// Return the spending policies for the wallet's descriptor
     pub fn policies(&self, keychain: KeychainKind) -> Result<Option<Policy>, DescriptorError> {
-        let signers = match keychain {
-            KeychainKind::External => &self.signers,
-            KeychainKind::Internal => &self.change_signers,
-        };
-
         self.public_descriptor(keychain).extract_policy(
-            signers,
+            &self.signers,
             BuildSatisfaction::None,
             &self.secp,
         )

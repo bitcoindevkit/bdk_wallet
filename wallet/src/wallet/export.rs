@@ -119,11 +119,7 @@ impl FullyNodedExport {
     ) -> Result<Self, &'static str> {
         let descriptor = wallet
             .public_descriptor(KeychainKind::External)
-            .to_string_with_secret(
-                &wallet
-                    .get_signers(KeychainKind::External)
-                    .as_key_map(wallet.secp_ctx()),
-            );
+            .to_string_with_secret(&wallet.get_signers().as_key_map(wallet.secp_ctx()));
         let descriptor = remove_checksum(descriptor);
         Self::is_compatible_with_core(&descriptor)?;
 
@@ -147,11 +143,7 @@ impl FullyNodedExport {
         let change_descriptor = {
             let descriptor = wallet
                 .public_descriptor(KeychainKind::Internal)
-                .to_string_with_secret(
-                    &wallet
-                        .get_signers(KeychainKind::Internal)
-                        .as_key_map(wallet.secp_ctx()),
-                );
+                .to_string_with_secret(&wallet.get_signers().as_key_map(wallet.secp_ctx()));
             Some(remove_checksum(descriptor))
         };
 

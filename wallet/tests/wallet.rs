@@ -259,7 +259,7 @@ fn wallet_load_checks() -> anyhow::Result<()> {
             .expect("db should not fail")
             .expect("wallet was persisted");
         for keychain in [KeychainKind::External, KeychainKind::Internal] {
-            let keymap = wallet.get_signers(keychain).as_key_map(wallet.secp_ctx());
+            let keymap = wallet.get_signers().as_key_map(wallet.secp_ctx());
             assert!(
                 !keymap.is_empty(),
                 "load should populate keymap for keychain {keychain:?}"
@@ -368,10 +368,7 @@ fn single_descriptor_wallet_persist_and_recover() {
         .expect("must have loaded changeset");
     assert_eq!(wallet.derivation_index(KeychainKind::External), Some(2));
     // should have private key
-    assert_eq!(
-        wallet.get_signers(KeychainKind::External).as_key_map(secp),
-        keymap,
-    );
+    assert_eq!(wallet.get_signers().as_key_map(secp), keymap,);
 
     // should error on wrong internal params
     let desc = get_test_wpkh();

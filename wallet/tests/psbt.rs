@@ -182,7 +182,6 @@ fn test_psbt_multiple_internalkey_signers() {
 
     // Adds a signer for the wrong internal key, bdk should not use this key to sign
     wallet.add_signer(
-        KeychainKind::External,
         // A signerordering lower than 100, bdk will use this signer first
         SignerOrdering(0),
         Arc::new(SignerWrapper::new(
