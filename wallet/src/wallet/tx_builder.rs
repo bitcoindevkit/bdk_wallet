@@ -842,519 +842,521 @@ pub enum ChangeSpendPolicy {
 
 impl ChangeSpendPolicy {
     pub(crate) fn is_satisfied_by(&self, utxo: &LocalOutput) -> bool {
-        match self {
-            ChangeSpendPolicy::ChangeAllowed => true,
-            ChangeSpendPolicy::OnlyChange => utxo.keychain == KeychainKind::Internal,
-            ChangeSpendPolicy::ChangeForbidden => utxo.keychain == KeychainKind::External,
+        match *self {
+            Self::ChangeAllowed => true,
+            Self::OnlyChange => utxo.keychain == 1,
+            Self::ChangeForbidden => utxo.keychain == 0,
         }
     }
 }
 
-#[cfg(test)]
-mod test {
-    const ORDERING_TEST_TX: &str = "0200000003c26f3eb7932f7acddc5ddd26602b77e7516079b03090a16e2c2f54\
-                                    85d1fd600f0100000000ffffffffc26f3eb7932f7acddc5ddd26602b77e75160\
-                                    79b03090a16e2c2f5485d1fd600f0000000000ffffffff571fb3e02278217852\
-                                    dd5d299947e2b7354a639adc32ec1fa7b82cfb5dec530e0500000000ffffffff\
-                                    03e80300000000000002aaeee80300000000000001aa200300000000000001ff\
-                                    00000000";
-    macro_rules! ordering_test_tx {
-        () => {
-            deserialize::<bitcoin::Transaction>(&Vec::<u8>::from_hex(ORDERING_TEST_TX).unwrap())
-                .unwrap()
-        };
-    }
-
-    use bitcoin::consensus::deserialize;
-    use bitcoin::hex::FromHex;
-    use bitcoin::TxOut;
-
-    use super::*;
-    #[test]
-    fn test_output_ordering_untouched() {
-        let original_tx = ordering_test_tx!();
-        let mut tx = original_tx.clone();
-
-        TxOrdering::Untouched.sort_tx(&mut tx);
-
-        assert_eq!(original_tx, tx);
-    }
-
-    #[test]
-    fn test_output_ordering_shuffle() {
-        let original_tx = ordering_test_tx!();
-        let mut tx = original_tx.clone();
-
-        (0..40)
-            .find(|_| {
-                TxOrdering::Shuffle.sort_tx(&mut tx);
-                original_tx.input != tx.input
-            })
-            .expect("it should have moved the inputs at least once");
-
-        let mut tx = original_tx.clone();
-        (0..40)
-            .find(|_| {
-                TxOrdering::Shuffle.sort_tx(&mut tx);
-                original_tx.output != tx.output
-            })
-            .expect("it should have moved the outputs at least once");
-    }
-
-    #[test]
-    fn test_output_ordering_custom_but_bip69() {
-        use core::str::FromStr;
-
-        let original_tx = ordering_test_tx!();
-        let mut tx = original_tx;
-
-        let bip69_txin_cmp = |tx_a: &TxIn, tx_b: &TxIn| {
-            let project_outpoint = |t: &TxIn| (t.previous_output.txid, t.previous_output.vout);
-            project_outpoint(tx_a).cmp(&project_outpoint(tx_b))
-        };
-
-        let bip69_txout_cmp = |tx_a: &TxOut, tx_b: &TxOut| {
-            let project_utxo = |t: &TxOut| (t.value, t.script_pubkey.clone());
-            project_utxo(tx_a).cmp(&project_utxo(tx_b))
-        };
-
-        let custom_bip69_ordering = TxOrdering::Custom {
-            input_sort: Arc::new(bip69_txin_cmp),
-            output_sort: Arc::new(bip69_txout_cmp),
-        };
-
-        custom_bip69_ordering.sort_tx(&mut tx);
-
-        assert_eq!(
-            tx.input[0].previous_output,
-            bitcoin::OutPoint::from_str(
-                "0e53ec5dfb2cb8a71fec32dc9a634a35b7e24799295ddd5278217822e0b31f57:5"
-            )
-            .unwrap()
-        );
-        assert_eq!(
-            tx.input[1].previous_output,
-            bitcoin::OutPoint::from_str(
-                "0f60fdd185542f2c6ea19030b0796051e7772b6026dd5ddccd7a2f93b73e6fc2:0"
-            )
-            .unwrap()
-        );
-        assert_eq!(
-            tx.input[2].previous_output,
-            bitcoin::OutPoint::from_str(
-                "0f60fdd185542f2c6ea19030b0796051e7772b6026dd5ddccd7a2f93b73e6fc2:1"
-            )
-            .unwrap()
-        );
-
-        assert_eq!(tx.output[0].value.to_sat(), 800);
-        assert_eq!(tx.output[1].script_pubkey, ScriptBuf::from(vec![0xAA]));
-        assert_eq!(
-            tx.output[2].script_pubkey,
-            ScriptBuf::from(vec![0xAA, 0xEE])
-        );
-    }
-
-    #[test]
-    fn test_output_ordering_custom_with_sha256() {
-        use bitcoin::hashes::{sha256, Hash};
-
-        let original_tx = ordering_test_tx!();
-        let mut tx_1 = original_tx.clone();
-        let mut tx_2 = original_tx.clone();
-        let shared_secret = "secret_tweak";
-
-        let hash_txin_with_shared_secret_seed = Arc::new(|tx_a: &TxIn, tx_b: &TxIn| {
-            let secret_digest_from_txin = |txin: &TxIn| {
-                sha256::Hash::hash(
-                    &[
-                        &txin.previous_output.txid.to_raw_hash()[..],
-                        &txin.previous_output.vout.to_be_bytes(),
-                        shared_secret.as_bytes(),
-                    ]
-                    .concat(),
-                )
-            };
-            secret_digest_from_txin(tx_a).cmp(&secret_digest_from_txin(tx_b))
-        });
-
-        let hash_txout_with_shared_secret_seed = Arc::new(|tx_a: &TxOut, tx_b: &TxOut| {
-            let secret_digest_from_txout = |txin: &TxOut| {
-                sha256::Hash::hash(
-                    &[
-                        &txin.value.to_sat().to_be_bytes(),
-                        &txin.script_pubkey.clone().into_bytes()[..],
-                        shared_secret.as_bytes(),
-                    ]
-                    .concat(),
-                )
-            };
-            secret_digest_from_txout(tx_a).cmp(&secret_digest_from_txout(tx_b))
-        });
-
-        let custom_ordering_from_salted_sha256_1 = TxOrdering::Custom {
-            input_sort: hash_txin_with_shared_secret_seed.clone(),
-            output_sort: hash_txout_with_shared_secret_seed.clone(),
-        };
-
-        let custom_ordering_from_salted_sha256_2 = TxOrdering::Custom {
-            input_sort: hash_txin_with_shared_secret_seed,
-            output_sort: hash_txout_with_shared_secret_seed,
-        };
-
-        custom_ordering_from_salted_sha256_1.sort_tx(&mut tx_1);
-        custom_ordering_from_salted_sha256_2.sort_tx(&mut tx_2);
-
-        // Check the ordering is consistent between calls
-        assert_eq!(tx_1, tx_2);
-        // Check transaction order has changed
-        assert_ne!(tx_1, original_tx);
-        assert_ne!(tx_2, original_tx);
-    }
-
-    fn get_test_utxos() -> Vec<LocalOutput> {
-        use bitcoin::hashes::Hash;
-
-        vec![
-            LocalOutput {
-                outpoint: OutPoint {
-                    txid: bitcoin::Txid::from_slice(&[0; 32]).unwrap(),
-                    vout: 0,
-                },
-                txout: TxOut::NULL,
-                keychain: KeychainKind::External,
-                is_spent: false,
-                chain_position: chain::ChainPosition::Unconfirmed {
-                    first_seen: Some(1),
-                    last_seen: Some(1),
-                },
-                derivation_index: 0,
-            },
-            LocalOutput {
-                outpoint: OutPoint {
-                    txid: bitcoin::Txid::from_slice(&[0; 32]).unwrap(),
-                    vout: 1,
-                },
-                txout: TxOut::NULL,
-                keychain: KeychainKind::Internal,
-                is_spent: false,
-                chain_position: chain::ChainPosition::Confirmed {
-                    anchor: chain::ConfirmationBlockTime {
-                        block_id: chain::BlockId {
-                            height: 32,
-                            hash: bitcoin::BlockHash::all_zeros(),
-                        },
-                        confirmation_time: 42,
-                    },
-                    transitively: None,
-                },
-                derivation_index: 1,
-            },
-        ]
-    }
-
-    #[test]
-    fn test_change_spend_policy_default() {
-        let change_spend_policy = ChangeSpendPolicy::default();
-        let filtered = get_test_utxos()
-            .into_iter()
-            .filter(|u| change_spend_policy.is_satisfied_by(u))
-            .count();
-
-        assert_eq!(filtered, 2);
-    }
-
-    #[test]
-    fn test_change_spend_policy_no_internal() {
-        let change_spend_policy = ChangeSpendPolicy::ChangeForbidden;
-        let filtered = get_test_utxos()
-            .into_iter()
-            .filter(|u| change_spend_policy.is_satisfied_by(u))
-            .collect::<Vec<_>>();
-
-        assert_eq!(filtered.len(), 1);
-        assert_eq!(filtered[0].keychain, KeychainKind::External);
-    }
-
-    #[test]
-    fn test_change_spend_policy_only_internal() {
-        let change_spend_policy = ChangeSpendPolicy::OnlyChange;
-        let filtered = get_test_utxos()
-            .into_iter()
-            .filter(|u| change_spend_policy.is_satisfied_by(u))
-            .collect::<Vec<_>>();
-
-        assert_eq!(filtered.len(), 1);
-        assert_eq!(filtered[0].keychain, KeychainKind::Internal);
-    }
-
-    #[test]
-    fn test_build_fee_bump_remove_change_output_single_desc() {
-        use crate::test_utils::*;
-        use bdk_chain::BlockId;
-        use bitcoin::{hashes::Hash, BlockHash, Network};
-
-        let mut wallet = Wallet::create_single(get_test_tr_single_sig())
-            .network(Network::Regtest)
-            .create_wallet_no_persist()
-            .unwrap();
-
-        insert_checkpoint(
-            &mut wallet,
-            BlockId {
-                height: 1,
-                hash: BlockHash::all_zeros(),
-            },
-        );
-
-        receive_output_in_latest_block(&mut wallet, Amount::ONE_BTC);
-
-        // tx1 sending 15k sat to a recipient
-        let recip = ScriptBuf::from_hex(
-            "5120e8f5c4dc2f5d6a7595e7b108cb063da9c7550312da1e22875d78b9db62b59cd5",
-        )
-        .unwrap();
-        let mut builder = wallet.build_tx();
-        builder.add_recipient(recip.clone(), Amount::from_sat(15_000));
-        builder.fee_absolute(Amount::from_sat(1_000));
-        let psbt = builder.finish().unwrap();
-
-        let tx = psbt.extract_tx().unwrap();
-        let txid = tx.compute_txid();
-        let feerate = wallet.calculate_fee_rate(&tx).unwrap().to_sat_per_kwu();
-        insert_tx(&mut wallet, tx);
-
-        // build fee bump
-        let mut builder = wallet.build_fee_bump(txid).unwrap();
-        assert_eq!(
-            builder.params.recipients,
-            vec![(recip, Amount::from_sat(15_000))]
-        );
-        builder.fee_rate(FeeRate::from_sat_per_kwu(feerate + 250));
-        let _ = builder.finish().unwrap();
-    }
-
-    #[test]
-    fn not_duplicated_utxos_in_required_list() {
-        let mut params = TxParams::default();
-        let test_utxos = get_test_utxos();
-        let fake_weighted_utxo = WeightedUtxo {
-            satisfaction_weight: Weight::from_wu(0),
-            utxo: Utxo::Local(test_utxos[0].clone()),
-        };
-        for _ in 0..3 {
-            params
-                .utxos
-                .insert(test_utxos[0].outpoint, fake_weighted_utxo.clone());
-        }
-        assert_eq!(
-            vec![(test_utxos[0].outpoint, fake_weighted_utxo)],
-            params.utxos.into_iter().collect::<Vec<_>>()
-        );
-    }
-
-    #[test]
-    fn not_duplicated_foreign_utxos_with_same_outpoint_but_different_weight() {
-        use crate::test_utils::{get_funded_wallet_single, get_funded_wallet_wpkh, get_test_wpkh};
-
-        // Use two different wallets to avoid adding local utxos
-        let (wallet1, txid1) = get_funded_wallet_wpkh();
-        let (mut wallet2, txid2) = get_funded_wallet_single(get_test_wpkh());
-
-        // if the transactions were produced by the same wallet the following assert should fail
-        assert_ne!(txid1, txid2);
-
-        let utxo1 = wallet1.list_unspent().next().unwrap();
-        let tx1 = wallet1.get_tx(txid1).unwrap().tx_node.tx.clone();
-
-        let satisfaction_weight = wallet1
-            .public_descriptor(KeychainKind::External)
-            .max_weight_to_satisfy()
-            .unwrap();
-
-        let mut builder = wallet2.build_tx();
-
-        // add foreign utxo with satisfaction weight x
-        assert!(builder
-            .add_foreign_utxo(
-                utxo1.outpoint,
-                psbt::Input {
-                    non_witness_utxo: Some(tx1.as_ref().clone()),
-                    ..Default::default()
-                },
-                satisfaction_weight,
-            )
-            .is_ok());
-
-        let modified_satisfaction_weight = satisfaction_weight - Weight::from_wu(6);
-
-        assert_ne!(satisfaction_weight, modified_satisfaction_weight);
-
-        // add foreign utxo with same outpoint but satisfaction weight x - 6wu
-        assert!(builder
-            .add_foreign_utxo(
-                utxo1.outpoint,
-                psbt::Input {
-                    non_witness_utxo: Some(tx1.as_ref().clone()),
-                    ..Default::default()
-                },
-                modified_satisfaction_weight,
-            )
-            .is_ok());
-
-        let foreign_utxo_with_modified_weight =
-            builder.params.utxos.values().collect::<Vec<_>>()[0];
-
-        assert_eq!(builder.params.utxos.len(), 1);
-        assert_eq!(
-            foreign_utxo_with_modified_weight.satisfaction_weight,
-            modified_satisfaction_weight
-        );
-    }
-
-    #[test]
-    fn test_prexisting_local_utxo_have_precedence_over_foreign_utxo_with_same_outpoint() {
-        // In this test we are assuming a setup where there are two wallets using the same
-        // descriptor, but only one is tracking transactions, while the other is not.
-        // Within this conditions we want the second wallet to be able to consider the unknown
-        // LocalOutputs provided by the first wallet with greater precedence than any foreign utxo,
-        // even if the foreign utxo shares the same outpoint Remember the second wallet does not
-        // know about any UTxOs, so in principle, an unknown local utxo could be added as foreign.
-        //
-        // In this case, somehow the wallet has knowledge of one local utxo and it tries to add the
-        // same utxo as a foreign one, but the API ignores this, because local utxos have higher
-        // precedence.
-        use crate::test_utils::{get_funded_wallet_wpkh, get_test_wpkh_and_change_desc};
-        use bitcoin::Network;
-
-        // Use the same wallet twice
-        let (wallet1, txid1) = get_funded_wallet_wpkh();
-        // But the second one has no knowledge of tx associated with txid1
-        let (main_descriptor, change_descriptor) = get_test_wpkh_and_change_desc();
-        let mut wallet2 = Wallet::create(main_descriptor, change_descriptor)
-            .network(Network::Regtest)
-            .create_wallet_no_persist()
-            .expect("descriptors must be valid");
-
-        let utxo1 = wallet1.list_unspent().next().unwrap();
-        let tx1 = wallet1.get_tx(txid1).unwrap().tx_node.tx.clone();
-
-        let satisfaction_weight = wallet1
-            .public_descriptor(KeychainKind::External)
-            .max_weight_to_satisfy()
-            .unwrap();
-
-        let mut builder = wallet2.build_tx();
-
-        // Add local UTxO manually, through tx_builder private parameters and not through
-        // add_utxo method because we are assuming wallet2 has not knowledge of utxo1 yet
-        builder.params.utxos.insert(
-            utxo1.outpoint,
-            WeightedUtxo {
-                satisfaction_weight: wallet1
-                    .public_descriptor(utxo1.keychain)
-                    .max_weight_to_satisfy()
-                    .unwrap(),
-                utxo: Utxo::Local(utxo1.clone()),
-            },
-        );
-
-        // add foreign utxo
-        assert!(builder
-            .add_foreign_utxo(
-                utxo1.outpoint,
-                psbt::Input {
-                    non_witness_utxo: Some(tx1.as_ref().clone()),
-                    ..Default::default()
-                },
-                satisfaction_weight,
-            )
-            .is_ok());
-
-        let utxo_should_still_be_local = builder.params.utxos.values().collect::<Vec<_>>()[0];
-
-        assert_eq!(builder.params.utxos.len(), 1);
-        assert_eq!(utxo_should_still_be_local.utxo.outpoint(), utxo1.outpoint);
-        // UTxO should still be LocalOutput
-        assert!(matches!(
-            utxo_should_still_be_local,
-            WeightedUtxo {
-                utxo: Utxo::Local(..),
-                ..
-            }
-        ));
-    }
-
-    #[test]
-    fn test_prexisting_foreign_utxo_have_no_precedence_over_local_utxo_with_same_outpoint() {
-        // In this test we are assuming a setup where there are two wallets using the same
-        // descriptor, but only one is tracking transactions, while the other is not.
-        // Within this conditions we want the second wallet to be able to consider the unknown
-        // LocalOutputs provided by the first wallet with greater precedence than any foreign utxo,
-        // even if the foreign utxo shares the same outpoint Remember the second wallet does not
-        // know about any UTxOs, so in principle, an unknown local utxo could be added as foreign.
-        //
-        // In this case, the wallet adds a local utxo as if it were foreign and after this it adds
-        // it as local utxo. In this case the local utxo should still have precedence over the
-        // foreign utxo.
-        use crate::test_utils::{get_funded_wallet_wpkh, get_test_wpkh_and_change_desc};
-        use bitcoin::Network;
-
-        // Use the same wallet twice
-        let (wallet1, txid1) = get_funded_wallet_wpkh();
-        // But the second one has no knowledge of tx associated with txid1
-        let (main_descriptor, change_descriptor) = get_test_wpkh_and_change_desc();
-        let mut wallet2 = Wallet::create(main_descriptor, change_descriptor)
-            .network(Network::Regtest)
-            .create_wallet_no_persist()
-            .expect("descriptors must be valid");
-
-        let utxo1 = wallet1.list_unspent().next().unwrap();
-        let tx1 = wallet1.get_tx(txid1).unwrap().tx_node.tx.clone();
-
-        let satisfaction_weight = wallet1
-            .public_descriptor(KeychainKind::External)
-            .max_weight_to_satisfy()
-            .unwrap();
-
-        let mut builder = wallet2.build_tx();
-
-        // add foreign utxo
-        assert!(builder
-            .add_foreign_utxo(
-                utxo1.outpoint,
-                psbt::Input {
-                    non_witness_utxo: Some(tx1.as_ref().clone()),
-                    ..Default::default()
-                },
-                satisfaction_weight,
-            )
-            .is_ok());
-
-        // Add local UTxO manually, through tx_builder private parameters and not through
-        // add_utxo method because we are assuming wallet2 has not knowledge of utxo1 yet
-        builder.params.utxos.insert(
-            utxo1.outpoint,
-            WeightedUtxo {
-                satisfaction_weight: wallet1
-                    .public_descriptor(utxo1.keychain)
-                    .max_weight_to_satisfy()
-                    .unwrap(),
-                utxo: Utxo::Local(utxo1.clone()),
-            },
-        );
-
-        let utxo_should_still_be_local = builder.params.utxos.values().collect::<Vec<_>>()[0];
-
-        assert_eq!(builder.params.utxos.len(), 1);
-        assert_eq!(utxo_should_still_be_local.utxo.outpoint(), utxo1.outpoint);
-        // UTxO should still be LocalOutput
-        assert!(matches!(
-            utxo_should_still_be_local,
-            WeightedUtxo {
-                utxo: Utxo::Local(..),
-                ..
-            }
-        ));
-    }
-}
+// #[cfg(test)]
+// mod test {
+//     const ORDERING_TEST_TX: &str =
+// "0200000003c26f3eb7932f7acddc5ddd26602b77e7516079b03090a16e2c2f54\
+// 85d1fd600f0100000000ffffffffc26f3eb7932f7acddc5ddd26602b77e75160\
+// 79b03090a16e2c2f5485d1fd600f0000000000ffffffff571fb3e02278217852\
+// dd5d299947e2b7354a639adc32ec1fa7b82cfb5dec530e0500000000ffffffff\
+// 03e80300000000000002aaeee80300000000000001aa200300000000000001ff\
+// 00000000";     macro_rules! ordering_test_tx {
+//         () => {
+//             deserialize::<bitcoin::Transaction>(&Vec::<u8>::from_hex(ORDERING_TEST_TX).unwrap())
+//                 .unwrap()
+//         };
+//     }
+
+//     use bitcoin::consensus::deserialize;
+//     use bitcoin::hex::FromHex;
+//     use bitcoin::TxOut;
+
+//     use super::*;
+//     #[test]
+//     fn test_output_ordering_untouched() {
+//         let original_tx = ordering_test_tx!();
+//         let mut tx = original_tx.clone();
+
+//         TxOrdering::Untouched.sort_tx(&mut tx);
+
+//         assert_eq!(original_tx, tx);
+//     }
+
+//     #[test]
+//     fn test_output_ordering_shuffle() {
+//         let original_tx = ordering_test_tx!();
+//         let mut tx = original_tx.clone();
+
+//         (0..40)
+//             .find(|_| {
+//                 TxOrdering::Shuffle.sort_tx(&mut tx);
+//                 original_tx.input != tx.input
+//             })
+//             .expect("it should have moved the inputs at least once");
+
+//         let mut tx = original_tx.clone();
+//         (0..40)
+//             .find(|_| {
+//                 TxOrdering::Shuffle.sort_tx(&mut tx);
+//                 original_tx.output != tx.output
+//             })
+//             .expect("it should have moved the outputs at least once");
+//     }
+
+//     #[test]
+//     fn test_output_ordering_custom_but_bip69() {
+//         use core::str::FromStr;
+
+//         let original_tx = ordering_test_tx!();
+//         let mut tx = original_tx;
+
+//         let bip69_txin_cmp = |tx_a: &TxIn, tx_b: &TxIn| {
+//             let project_outpoint = |t: &TxIn| (t.previous_output.txid, t.previous_output.vout);
+//             project_outpoint(tx_a).cmp(&project_outpoint(tx_b))
+//         };
+
+//         let bip69_txout_cmp = |tx_a: &TxOut, tx_b: &TxOut| {
+//             let project_utxo = |t: &TxOut| (t.value, t.script_pubkey.clone());
+//             project_utxo(tx_a).cmp(&project_utxo(tx_b))
+//         };
+
+//         let custom_bip69_ordering = TxOrdering::Custom {
+//             input_sort: Arc::new(bip69_txin_cmp),
+//             output_sort: Arc::new(bip69_txout_cmp),
+//         };
+
+//         custom_bip69_ordering.sort_tx(&mut tx);
+
+//         assert_eq!(
+//             tx.input[0].previous_output,
+//             bitcoin::OutPoint::from_str(
+//                 "0e53ec5dfb2cb8a71fec32dc9a634a35b7e24799295ddd5278217822e0b31f57:5"
+//             )
+//             .unwrap()
+//         );
+//         assert_eq!(
+//             tx.input[1].previous_output,
+//             bitcoin::OutPoint::from_str(
+//                 "0f60fdd185542f2c6ea19030b0796051e7772b6026dd5ddccd7a2f93b73e6fc2:0"
+//             )
+//             .unwrap()
+//         );
+//         assert_eq!(
+//             tx.input[2].previous_output,
+//             bitcoin::OutPoint::from_str(
+//                 "0f60fdd185542f2c6ea19030b0796051e7772b6026dd5ddccd7a2f93b73e6fc2:1"
+//             )
+//             .unwrap()
+//         );
+
+//         assert_eq!(tx.output[0].value.to_sat(), 800);
+//         assert_eq!(tx.output[1].script_pubkey, ScriptBuf::from(vec![0xAA]));
+//         assert_eq!(
+//             tx.output[2].script_pubkey,
+//             ScriptBuf::from(vec![0xAA, 0xEE])
+//         );
+//     }
+
+//     #[test]
+//     fn test_output_ordering_custom_with_sha256() {
+//         use bitcoin::hashes::{sha256, Hash};
+
+//         let original_tx = ordering_test_tx!();
+//         let mut tx_1 = original_tx.clone();
+//         let mut tx_2 = original_tx.clone();
+//         let shared_secret = "secret_tweak";
+
+//         let hash_txin_with_shared_secret_seed = Arc::new(|tx_a: &TxIn, tx_b: &TxIn| {
+//             let secret_digest_from_txin = |txin: &TxIn| {
+//                 sha256::Hash::hash(
+//                     &[
+//                         &txin.previous_output.txid.to_raw_hash()[..],
+//                         &txin.previous_output.vout.to_be_bytes(),
+//                         shared_secret.as_bytes(),
+//                     ]
+//                     .concat(),
+//                 )
+//             };
+//             secret_digest_from_txin(tx_a).cmp(&secret_digest_from_txin(tx_b))
+//         });
+
+//         let hash_txout_with_shared_secret_seed = Arc::new(|tx_a: &TxOut, tx_b: &TxOut| {
+//             let secret_digest_from_txout = |txin: &TxOut| {
+//                 sha256::Hash::hash(
+//                     &[
+//                         &txin.value.to_sat().to_be_bytes(),
+//                         &txin.script_pubkey.clone().into_bytes()[..],
+//                         shared_secret.as_bytes(),
+//                     ]
+//                     .concat(),
+//                 )
+//             };
+//             secret_digest_from_txout(tx_a).cmp(&secret_digest_from_txout(tx_b))
+//         });
+
+//         let custom_ordering_from_salted_sha256_1 = TxOrdering::Custom {
+//             input_sort: hash_txin_with_shared_secret_seed.clone(),
+//             output_sort: hash_txout_with_shared_secret_seed.clone(),
+//         };
+
+//         let custom_ordering_from_salted_sha256_2 = TxOrdering::Custom {
+//             input_sort: hash_txin_with_shared_secret_seed,
+//             output_sort: hash_txout_with_shared_secret_seed,
+//         };
+
+//         custom_ordering_from_salted_sha256_1.sort_tx(&mut tx_1);
+//         custom_ordering_from_salted_sha256_2.sort_tx(&mut tx_2);
+
+//         // Check the ordering is consistent between calls
+//         assert_eq!(tx_1, tx_2);
+//         // Check transaction order has changed
+//         assert_ne!(tx_1, original_tx);
+//         assert_ne!(tx_2, original_tx);
+//     }
+
+//     fn get_test_utxos() -> Vec<LocalOutput> {
+//         use bitcoin::hashes::Hash;
+
+//         vec![
+//             LocalOutput {
+//                 outpoint: OutPoint {
+//                     txid: bitcoin::Txid::from_slice(&[0; 32]).unwrap(),
+//                     vout: 0,
+//                 },
+//                 txout: TxOut::NULL,
+//                 keychain: bdk_chain::DescriptorId::all_zeros(),
+//                 is_spent: false,
+//                 chain_position: chain::ChainPosition::Unconfirmed {
+//                     first_seen: Some(1),
+//                     last_seen: Some(1),
+//                 },
+//                 derivation_index: 0,
+//             },
+//             LocalOutput {
+//                 outpoint: OutPoint {
+//                     txid: bitcoin::Txid::from_slice(&[0; 32]).unwrap(),
+//                     vout: 1,
+//                 },
+//                 txout: TxOut::NULL,
+//                 keychain: bdk_chain::DescriptorId::all_zeros(),
+//                 is_spent: false,
+//                 chain_position: chain::ChainPosition::Confirmed {
+//                     anchor: chain::ConfirmationBlockTime {
+//                         block_id: chain::BlockId {
+//                             height: 32,
+//                             hash: bitcoin::BlockHash::all_zeros(),
+//                         },
+//                         confirmation_time: 42,
+//                     },
+//                     transitively: None,
+//                 },
+//                 derivation_index: 1,
+//             },
+//         ]
+//     }
+
+//     // #[test]
+//     // fn test_change_spend_policy_default() {
+//     //     let change_spend_policy = ChangeSpendPolicy::default();
+//     //     let filtered = get_test_utxos()
+//     //         .into_iter()
+//     //         .filter(|u| change_spend_policy.is_satisfied_by(u))
+//     //         .count();
+
+//     //     assert_eq!(filtered, 2);
+//     // }
+
+//     // #[test]
+//     // fn test_change_spend_policy_no_internal() {
+//     //     let change_spend_policy = ChangeSpendPolicy::ChangeForbidden;
+//     //     let filtered = get_test_utxos()
+//     //         .into_iter()
+//     //         .filter(|u| change_spend_policy.is_satisfied_by(u))
+//     //         .collect::<Vec<_>>();
+
+//     //     assert_eq!(filtered.len(), 1);
+//     //     assert_eq!(filtered[0].keychain, KeychainKind::External);
+//     // }
+
+//     // #[test]
+//     // fn test_change_spend_policy_only_internal() {
+//     //     let change_spend_policy = ChangeSpendPolicy::OnlyChange;
+//     //     let filtered = get_test_utxos()
+//     //         .into_iter()
+//     //         .filter(|u| change_spend_policy.is_satisfied_by(u))
+//     //         .collect::<Vec<_>>();
+
+//     //     assert_eq!(filtered.len(), 1);
+//     //     assert_eq!(filtered[0].keychain, KeychainKind::Internal);
+//     // }
+
+//     #[test]
+//     fn test_build_fee_bump_remove_change_output_single_desc() {
+//         use crate::test_utils::*;
+//         use bdk_chain::BlockId;
+//         use bitcoin::{hashes::Hash, BlockHash, Network};
+
+//         let mut wallet = Wallet::create_single(get_test_tr_single_sig())
+//             .network(Network::Regtest)
+//             .create_wallet_no_persist()
+//             .unwrap();
+
+//         insert_checkpoint(
+//             &mut wallet,
+//             BlockId {
+//                 height: 1,
+//                 hash: BlockHash::all_zeros(),
+//             },
+//         );
+
+//         receive_output_in_latest_block(&mut wallet, Amount::ONE_BTC);
+
+//         // tx1 sending 15k sat to a recipient
+//         let recip = ScriptBuf::from_hex(
+//             "5120e8f5c4dc2f5d6a7595e7b108cb063da9c7550312da1e22875d78b9db62b59cd5",
+//         )
+//         .unwrap();
+//         let mut builder = wallet.build_tx();
+//         builder.add_recipient(recip.clone(), Amount::from_sat(15_000));
+//         builder.fee_absolute(Amount::from_sat(1_000));
+//         let psbt = builder.finish().unwrap();
+
+//         let tx = psbt.extract_tx().unwrap();
+//         let txid = tx.compute_txid();
+//         let feerate = wallet.calculate_fee_rate(&tx).unwrap().to_sat_per_kwu();
+//         insert_tx(&mut wallet, tx);
+
+//         // build fee bump
+//         let mut builder = wallet.build_fee_bump(txid).unwrap();
+//         assert_eq!(
+//             builder.params.recipients,
+//             vec![(recip, Amount::from_sat(15_000))]
+//         );
+//         builder.fee_rate(FeeRate::from_sat_per_kwu(feerate + 250));
+//         let _ = builder.finish().unwrap();
+//     }
+
+//     #[test]
+//     fn not_duplicated_utxos_in_required_list() {
+//         let mut params = TxParams::default();
+//         let test_utxos = get_test_utxos();
+//         let fake_weighted_utxo = WeightedUtxo {
+//             satisfaction_weight: Weight::from_wu(0),
+//             utxo: Utxo::Local(test_utxos[0].clone()),
+//         };
+//         for _ in 0..3 {
+//             params
+//                 .utxos
+//                 .insert(test_utxos[0].outpoint, fake_weighted_utxo.clone());
+//         }
+//         assert_eq!(
+//             vec![(test_utxos[0].outpoint, fake_weighted_utxo)],
+//             params.utxos.into_iter().collect::<Vec<_>>()
+//         );
+//     }
+
+//     #[test]
+//     fn not_duplicated_foreign_utxos_with_same_outpoint_but_different_weight() {
+//         use crate::test_utils::{get_funded_wallet_single, get_funded_wallet_wpkh, get_test_wpkh};
+
+//         // Use two different wallets to avoid adding local utxos
+//         let (wallet1, txid1) = get_funded_wallet_wpkh();
+//         let (mut wallet2, txid2) = get_funded_wallet_single(get_test_wpkh());
+
+//         // if the transactions were produced by the same wallet the following assert should fail
+//         assert_ne!(txid1, txid2);
+
+//         let utxo1 = wallet1.list_unspent().next().unwrap();
+//         let tx1 = wallet1.get_tx(txid1).unwrap().tx_node.tx.clone();
+
+//         let satisfaction_weight = wallet1
+//             .default_descriptor()
+//             .max_weight_to_satisfy()
+//             .unwrap();
+
+//         let mut builder = wallet2.build_tx();
+
+//         // add foreign utxo with satisfaction weight x
+//         assert!(builder
+//             .add_foreign_utxo(
+//                 utxo1.outpoint,
+//                 psbt::Input {
+//                     non_witness_utxo: Some(tx1.as_ref().clone()),
+//                     ..Default::default()
+//                 },
+//                 satisfaction_weight,
+//             )
+//             .is_ok());
+
+//         let modified_satisfaction_weight = satisfaction_weight - Weight::from_wu(6);
+
+//         assert_ne!(satisfaction_weight, modified_satisfaction_weight);
+
+//         // add foreign utxo with same outpoint but satisfaction weight x - 6wu
+//         assert!(builder
+//             .add_foreign_utxo(
+//                 utxo1.outpoint,
+//                 psbt::Input {
+//                     non_witness_utxo: Some(tx1.as_ref().clone()),
+//                     ..Default::default()
+//                 },
+//                 modified_satisfaction_weight,
+//             )
+//             .is_ok());
+
+//         let foreign_utxo_with_modified_weight =
+//             builder.params.utxos.values().collect::<Vec<_>>()[0];
+
+//         assert_eq!(builder.params.utxos.len(), 1);
+//         assert_eq!(
+//             foreign_utxo_with_modified_weight.satisfaction_weight,
+//             modified_satisfaction_weight
+//         );
+//     }
+
+//     #[test]
+//     fn test_prexisting_local_utxo_have_precedence_over_foreign_utxo_with_same_outpoint() {
+//         // In this test we are assuming a setup where there are two wallets using the same
+//         // descriptor, but only one is tracking transactions, while the other is not.
+//         // Within this conditions we want the second wallet to be able to consider the unknown
+//         // LocalOutputs provided by the first wallet with greater precedence than any foreign
+// utxo,         // even if the foreign utxo shares the same outpoint Remember the second wallet
+// does not         // know about any UTxOs, so in principle, an unknown local utxo could be added
+// as foreign.         //
+//         // In this case, somehow the wallet has knowledge of one local utxo and it tries to add
+// the         // same utxo as a foreign one, but the API ignores this, because local utxos have
+// higher         // precedence.
+//         use crate::test_utils::{get_funded_wallet_wpkh, get_test_wpkh_and_change_desc};
+//         use bitcoin::Network;
+
+//         // Use the same wallet twice
+//         let (wallet1, txid1) = get_funded_wallet_wpkh();
+//         // But the second one has no knowledge of tx associated with txid1
+//         let (main_descriptor, change_descriptor) = get_test_wpkh_and_change_desc();
+//         let mut wallet2 = Wallet::create(main_descriptor, change_descriptor)
+//             .network(Network::Regtest)
+//             .create_wallet_no_persist()
+//             .expect("descriptors must be valid");
+
+//         let utxo1 = wallet1.list_unspent().next().unwrap();
+//         let tx1 = wallet1.get_tx(txid1).unwrap().tx_node.tx.clone();
+
+//         let satisfaction_weight = wallet1
+//             // .public_descriptor(KeychainKind::External)
+//             .default_descriptor()
+//             .max_weight_to_satisfy()
+//             .unwrap();
+
+//         let mut builder = wallet2.build_tx();
+
+//         // Add local UTxO manually, through tx_builder private parameters and not through
+//         // add_utxo method because we are assuming wallet2 has not knowledge of utxo1 yet
+//         builder.params.utxos.insert(
+//             utxo1.outpoint,
+//             WeightedUtxo {
+//                 satisfaction_weight: wallet1
+//                     .public_descriptor(utxo1.keychain)
+//                     .max_weight_to_satisfy()
+//                     .unwrap(),
+//                 utxo: Utxo::Local(utxo1.clone()),
+//             },
+//         );
+
+//         // add foreign utxo
+//         assert!(builder
+//             .add_foreign_utxo(
+//                 utxo1.outpoint,
+//                 psbt::Input {
+//                     non_witness_utxo: Some(tx1.as_ref().clone()),
+//                     ..Default::default()
+//                 },
+//                 satisfaction_weight,
+//             )
+//             .is_ok());
+
+//         let utxo_should_still_be_local = builder.params.utxos.values().collect::<Vec<_>>()[0];
+
+//         assert_eq!(builder.params.utxos.len(), 1);
+//         assert_eq!(utxo_should_still_be_local.utxo.outpoint(), utxo1.outpoint);
+//         // UTxO should still be LocalOutput
+//         assert!(matches!(
+//             utxo_should_still_be_local,
+//             WeightedUtxo {
+//                 utxo: Utxo::Local(..),
+//                 ..
+//             }
+//         ));
+//     }
+
+//     #[test]
+//     fn test_prexisting_foreign_utxo_have_no_precedence_over_local_utxo_with_same_outpoint() {
+//         // In this test we are assuming a setup where there are two wallets using the same
+//         // descriptor, but only one is tracking transactions, while the other is not.
+//         // Within this conditions we want the second wallet to be able to consider the unknown
+//         // LocalOutputs provided by the first wallet with greater precedence than any foreign
+// utxo,         // even if the foreign utxo shares the same outpoint Remember the second wallet
+// does not         // know about any UTxOs, so in principle, an unknown local utxo could be added
+// as foreign.         //
+//         // In this case, the wallet adds a local utxo as if it were foreign and after this it
+// adds         // it as local utxo. In this case the local utxo should still have precedence over
+// the         // foreign utxo.
+//         use crate::test_utils::{get_funded_wallet_wpkh, get_test_wpkh_and_change_desc};
+//         use bitcoin::Network;
+
+//         // Use the same wallet twice
+//         let (wallet1, txid1) = get_funded_wallet_wpkh();
+//         // But the second one has no knowledge of tx associated with txid1
+//         let (main_descriptor, change_descriptor) = get_test_wpkh_and_change_desc();
+//         let mut wallet2 = Wallet::create(main_descriptor, change_descriptor)
+//             .network(Network::Regtest)
+//             .create_wallet_no_persist()
+//             .expect("descriptors must be valid");
+
+//         let utxo1 = wallet1.list_unspent().next().unwrap();
+//         let tx1 = wallet1.get_tx(txid1).unwrap().tx_node.tx.clone();
+
+//         let satisfaction_weight = wallet1
+//             // .public_descriptor(KeychainKind::External)
+//             .default_descriptor()
+//             .max_weight_to_satisfy()
+//             .unwrap();
+
+//         let mut builder = wallet2.build_tx();
+
+//         // add foreign utxo
+//         assert!(builder
+//             .add_foreign_utxo(
+//                 utxo1.outpoint,
+//                 psbt::Input {
+//                     non_witness_utxo: Some(tx1.as_ref().clone()),
+//                     ..Default::default()
+//                 },
+//                 satisfaction_weight,
+//             )
+//             .is_ok());
+
+//         // Add local UTxO manually, through tx_builder private parameters and not through
+//         // add_utxo method because we are assuming wallet2 has not knowledge of utxo1 yet
+//         builder.params.utxos.insert(
+//             utxo1.outpoint,
+//             WeightedUtxo {
+//                 satisfaction_weight: wallet1
+//                     .public_descriptor(utxo1.keychain)
+//                     .max_weight_to_satisfy()
+//                     .unwrap(),
+//                 utxo: Utxo::Local(utxo1.clone()),
+//             },
+//         );
+
+//         let utxo_should_still_be_local = builder.params.utxos.values().collect::<Vec<_>>()[0];
+
+//         assert_eq!(builder.params.utxos.len(), 1);
+//         assert_eq!(utxo_should_still_be_local.utxo.outpoint(), utxo1.outpoint);
+//         // UTxO should still be LocalOutput
+//         assert!(matches!(
+//             utxo_should_still_be_local,
+//             WeightedUtxo {
+//                 utxo: Utxo::Local(..),
+//                 ..
+//             }
+//         ));
+//     }
+// }

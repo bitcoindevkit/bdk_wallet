@@ -163,6 +163,26 @@ impl<P: WalletPersister> PersistedWallet<P> {
         })
     }
 
+    /// Construct with `persister` and wallet `params`.
+    pub fn with_params(
+        persister: &mut P,
+        params: WalletParams,
+    ) -> Result<Self, CreateWithPersistError<P::Error>> {
+        let existing = P::initialize(persister).map_err(CreateWithPersistError::Persist)?;
+        if !existing.is_empty() {
+            return Err(CreateWithPersistError::DataAlreadyExists(existing));
+        }
+        let mut wallet =
+            Wallet::from_keyring_params(params).map_err(CreateWithPersistError::Descriptor)?;
+        if let Some(changeset) = wallet.take_staged() {
+            P::persist(persister, &changeset).map_err(CreateWithPersistError::Persist)?;
+        }
+        Ok(Self {
+            inner: wallet,
+            _marker: PhantomData,
+        })
+    }
+
     /// Load a previously [`PersistedWallet`] from the given `persister` and `params`.
     pub fn load(
         persister: &mut P,
@@ -170,6 +190,21 @@ impl<P: WalletPersister> PersistedWallet<P> {
     ) -> Result<Option<Self>, LoadWithPersistError<P::Error>> {
         let changeset = P::initialize(persister).map_err(LoadWithPersistError::Persist)?;
         Wallet::load_with_params(changeset, params)
+            .map(|opt| {
+                opt.map(|inner| PersistedWallet {
+                    inner,
+                    _marker: PhantomData,
+                })
+            })
+            .map_err(LoadWithPersistError::InvalidChangeSet)
+    }
+
+    /// Load a previously [`PersistedWallet`] from the given `persister`.
+    pub fn load_from_changeset(
+        persister: &mut P,
+    ) -> Result<Option<Self>, LoadWithPersistError<P::Error>> {
+        let changeset = P::initialize(persister).map_err(LoadWithPersistError::Persist)?;
+        Wallet::from_changeset(changeset)
             .map(|opt| {
                 opt.map(|inner| PersistedWallet {
                     inner,
@@ -287,6 +322,36 @@ impl WalletPersister for bdk_chain::rusqlite::Connection {
         let db_tx = persister.transaction()?;
         changeset.persist_to_sqlite(&db_tx)?;
         db_tx.commit()
+    }
+}
+
+use crate::wallet::KeyRing;
+
+/// Wallet creation parameters.
+#[derive(Debug)]
+pub struct WalletParams {
+    /// Keyring
+    pub keyring: KeyRing,
+    /// Optional genesis hash. If none specified, the genesis hash is derived from the network.
+    pub genesis_hash: Option<bitcoin::BlockHash>,
+    /// Lookahead, acts as a buffer of pre-derived addresses (default: 25).
+    pub lookahead: u32,
+    /// Use a persistent cache of indexed SPKs.
+    pub use_spk_cache: bool,
+}
+
+impl Default for WalletParams {
+    fn default() -> Self {
+        Self {
+            keyring: KeyRing {
+                network: bitcoin::Network::Bitcoin,
+                descriptors: Default::default(),
+                keychains: Default::default(),
+            },
+            genesis_hash: None,
+            lookahead: 25,
+            use_spk_cache: false,
+        }
     }
 }
 

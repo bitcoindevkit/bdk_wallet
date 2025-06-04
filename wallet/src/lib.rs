@@ -7,6 +7,7 @@
 )]
 #![no_std]
 #![warn(missing_docs)]
+#![allow(unused)]
 
 #[cfg(feature = "std")]
 #[macro_use]

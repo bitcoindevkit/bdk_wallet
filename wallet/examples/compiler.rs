@@ -63,7 +63,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     println!(
         "First derived address from the descriptor: \n{}",
-        wallet.next_unused_address(KeychainKind::External),
+        wallet.next_default_unused_address(),
     );
 
     // BDK also has it's own `Policy` structure to represent the spending condition in a more

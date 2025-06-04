@@ -33,7 +33,8 @@ fn new_funded_wallet(descriptor: &str, change_descriptor: Option<&str>) -> (Wall
         .create_wallet_no_persist()
         .expect("descriptors must be valid");
 
-    let receive_address = wallet.peek_address(KeychainKind::External, 0).address;
+    // let receive_address = wallet.peek_address(KeychainKind::External, 0).address;
+    let receive_address = wallet.peek_default_address(0).address;
     let sendto_address = Address::from_str("bcrt1q3qtze4ys45tgdvguj66zrk4fu6hq3a3v9pfly5")
         .expect("address")
         .require_network(Network::Regtest)
@@ -271,7 +272,8 @@ pub fn receive_output(
     value: Amount,
     receive_to: impl Into<ReceiveTo>,
 ) -> OutPoint {
-    let addr = wallet.next_unused_address(KeychainKind::External).address;
+    // let addr = wallet.next_unused_address(KeychainKind::External).address;
+    let addr = wallet.next_default_unused_address().address;
     receive_output_to_address(wallet, addr, value, receive_to)
 }
 
