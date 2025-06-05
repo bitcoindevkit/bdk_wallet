@@ -66,7 +66,7 @@ pub struct LocalOutput {
     /// Transaction output
     pub txout: TxOut,
     /// Type of keychain
-    pub keychain: KeychainKind,
+    pub keychain: u32,
     /// Whether this UTXO is spent or not
     pub is_spent: bool,
     /// The derivation index for the script pubkey in the wallet

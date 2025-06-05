@@ -6,7 +6,8 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-bdk_wallet = { path = "../../wallet", features = ["file_store"] }
+# bdk_wallet = { path = "../../wallet", features = ["file_store"] }
+bdk_wallet = { version = "2.0.0-beta.0", features = ["file_store"] }
 bdk_bitcoind_rpc = { version = "0.20.0" }
 
 anyhow = "1"

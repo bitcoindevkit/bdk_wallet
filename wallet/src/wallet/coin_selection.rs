@@ -797,7 +797,7 @@ mod test {
                     value,
                     script_pubkey: ScriptBuf::new(),
                 },
-                keychain: KeychainKind::External,
+                keychain: 0,
                 is_spent: false,
                 derivation_index: 42,
                 chain_position,
@@ -836,7 +836,7 @@ mod test {
                         value: Amount::from_sat(rng.gen_range(0..200000000)),
                         script_pubkey: ScriptBuf::new(),
                     },
-                    keychain: KeychainKind::External,
+                    keychain: 0,
                     is_spent: false,
                     derivation_index: rng.next_u32(),
                     chain_position: if rng.gen_bool(0.5) {
@@ -876,7 +876,7 @@ mod test {
                         value: utxos_value,
                         script_pubkey: ScriptBuf::new(),
                     },
-                    keychain: KeychainKind::External,
+                    keychain: 0,
                     is_spent: false,
                     derivation_index: 42,
                     chain_position: ChainPosition::Unconfirmed {

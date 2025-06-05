@@ -1,11 +1,18 @@
+use alloc::collections::BTreeMap;
+use alloc::string::String;
+use alloc::string::ToString;
+
 use bdk_chain::{
-    indexed_tx_graph, keychain_txout, local_chain, tx_graph, ConfirmationBlockTime, Merge,
+    indexed_tx_graph, keychain_txout, local_chain, tx_graph, ConfirmationBlockTime, DescriptorId,
+    Merge,
 };
 use miniscript::{Descriptor, DescriptorPublicKey};
 use serde::{Deserialize, Serialize};
 
 type IndexedTxGraphChangeSet =
     indexed_tx_graph::ChangeSet<ConfirmationBlockTime, keychain_txout::ChangeSet>;
+
+use crate::wallet::DescriptorKind;
 
 /// A change set for [`Wallet`]
 ///
@@ -114,6 +121,41 @@ pub struct ChangeSet {
     pub tx_graph: tx_graph::ChangeSet<ConfirmationBlockTime>,
     /// Changes to [`KeychainTxOutIndex`](keychain_txout::KeychainTxOutIndex).
     pub indexer: keychain_txout::ChangeSet,
+    /// Keychain descriptors
+    // keychain -> keychain-descriptor
+    pub descriptors: BTreeMap<u32, KeychainDescriptor>,
+}
+
+/// An added keychain descriptor.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct KeychainDescriptor {
+    pub group_id: u32,
+    pub descriptor: Descriptor<DescriptorPublicKey>,
+    pub kind: Option<DescriptorKind>,
+}
+
+#[cfg(feature = "rusqlite")]
+mod rusqlite {
+    use alloc::boxed::Box;
+    use core::str::FromStr;
+
+    use bdk_chain::rusqlite;
+    use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ToSql, ToSqlOutput};
+    use rusqlite::Row;
+
+    use super::*;
+
+    impl ToSql for DescriptorKind {
+        fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
+            Ok(self.to_string().into())
+        }
+    }
+
+    impl FromSql for DescriptorKind {
+        fn column_result(value: rusqlite::types::ValueRef<'_>) -> FromSqlResult<Self> {
+            Self::from_str(value.as_str()?).map_err(|e| FromSqlError::Other(Box::new(e)))
+        }
+    }
 }
 
 impl Merge for ChangeSet {
@@ -142,6 +184,9 @@ impl Merge for ChangeSet {
             self.network = other.network;
         }
 
+        // Merge descriptors - When does this happen if ever?
+        self.descriptors.extend(other.descriptors);
+
         Merge::merge(&mut self.local_chain, other.local_chain);
         Merge::merge(&mut self.tx_graph, other.tx_graph);
         Merge::merge(&mut self.indexer, other.indexer);
@@ -154,6 +199,7 @@ impl Merge for ChangeSet {
             && self.local_chain.is_empty()
             && self.tx_graph.is_empty()
             && self.indexer.is_empty()
+            && self.descriptors.is_empty()
     }
 }
 
@@ -163,6 +209,8 @@ impl ChangeSet {
     pub const WALLET_SCHEMA_NAME: &'static str = "bdk_wallet";
     /// Name of table to store wallet descriptors and network.
     pub const WALLET_TABLE_NAME: &'static str = "bdk_wallet";
+    /// Name of table to store keychain descriptors.
+    pub const WALLET_DESCRIPTORS_TABLE_NAME: &'static str = "bdk_wallet_descriptors";
 
     /// Get v0 sqlite [ChangeSet] schema
     pub fn schema_v0() -> alloc::string::String {
@@ -177,12 +225,25 @@ impl ChangeSet {
         )
     }
 
+    /// Schema v1 adds a table of keychain descriptors.
+    pub fn schema_v1() -> alloc::string::String {
+        format!(
+            "CREATE TABLE {} ( \
+                keychain INTEGER PRIMARY KEY NOT NULL, \
+                group_id INTEGER NOT NULL, \
+                descriptor TEXT NOT NULL, \
+                kind TEXT \
+                ) STRICT;",
+            Self::WALLET_DESCRIPTORS_TABLE_NAME,
+        )
+    }
+
     /// Initialize sqlite tables for wallet tables.
     pub fn init_sqlite_tables(db_tx: &chain::rusqlite::Transaction) -> chain::rusqlite::Result<()> {
         crate::rusqlite_impl::migrate_schema(
             db_tx,
             Self::WALLET_SCHEMA_NAME,
-            &[&Self::schema_v0()],
+            &[&Self::schema_v0(), &Self::schema_v1()],
         )?;
 
         bdk_chain::local_chain::ChangeSet::init_sqlite_tables(db_tx)?;
@@ -218,6 +279,30 @@ impl ChangeSet {
             changeset.descriptor = desc.map(Impl::into_inner);
             changeset.change_descriptor = change_desc.map(Impl::into_inner);
             changeset.network = network.map(Impl::into_inner);
+        }
+
+        // Select keychain descriptors
+        let mut stmt = db_tx.prepare(&format!(
+            "SELECT keychain, group_id, descriptor, kind FROM {}",
+            Self::WALLET_DESCRIPTORS_TABLE_NAME
+        ))?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, u32>("keychain")?,
+                row.get::<_, u32>("group_id")?,
+                row.get::<_, Impl<Descriptor<DescriptorPublicKey>>>("descriptor")?,
+                row.get::<_, Option<DescriptorKind>>("kind")?,
+            ))
+        })?;
+
+        for row in rows {
+            let (key, group_id, Impl(descriptor), kind) = row?;
+            let value = KeychainDescriptor {
+                group_id,
+                descriptor,
+                kind,
+            };
+            changeset.descriptors.insert(key, value);
         }
 
         changeset.local_chain = local_chain::ChangeSet::from_sqlite(db_tx)?;
@@ -265,6 +350,25 @@ impl ChangeSet {
             network_statement.execute(named_params! {
                 ":id": 0,
                 ":network": Impl(network),
+            })?;
+        }
+
+        // insert keychain descriptors
+        let mut stmt = db_tx.prepare_cached(&format!(
+            "INSERT INTO {}(keychain, group_id, descriptor, kind) VALUES(:keychain, :group_id, :descriptor, :kind)",
+            Self::WALLET_DESCRIPTORS_TABLE_NAME,
+        ))?;
+        for (keychain, descriptor) in &self.descriptors {
+            let KeychainDescriptor {
+                group_id,
+                descriptor,
+                kind,
+            } = descriptor.clone();
+            stmt.execute(named_params! {
+                ":keychain": keychain,
+                ":group_id": group_id,
+                ":descriptor": Impl(descriptor),
+                ":kind": kind,
             })?;
         }
 

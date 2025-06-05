@@ -41,8 +41,8 @@ pub enum Error {
     Miniscript(miniscript::Error),
     /// Hex decoding error
     Hex(bitcoin::hex::HexToBytesError),
-    /// The provided wallet descriptors are identical
-    ExternalAndInternalAreTheSame,
+    /// Insert descriptor error
+    InsertDescriptor(chain::keychain_txout::InsertDescriptorError<u32>),
 }
 
 impl From<crate::keys::KeyError> for Error {
@@ -80,9 +80,7 @@ impl fmt::Display for Error {
             Self::Pk(err) => write!(f, "Key-related error: {}", err),
             Self::Miniscript(err) => write!(f, "Miniscript error: {}", err),
             Self::Hex(err) => write!(f, "Hex decoding error: {}", err),
-            Self::ExternalAndInternalAreTheSame => {
-                write!(f, "External and internal descriptors are the same")
-            }
+            Self::InsertDescriptor(e) => write!(f, "{e}"),
         }
     }
 }
