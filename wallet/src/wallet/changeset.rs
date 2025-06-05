@@ -34,16 +34,16 @@ type IndexedTxGraphChangeSet =
 ///
 /// ## Members and required fields
 ///
-/// The change set has certain required fields without which a `Wallet` cannot function.
-/// These include the [`descriptor`] and the [`network`] in use. These are required to be non-empty
-/// *in the aggregate*, meaning the field must be present and non-null in the union of all
+/// The change set has certain required fields without which a [`Wallet`] cannot function.
+/// These include the [`descriptor`] and the [`bitcoin::Network`] in use. These are required to be
+/// non-empty *in the aggregate*, meaning the field must be present and non-null in the union of all
 /// persisted changes, but may be empty in any one change set, where "empty" is defined by the
 /// [`Merge`](Merge::is_empty) implementation of that change set. This requirement also applies to
 /// the [`local_chain`] field in that the aggregate change set must include a genesis block.
 ///
-/// For example, the descriptor and network are present in the first change set after wallet
-/// creation, but are usually omitted in subsequent updates, as they are not permitted to change
-/// at any point thereafter.
+/// For example, the [`descriptor`] and [`bitcoin::Network`] are present in the first change set
+/// after wallet creation, but are usually omitted in subsequent updates, as they are not permitted
+/// to change at any point thereafter.
 ///
 /// Other fields of the change set are not required to be non-empty, that is they may be empty even
 /// in the aggregate. However in practice they should contain the data needed to recover a wallet
