@@ -518,6 +518,20 @@ impl<'a, Cs> TxBuilder<'a, Cs> {
         self.exclude_below_confirmations(1)
     }
 
+    /// Add unbroadcasted transactions to the unspendable list.
+    pub fn exclude_unbroadcasted(&mut self) -> &mut Self {
+        let unbroadcasted_ops = self.wallet.broadcast_queue().flat_map(|tx| {
+            let txid = tx.compute_txid();
+            (0_u32..)
+                .take(tx.output.len())
+                .map(move |vout| OutPoint::new(txid, vout))
+        });
+        for op in unbroadcasted_ops {
+            self.params.unspendable.insert(op);
+        }
+        self
+    }
+
     /// Sign with a specific sig hash
     ///
     /// **Use this option very carefully**
