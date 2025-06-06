@@ -1785,7 +1785,7 @@ impl Wallet {
                         }
                     })
             })
-            .collect::<Result<HashMap<OutPoint, WeightedUtxo>, BuildFeeBumpError>>()?;
+            .collect::<Result<indexmap::IndexMap<OutPoint, WeightedUtxo>, BuildFeeBumpError>>()?;
 
         if tx.output.len() > 1 {
             let mut change_index = None;
