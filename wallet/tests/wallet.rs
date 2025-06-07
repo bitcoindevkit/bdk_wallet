@@ -9,6 +9,7 @@ use bdk_chain::{
     keychain_txout::DEFAULT_LOOKAHEAD, BlockId, CanonicalizationParams, ChainPosition,
     ConfirmationBlockTime, DescriptorExt,
 };
+use bdk_wallet::coin_selection::InsufficientFunds;
 use bdk_wallet::coin_selection::{self, LargestFirstCoinSelection};
 use bdk_wallet::descriptor::{calc_checksum, DescriptorError, IntoWalletDescriptor};
 use bdk_wallet::error::CreateTxError;
@@ -51,6 +52,90 @@ const P2WPKH_FAKE_SIG_SIZE: usize = 72;
 const P2PKH_FAKE_SCRIPT_SIG_SIZE: usize = 107;
 
 const DB_MAGIC: &[u8] = &[0x21, 0x24, 0x48];
+
+#[test]
+fn test_lock_unspent_persist() -> anyhow::Result<()> {
+    use bdk_chain::rusqlite;
+    let mut conn = rusqlite::Connection::open_in_memory()?;
+
+    let (desc, change_desc) = get_test_tr_single_sig_xprv_and_change_desc();
+    let mut wallet = Wallet::create(desc, change_desc)
+        .network(Network::Signet)
+        .create_wallet(&mut conn)?;
+
+    // Receive coins.
+    for i in 0..3 {
+        let _ = receive_output(&mut wallet, Amount::from_sat(10_000), ReceiveTo::Mempool(i));
+    }
+
+    // Test 1: lock utxos
+    let unspent = wallet.list_unspent().collect::<Vec<_>>();
+    assert!(!unspent.is_empty());
+    for utxo in unspent {
+        wallet.lock_unspent(utxo.outpoint);
+        assert!(
+            wallet
+                .is_utxo_locked(utxo.outpoint)
+                .expect("should have utxo info"),
+            "Expect lock value = true"
+        );
+    }
+    wallet.persist(&mut conn)?;
+
+    // Test 2: The lock value is persistent
+    {
+        wallet = Wallet::load()
+            .load_wallet(&mut conn)?
+            .expect("wallet is persisted");
+
+        let unspent = wallet.list_unspent().collect::<Vec<_>>();
+        assert!(!unspent.is_empty());
+        for utxo in unspent {
+            assert!(
+                wallet
+                    .is_utxo_locked(utxo.outpoint)
+                    .expect("should have utxo info"),
+                "Expect recover lock value"
+            );
+        }
+
+        // Test 3: Locked utxos are excluded from coin selection
+        let addr = wallet.next_unused_address(KeychainKind::External).address;
+        let mut tx_builder = wallet.build_tx();
+        tx_builder.add_recipient(addr, Amount::from_sat(10_000));
+        let res = tx_builder.finish();
+        assert!(
+            matches!(
+                res,
+                Err(CreateTxError::CoinSelection(InsufficientFunds {
+                    available: Amount::ZERO,
+                    ..
+                })),
+            ),
+            "Locked utxos should not be selected",
+        );
+    }
+
+    // Test 4: Unlock utxos
+    {
+        wallet = Wallet::load()
+            .load_wallet(&mut conn)?
+            .expect("wallet is persisted");
+
+        let unspent = wallet.list_unspent().collect::<Vec<_>>();
+        for utxo in unspent {
+            wallet.unlock_unspent(utxo.outpoint);
+            assert!(
+                !wallet
+                    .is_utxo_locked(utxo.outpoint)
+                    .expect("should have utxo info"),
+                "Expect lock value = false"
+            );
+        }
+    }
+
+    Ok(())
+}
 
 #[test]
 fn wallet_is_persisted() -> anyhow::Result<()> {

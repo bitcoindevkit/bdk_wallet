@@ -109,6 +109,7 @@ pub struct Wallet {
     stage: ChangeSet,
     network: Network,
     secp: SecpCtx,
+    utxo_info: BTreeMap<OutPoint, UtxoInfo>,
 }
 
 /// An update to [`Wallet`].
@@ -449,6 +450,7 @@ impl Wallet {
         let change_descriptor = index.get_descriptor(KeychainKind::Internal).cloned();
         let indexed_graph = IndexedTxGraph::new(index);
         let indexed_graph_changeset = indexed_graph.initial_changeset();
+        let utxo_info = BTreeMap::new();
 
         let stage = ChangeSet {
             descriptor,
@@ -457,6 +459,7 @@ impl Wallet {
             tx_graph: indexed_graph_changeset.tx_graph,
             indexer: indexed_graph_changeset.indexer,
             network: Some(network),
+            ..Default::default()
         };
 
         Ok(Wallet {
@@ -467,6 +470,7 @@ impl Wallet {
             indexed_graph,
             stage,
             secp,
+            utxo_info,
         })
     }
 
@@ -653,10 +657,11 @@ impl Wallet {
         let mut indexed_graph = IndexedTxGraph::new(index);
         indexed_graph.apply_changeset(changeset.indexer.into());
         indexed_graph.apply_changeset(changeset.tx_graph.into());
+        let utxo_info = BTreeMap::new();
 
         let stage = ChangeSet::default();
 
-        Ok(Some(Wallet {
+        let mut wallet = Wallet {
             signers,
             change_signers,
             chain,
@@ -664,7 +669,27 @@ impl Wallet {
             stage,
             network,
             secp,
-        }))
+            utxo_info,
+        };
+
+        // Apply lock status to wallet utxos.
+        wallet.utxo_info = wallet
+            .list_unspent()
+            .map(|output| {
+                (
+                    output.outpoint,
+                    UtxoInfo {
+                        outpoint: output.outpoint,
+                        is_locked: false,
+                    },
+                )
+            })
+            .collect();
+        for (outpoint, utxo_info) in changeset.utxo_info {
+            wallet.utxo_info.insert(outpoint, utxo_info);
+        }
+
+        Ok(Some(wallet))
     }
 
     /// Get the Bitcoin network the wallet is using.
@@ -2110,6 +2135,8 @@ impl Wallet {
                     CanonicalizationParams::default(),
                     self.indexed_graph.index.outpoints().iter().cloned(),
                 )
+                // Filter out locked utxos
+                .filter(|(_, txo)| self.is_utxo_locked(txo.outpoint) != Some(true))
                 // only create LocalOutput if UTxO is mature
                 .filter_map(move |((k, i), full_txo)| {
                     full_txo
@@ -2377,6 +2404,84 @@ impl Wallet {
         &self.chain
     }
 
+    /// Is UTXO locked. `None` if the outpoint isn't found in `self.utxo_info`.
+    pub fn is_utxo_locked(&self, outpoint: OutPoint) -> Option<bool> {
+        Some(self.utxo_info.get(&outpoint)?.is_locked)
+    }
+
+    /// Lock an unspent output by `outpoint`.
+    ///
+    /// Locked utxos are automatically filtered out during coin selection. You need to persist
+    /// the wallet in order for the lock status to persist across restarts. To unlock a previously
+    /// locked outpoint, see [`Wallet::unlock_unspent`].
+    pub fn lock_unspent(&mut self, outpoint: OutPoint) {
+        use alloc::collections::btree_map;
+        let lock_value = true;
+
+        // If the utxo is not currently locked, update the lock value
+        // and stage the change.
+        let is_changed = match self.utxo_info.entry(outpoint) {
+            btree_map::Entry::Occupied(mut e) => {
+                let mut is_changed = false;
+
+                let utxo = e.get_mut();
+
+                if !utxo.is_locked {
+                    utxo.is_locked = lock_value;
+                    is_changed = true;
+                }
+
+                is_changed
+            }
+            btree_map::Entry::Vacant(e) => {
+                e.insert(UtxoInfo {
+                    outpoint,
+                    is_locked: lock_value,
+                });
+                true
+            }
+        };
+
+        if is_changed {
+            let utxo_info = UtxoInfo {
+                outpoint,
+                is_locked: lock_value,
+            };
+            self.stage.merge(ChangeSet {
+                utxo_info: [(outpoint, utxo_info)].into(),
+                ..Default::default()
+            });
+        }
+    }
+
+    /// Unlock unspent.
+    pub fn unlock_unspent(&mut self, outpoint: OutPoint) {
+        use alloc::collections::btree_map;
+        let lock_value = false;
+
+        match self.utxo_info.entry(outpoint) {
+            btree_map::Entry::Occupied(mut e) => {
+                let utxo = e.get_mut();
+
+                // If the utxo is currently locked, update the lock value and stage
+                // the change.
+                if utxo.is_locked {
+                    utxo.is_locked = lock_value;
+                    let utxo_info = UtxoInfo {
+                        outpoint,
+                        is_locked: lock_value,
+                    };
+                    self.stage.merge(ChangeSet {
+                        utxo_info: [(outpoint, utxo_info)].into(),
+                        ..Default::default()
+                    });
+                }
+            }
+            // If there is no entry, we're done because the utxo can't be locked.
+            btree_map::Entry::Vacant(..) => {}
+        }
+    }
+
     /// Introduces a `block` of `height` to the wallet, and tries to connect it to the
     /// `prev_blockhash` of the block's header.
     ///
@@ -2578,6 +2683,16 @@ impl AsRef<bdk_chain::tx_graph::TxGraph<ConfirmationBlockTime>> for Wallet {
     fn as_ref(&self) -> &bdk_chain::tx_graph::TxGraph<ConfirmationBlockTime> {
         self.indexed_graph.graph()
     }
+}
+
+/// Information about a wallet UTXO.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
+pub struct UtxoInfo {
+    /// Outpoint.
+    pub outpoint: bitcoin::OutPoint,
+    /// Whether the outpoint is locked by the user. This doesn't take into account
+    /// any timelocks that may be part of the actual scriptPubKey.
+    pub is_locked: bool,
 }
 
 /// Deterministically generate a unique name given the descriptors defining the wallet
