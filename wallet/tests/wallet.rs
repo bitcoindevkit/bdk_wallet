@@ -213,40 +213,64 @@ fn wallet_load_checks() -> anyhow::Result<()> {
             .network(network)
             .create_wallet(&mut create_db(&file_path)?)?;
 
+        let _expected_err = LoadWithPersistError::<Db::Error>::InvalidChangeSet(Box::new(
+            LoadError::Mismatch(LoadMismatch::Network {
+                loaded: Network::Testnet,
+                expected: Network::Regtest,
+            }),
+        ));
         assert_matches!(
             Wallet::load()
                 .check_network(Network::Regtest)
                 .load_wallet(&mut open_db(&file_path)?),
-            Err(LoadWithPersistError::InvalidChangeSet(LoadError::Mismatch(
-                LoadMismatch::Network {
-                    loaded: Network::Testnet,
-                    expected: Network::Regtest,
-                }
-            ))),
+            Err(_expected_err),
             "unexpected network check result: Regtest (check) is not Testnet (loaded)",
         );
         let mainnet_hash = BlockHash::from_byte_array(ChainHash::BITCOIN.to_bytes());
+        let _expected_err = LoadWithPersistError::<Db::Error>::InvalidChangeSet(Box::new(
+            LoadError::Mismatch(LoadMismatch::Genesis {
+                loaded: BlockHash::from_byte_array(ChainHash::REGTEST.to_bytes()),
+                expected: mainnet_hash,
+            }),
+        ));
         assert_matches!(
             Wallet::load().check_genesis_hash(mainnet_hash).load_wallet(&mut open_db(&file_path)?),
-            Err(LoadWithPersistError::InvalidChangeSet(LoadError::Mismatch(LoadMismatch::Genesis { .. }))),
+            Err(_expected_err),
             "unexpected genesis hash check result: mainnet hash (check) is not testnet hash (loaded)",
         );
+        let secp = Secp256k1::new();
+        let external_desc_pub = Descriptor::parse_descriptor(&secp, external_desc)
+            .expect("invalid external descriptor")
+            .0;
+        let internal_desc_pub = Descriptor::parse_descriptor(&secp, internal_desc)
+            .expect("invalid internal descriptor")
+            .0;
+        let _expected_err = LoadWithPersistError::<Db::Error>::InvalidChangeSet(Box::new(
+            LoadError::Mismatch(LoadMismatch::Descriptor {
+                keychain: KeychainKind::External,
+                loaded: Box::new(Some(external_desc_pub.clone())),
+                expected: Box::new(Some(internal_desc_pub.clone())),
+            }),
+        ));
         assert_matches!(
             Wallet::load()
                 .descriptor(KeychainKind::External, Some(internal_desc))
                 .load_wallet(&mut open_db(&file_path)?),
-            Err(LoadWithPersistError::InvalidChangeSet(LoadError::Mismatch(
-                LoadMismatch::Descriptor { .. }
-            ))),
+            Err(_expected_err),
             "unexpected descriptors check result",
         );
+        let _expected_err = LoadWithPersistError::<Db::Error>::InvalidChangeSet(Box::new(
+            LoadError::Mismatch(LoadMismatch::Descriptor {
+                keychain: KeychainKind::External,
+                loaded: Box::new(Some(internal_desc_pub.clone())),
+                expected: Box::new(None),
+            }),
+        ));
         assert_matches!(
             Wallet::load()
                 .descriptor(KeychainKind::External, Option::<&str>::None)
                 .load_wallet(&mut open_db(&file_path)?),
-            Err(LoadWithPersistError::InvalidChangeSet(LoadError::Mismatch(
-                LoadMismatch::Descriptor { .. }
-            ))),
+            Err(_expected_err),
             "unexpected descriptors check result",
         );
         // check setting keymaps
@@ -380,10 +404,17 @@ fn single_descriptor_wallet_persist_and_recover() {
         .descriptor(KeychainKind::Internal, Some(desc))
         .extract_keys()
         .load_wallet(&mut db);
+    let _expected_err = LoadWithPersistError::<rusqlite::Error>::InvalidChangeSet(Box::new(
+        LoadError::Mismatch(LoadMismatch::Descriptor {
+            keychain: KeychainKind::Internal,
+            loaded: Box::new(None),
+            expected: Box::new(Some(exp_desc)),
+        }),
+    ));
+    //if keychain ==  && loaded.is_none() && expected == Some(exp_desc);
     assert_matches!(
         err,
-        Err(LoadWithPersistError::InvalidChangeSet(LoadError::Mismatch(LoadMismatch::Descriptor { keychain, loaded, expected })))
-        if keychain == KeychainKind::Internal && loaded.is_none() && expected == Some(exp_desc),
+        Err(_expected_err),
         "single descriptor wallet should refuse change descriptor param"
     );
 }
