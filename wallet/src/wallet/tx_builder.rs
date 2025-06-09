@@ -126,7 +126,7 @@ pub(crate) struct TxParams {
     pub(crate) fee_policy: Option<FeePolicy>,
     pub(crate) internal_policy_path: Option<BTreeMap<String, Vec<usize>>>,
     pub(crate) external_policy_path: Option<BTreeMap<String, Vec<usize>>>,
-    pub(crate) utxos: HashMap<OutPoint, WeightedUtxo>,
+    pub(crate) utxos: HashMap<OutPoint, (u32, WeightedUtxo)>,
     pub(crate) unspendable: HashSet<OutPoint>,
     pub(crate) manually_selected_only: bool,
     pub(crate) sighash: Option<psbt::PsbtSighashType>,
@@ -276,28 +276,41 @@ impl<'a, Cs> TxBuilder<'a, Cs> {
     ///
     /// These have priority over the "unspendable" utxos, meaning that if a utxo is present both in
     /// the "utxos" and the "unspendable" list, it will be spent.
+    ///
+    /// If a UTxO is inserted multiple times, only the final insertion will take effect.
     pub fn add_utxos(&mut self, outpoints: &[OutPoint]) -> Result<&mut Self, AddUtxoError> {
+        let order_max = self
+            .params
+            .utxos
+            .values()
+            .map(|(order, _)| order)
+            .max()
+            .unwrap_or(&0);
         let utxo_batch = outpoints
             .iter()
-            .map(|outpoint| {
+            .zip(1u32..)
+            .map(|(outpoint, counter)| {
                 self.wallet
                     .get_utxo(*outpoint)
                     .ok_or(AddUtxoError::UnknownUtxo(*outpoint))
                     .map(|output| {
                         (
                             *outpoint,
-                            WeightedUtxo {
-                                satisfaction_weight: self
-                                    .wallet
-                                    .public_descriptor(output.keychain)
-                                    .max_weight_to_satisfy()
-                                    .unwrap(),
-                                utxo: Utxo::Local(output),
-                            },
+                            (
+                                order_max + counter,
+                                WeightedUtxo {
+                                    satisfaction_weight: self
+                                        .wallet
+                                        .public_descriptor(output.keychain)
+                                        .max_weight_to_satisfy()
+                                        .unwrap(),
+                                    utxo: Utxo::Local(output),
+                                },
+                            ),
                         )
                     })
             })
-            .collect::<Result<HashMap<OutPoint, WeightedUtxo>, AddUtxoError>>()?;
+            .collect::<Result<HashMap<OutPoint, (u32, WeightedUtxo)>, AddUtxoError>>()?;
         self.params.utxos.extend(utxo_batch);
 
         Ok(self)
@@ -312,6 +325,10 @@ impl<'a, Cs> TxBuilder<'a, Cs> {
     }
 
     /// Add a foreign UTXO i.e. a UTXO not known by this wallet.
+    ///
+    /// Foreign UTxOs do not take priority over local UTxOs. If a local UTxO is added to the
+    /// manually selected list, it will replace any conflicting foreign UTxOs. However, a foreign
+    /// UTxO cannot replace a conflicting local UTxO.
     ///
     /// There might be cases where the UTxO belongs to the wallet but it doesn't have knowledge of
     /// it. This is possible if the wallet is not synced or its not being use to track
@@ -407,23 +424,36 @@ impl<'a, Cs> TxBuilder<'a, Cs> {
             }
         }
 
-        if let Some(WeightedUtxo {
-            utxo: Utxo::Local { .. },
-            ..
-        }) = self.params.utxos.get(&outpoint)
+        if let Some((
+            _order,
+            WeightedUtxo {
+                utxo: Utxo::Local { .. },
+                ..
+            },
+        )) = self.params.utxos.get(&outpoint)
         {
             None
         } else {
+            let order_max = self
+                .params
+                .utxos
+                .values()
+                .map(|(order, _)| order)
+                .max()
+                .unwrap_or(&0);
             self.params.utxos.insert(
                 outpoint,
-                WeightedUtxo {
-                    satisfaction_weight,
-                    utxo: Utxo::Foreign {
-                        outpoint,
-                        sequence,
-                        psbt_input: Box::new(psbt_input),
+                (
+                    order_max + 1,
+                    WeightedUtxo {
+                        satisfaction_weight,
+                        utxo: Utxo::Foreign {
+                            outpoint,
+                            sequence,
+                            psbt_input: Box::new(psbt_input),
+                        },
                     },
-                },
+                ),
             )
         };
 
@@ -468,6 +498,11 @@ impl<'a, Cs> TxBuilder<'a, Cs> {
     }
 
     /// Choose the ordering for inputs and outputs of the transaction
+    ///
+    /// When [TxBuilder::ordering] is set to [TxOrdering::Untouched], the insertion order of
+    /// recipients and manually selected UTxOs is preserved and reflected exactly in transaction's
+    /// output and input vectors respectively. If algorithmically selected UTxOs are included, they
+    /// will be placed after all the manually selected ones in the transaction's input vector.
     pub fn ordering(&mut self, ordering: TxOrdering) -> &mut Self {
         self.params.ordering = ordering;
         self
@@ -777,7 +812,11 @@ pub enum TxOrdering {
     /// Randomized (default)
     #[default]
     Shuffle,
-    /// Unchanged
+    /// Unchanged insertion order for recipients and for manually added UTxOs. This guarantees all
+    /// recipients preserve insertion order in the transaction's output vector and manually added
+    /// UTxOs preserve insertion order in the transaction's input vector, but does not make any
+    /// guarantees about algorithmically selected UTxOs. However, by design they will always be
+    /// placed after the manually selected ones.
     Untouched,
     /// Provide custom comparison functions for sorting
     Custom {
@@ -1142,14 +1181,18 @@ mod test {
             satisfaction_weight: Weight::from_wu(0),
             utxo: Utxo::Local(test_utxos[0].clone()),
         };
-        for _ in 0..3 {
+        for order in 0..3 {
             params
                 .utxos
-                .insert(test_utxos[0].outpoint, fake_weighted_utxo.clone());
+                .insert(test_utxos[0].outpoint, (order, fake_weighted_utxo.clone()));
         }
         assert_eq!(
             vec![(test_utxos[0].outpoint, fake_weighted_utxo)],
-            params.utxos.into_iter().collect::<Vec<_>>()
+            params
+                .utxos
+                .into_iter()
+                .map(|(k, (_order, v))| (k, v))
+                .collect::<Vec<_>>()
         );
     }
 
@@ -1202,7 +1245,7 @@ mod test {
             )
             .is_ok());
 
-        let foreign_utxo_with_modified_weight =
+        let (_order, foreign_utxo_with_modified_weight) =
             builder.params.utxos.values().collect::<Vec<_>>()[0];
 
         assert_eq!(builder.params.utxos.len(), 1);
@@ -1250,13 +1293,16 @@ mod test {
         // add_utxo method because we are assuming wallet2 has not knowledge of utxo1 yet
         builder.params.utxos.insert(
             utxo1.outpoint,
-            WeightedUtxo {
-                satisfaction_weight: wallet1
-                    .public_descriptor(utxo1.keychain)
-                    .max_weight_to_satisfy()
-                    .unwrap(),
-                utxo: Utxo::Local(utxo1.clone()),
-            },
+            (
+                0,
+                WeightedUtxo {
+                    satisfaction_weight: wallet1
+                        .public_descriptor(utxo1.keychain)
+                        .max_weight_to_satisfy()
+                        .unwrap(),
+                    utxo: Utxo::Local(utxo1.clone()),
+                },
+            ),
         );
 
         // add foreign utxo
@@ -1271,7 +1317,8 @@ mod test {
             )
             .is_ok());
 
-        let utxo_should_still_be_local = builder.params.utxos.values().collect::<Vec<_>>()[0];
+        let (_order, utxo_should_still_be_local) =
+            builder.params.utxos.values().collect::<Vec<_>>()[0];
 
         assert_eq!(builder.params.utxos.len(), 1);
         assert_eq!(utxo_should_still_be_local.utxo.outpoint(), utxo1.outpoint);
@@ -1335,16 +1382,20 @@ mod test {
         // add_utxo method because we are assuming wallet2 has not knowledge of utxo1 yet
         builder.params.utxos.insert(
             utxo1.outpoint,
-            WeightedUtxo {
-                satisfaction_weight: wallet1
-                    .public_descriptor(utxo1.keychain)
-                    .max_weight_to_satisfy()
-                    .unwrap(),
-                utxo: Utxo::Local(utxo1.clone()),
-            },
+            (
+                0,
+                WeightedUtxo {
+                    satisfaction_weight: wallet1
+                        .public_descriptor(utxo1.keychain)
+                        .max_weight_to_satisfy()
+                        .unwrap(),
+                    utxo: Utxo::Local(utxo1.clone()),
+                },
+            ),
         );
 
-        let utxo_should_still_be_local = builder.params.utxos.values().collect::<Vec<_>>()[0];
+        let (_order, utxo_should_still_be_local) =
+            builder.params.utxos.values().collect::<Vec<_>>()[0];
 
         assert_eq!(builder.params.utxos.len(), 1);
         assert_eq!(utxo_should_still_be_local.utxo.outpoint(), utxo1.outpoint);
