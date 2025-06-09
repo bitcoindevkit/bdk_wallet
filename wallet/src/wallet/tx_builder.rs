@@ -276,6 +276,8 @@ impl<'a, Cs> TxBuilder<'a, Cs> {
     ///
     /// These have priority over the "unspendable" utxos, meaning that if a utxo is present both in
     /// the "utxos" and the "unspendable" list, it will be spent.
+    ///
+    /// If a UTxO is inserted multiple times, only the final insertion will take effect.
     pub fn add_utxos(&mut self, outpoints: &[OutPoint]) -> Result<&mut Self, AddUtxoError> {
         let order_max = self
             .params
@@ -323,6 +325,10 @@ impl<'a, Cs> TxBuilder<'a, Cs> {
     }
 
     /// Add a foreign UTXO i.e. a UTXO not known by this wallet.
+    ///
+    /// Foreign UTxOs do not take priority over local UTxOs. If a local UTxO is added to the
+    /// manually selected list, it will replace any conflicting foreign UTxOs. However, a foreign
+    /// UTxO cannot replace a conflicting local UTxO.
     ///
     /// There might be cases where the UTxO belongs to the wallet but it doesn't have knowledge of
     /// it. This is possible if the wallet is not synced or its not being use to track
