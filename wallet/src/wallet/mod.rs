@@ -1511,7 +1511,7 @@ impl Wallet {
 
         let (required_utxos, optional_utxos) = {
             // NOTE: manual selection overrides unspendable
-            let mut required: Vec<WeightedUtxo> = params.utxos.values().cloned().collect();
+            let mut required: Vec<WeightedUtxo> = params.utxos.order_weighted_utxos();
             let optional = self.filter_utxos(&params, current_height.to_consensus_u32());
 
             // if drain_wallet is true, all UTxOs are required
@@ -1785,7 +1785,7 @@ impl Wallet {
                         }
                     })
             })
-            .collect::<Result<indexmap::IndexMap<OutPoint, WeightedUtxo>, BuildFeeBumpError>>()?;
+            .collect::<Result<OrderUtxos, BuildFeeBumpError>>()?;
 
         if tx.output.len() > 1 {
             let mut change_index = None;
@@ -2571,6 +2571,68 @@ impl Wallet {
         FullScanRequest::builder_at(start_time)
             .chain_tip(self.chain.tip())
             .spks_from_indexer(&self.indexed_graph.index)
+    }
+}
+
+#[derive(Debug, Default, Clone)]
+pub(crate) struct OrderUtxos {
+    utxos: Vec<OutPoint>,
+    utxos_map: HashMap<OutPoint, WeightedUtxo>,
+}
+
+impl Deref for OrderUtxos {
+    type Target = HashMap<OutPoint, WeightedUtxo>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.utxos_map
+    }
+}
+
+impl OrderUtxos {
+    fn insert(&mut self, outpoint: OutPoint, weighted_utxo: WeightedUtxo) -> Option<WeightedUtxo> {
+        let v = self.utxos_map.insert(outpoint, weighted_utxo);
+        if v.is_none() {
+            self.utxos.push(outpoint);
+        }
+        debug_assert!(self.utxos.len() == self.utxos_map.len());
+        v
+    }
+
+    fn order_weighted_utxos(&self) -> Vec<WeightedUtxo> {
+        self.utxos
+            .iter()
+            .map(|outpoint| self.utxos_map.get(outpoint).cloned().unwrap())
+            .collect::<Vec<_>>()
+    }
+}
+
+impl FromIterator<(OutPoint, WeightedUtxo)> for OrderUtxos {
+    fn from_iter<T: IntoIterator<Item = (OutPoint, WeightedUtxo)>>(iter: T) -> Self {
+        let mut r = OrderUtxos::default();
+        for (outpoint, weighted_utxo) in iter {
+            r.insert(outpoint, weighted_utxo);
+        }
+        r
+    }
+}
+
+impl IntoIterator for OrderUtxos {
+    type Item = (OutPoint, WeightedUtxo);
+    type IntoIter = std::vec::IntoIter<Self::Item>;
+    fn into_iter(mut self) -> Self::IntoIter {
+        self.utxos
+            .into_iter()
+            .map(|outpoint| (outpoint, self.utxos_map.remove(&outpoint).unwrap()))
+            .collect::<Vec<_>>()
+            .into_iter()
+    }
+}
+
+impl Extend<(OutPoint, WeightedUtxo)> for OrderUtxos {
+    fn extend<T: IntoIterator<Item = (OutPoint, WeightedUtxo)>>(&mut self, iter: T) {
+        for (outpoint, weighted_utxo) in iter {
+            self.insert(outpoint, weighted_utxo);
+        }
     }
 }
 
