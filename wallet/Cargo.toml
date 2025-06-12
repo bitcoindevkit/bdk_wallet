@@ -18,7 +18,7 @@ workspace = true
 [dependencies]
 rand_core = { version = "0.6.0" }
 miniscript = { version = "12.3.1", features = [ "serde" ], default-features = false }
-bitcoin = { version = "0.32.4", features = [ "serde", "base64" ], default-features = false }
+bitcoin = { version = "0.32.6", features = [ "serde", "base64" ], default-features = false }
 serde = { version = "^1.0", features = ["derive"] }
 serde_json = { version = "^1.0" }
 bdk_chain = { version = "0.23.0", features = [ "miniscript", "serde" ], default-features = false }
