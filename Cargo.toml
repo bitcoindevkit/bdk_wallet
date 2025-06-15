@@ -14,6 +14,3 @@ authors = ["Bitcoin Dev Kit Developers"]
 [workspace.lints.clippy]
 print_stdout = "deny"
 print_stderr = "deny"
-
-# [patch.crates-io]
-# bdk_core = { git = "https://github.com/Foundation-Devices/bdk-1", rev = "fd5b8152fdb49b3d457ec4c92591bdc45f00f43f" }
