@@ -7,7 +7,7 @@ edition = "2021"
 
 [dependencies]
 bdk_wallet = { path = "../../wallet", features = ["file_store"] }
-bdk_bitcoind_rpc = { version = "0.20.0" }
+bdk_bitcoind_rpc = { git = "https://github.com/Foundation-Devices/bdk-1", rev = "fd5b8152fdb49b3d457ec4c92591bdc45f00f43f" }
 
 anyhow = "1"
 clap = { version = "4.5.17", features = ["derive", "env"] }

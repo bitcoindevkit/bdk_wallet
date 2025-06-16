@@ -8,5 +8,5 @@ publish = false
 
 [dependencies]
 bdk_wallet = { path = "../../wallet", features = ["file_store"] }
-bdk_esplora = { version = "0.22.0", features = ["blocking"] }
+bdk_esplora = { git = "https://github.com/Foundation-Devices/bdk-1", rev = "fd5b8152fdb49b3d457ec4c92591bdc45f00f43f", features = ["blocking"] }
 anyhow = "1"
