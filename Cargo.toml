@@ -17,9 +17,17 @@ all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 
 [dependencies]
-bdk_chain = { version = "0.23.1", features = ["miniscript", "serde"], default-features = false }
-bitcoin = { version = "0.32.7", features = ["serde", "base64"], default-features = false }
-miniscript = { version = "12.3.1", features = ["serde"], default-features = false }
+bdk_chain = { version = "0.23.1", features = [
+    "miniscript",
+    "serde",
+], default-features = false }
+bitcoin = { version = "0.32.7", features = [
+    "serde",
+    "base64",
+], default-features = false }
+miniscript = { version = "12.3.1", features = [
+    "serde",
+], default-features = false }
 rand_core = { version = "0.6.0" }
 serde_json = { version = "1" }
 serde = { version = "1", features = ["derive"] }
@@ -45,7 +53,11 @@ anyhow = "1"
 assert_matches = "1.5.0"
 bdk_bitcoind_rpc = { version = "0.21.0" }
 bdk_electrum = { version = "0.23.1" }
-bdk_esplora = { version = "0.22.1", features = ["async-https", "blocking-https", "tokio"] }
+bdk_esplora = { version = "0.22.1", features = [
+    "async-https",
+    "blocking-https",
+    "tokio",
+] }
 bdk_wallet = { path = ".", features = ["rusqlite", "file_store", "test-utils"] }
 clap = { version = "4.5.17", features = ["derive", "env"] }
 ctrlc = "3.4.6"
