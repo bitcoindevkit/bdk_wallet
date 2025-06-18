@@ -281,7 +281,7 @@ impl<'a, Cs> TxBuilder<'a, Cs> {
             .iter()
             .map(|outpoint| {
                 self.wallet
-                    .get_utxo(*outpoint)
+                    .get_utxo_include_unbroadcasted(*outpoint)
                     .ok_or(AddUtxoError::UnknownUtxo(*outpoint))
                     .map(|output| {
                         (
@@ -456,6 +456,20 @@ impl<'a, Cs> TxBuilder<'a, Cs> {
     /// have priority over this. See the docs of the two linked methods for more details.
     pub fn add_unspendable(&mut self, unspendable: OutPoint) -> &mut Self {
         self.params.unspendable.insert(unspendable);
+        self
+    }
+
+    /// Add unbroadcasted transactions to the unspendable list.
+    pub fn exclude_unbroadcasted(&mut self) -> &mut Self {
+        let unbroadcasted_ops = self.wallet.broadcast_queue().flat_map(|tx| {
+            let txid = tx.compute_txid();
+            (0_u32..)
+                .take(tx.output.len())
+                .map(move |vout| OutPoint::new(txid, vout))
+        });
+        for op in unbroadcasted_ops {
+            self.params.unspendable.insert(op);
+        }
         self
     }
 
@@ -1029,6 +1043,7 @@ mod test {
                     last_seen: Some(1),
                 },
                 derivation_index: 0,
+                needs_broadcast: false,
             },
             LocalOutput {
                 outpoint: OutPoint {
@@ -1049,6 +1064,7 @@ mod test {
                     transitively: None,
                 },
                 derivation_index: 1,
+                needs_broadcast: false,
             },
         ]
     }
