@@ -1511,7 +1511,11 @@ impl Wallet {
 
         let (required_utxos, optional_utxos) = {
             // NOTE: manual selection overrides unspendable
-            let mut required: Vec<WeightedUtxo> = params.utxos.values().cloned().collect();
+            let mut required_to_sort: Vec<(u32, WeightedUtxo)> =
+                params.utxos.values().cloned().collect();
+            required_to_sort.sort_by_key(|(k, _v)| *k);
+            let mut required: Vec<WeightedUtxo> =
+                required_to_sort.into_iter().map(|(_k, v)| v).collect();
             let optional = self.filter_utxos(&params, current_height.to_consensus_u32());
 
             // if drain_wallet is true, all UTxOs are required
@@ -1720,7 +1724,8 @@ impl Wallet {
         let utxos = tx
             .input
             .drain(..)
-            .map(|txin| -> Result<_, BuildFeeBumpError> {
+            .zip(0u32..)
+            .map(|(txin, order)| -> Result<_, BuildFeeBumpError> {
                 graph
                     // Get previous transaction
                     .get_tx(txin.previous_output.txid)
@@ -1736,26 +1741,29 @@ impl Wallet {
                             .get(txin.previous_output.vout as usize)
                             .ok_or(BuildFeeBumpError::InvalidOutputIndex(txin.previous_output))
                             .cloned()?;
-                        Ok((prev_tx, prev_txout, chain_position))
+                        Ok((prev_tx, prev_txout, chain_position, order))
                     })
-                    .map(|(prev_tx, prev_txout, chain_position)| {
+                    .map(|(prev_tx, prev_txout, chain_position, order)| {
                         match txout_index.index_of_spk(prev_txout.script_pubkey.clone()) {
                             Some(&(keychain, derivation_index)) => (
                                 txin.previous_output,
-                                WeightedUtxo {
-                                    satisfaction_weight: self
-                                        .public_descriptor(keychain)
-                                        .max_weight_to_satisfy()
-                                        .unwrap(),
-                                    utxo: Utxo::Local(LocalOutput {
-                                        outpoint: txin.previous_output,
-                                        txout: prev_txout.clone(),
-                                        keychain,
-                                        is_spent: true,
-                                        derivation_index,
-                                        chain_position,
-                                    }),
-                                },
+                                (
+                                    order,
+                                    WeightedUtxo {
+                                        satisfaction_weight: self
+                                            .public_descriptor(keychain)
+                                            .max_weight_to_satisfy()
+                                            .unwrap(),
+                                        utxo: Utxo::Local(LocalOutput {
+                                            outpoint: txin.previous_output,
+                                            txout: prev_txout.clone(),
+                                            keychain,
+                                            is_spent: true,
+                                            derivation_index,
+                                            chain_position,
+                                        }),
+                                    },
+                                ),
                             ),
                             None => {
                                 let satisfaction_weight = Weight::from_wu_usize(
@@ -1765,27 +1773,32 @@ impl Wallet {
 
                                 (
                                     txin.previous_output,
-                                    WeightedUtxo {
-                                        utxo: Utxo::Foreign {
-                                            outpoint: txin.previous_output,
-                                            sequence: txin.sequence,
-                                            psbt_input: Box::new(psbt::Input {
-                                                witness_utxo: prev_txout
-                                                    .script_pubkey
-                                                    .witness_version()
-                                                    .map(|_| prev_txout.clone()),
-                                                non_witness_utxo: Some(prev_tx.as_ref().clone()),
-                                                ..Default::default()
-                                            }),
+                                    (
+                                        order,
+                                        WeightedUtxo {
+                                            utxo: Utxo::Foreign {
+                                                outpoint: txin.previous_output,
+                                                sequence: txin.sequence,
+                                                psbt_input: Box::new(psbt::Input {
+                                                    witness_utxo: prev_txout
+                                                        .script_pubkey
+                                                        .witness_version()
+                                                        .map(|_| prev_txout.clone()),
+                                                    non_witness_utxo: Some(
+                                                        prev_tx.as_ref().clone(),
+                                                    ),
+                                                    ..Default::default()
+                                                }),
+                                            },
+                                            satisfaction_weight,
                                         },
-                                        satisfaction_weight,
-                                    },
+                                    ),
                                 )
                             }
                         }
                     })
             })
-            .collect::<Result<HashMap<OutPoint, WeightedUtxo>, BuildFeeBumpError>>()?;
+            .collect::<Result<HashMap<OutPoint, (u32, WeightedUtxo)>, BuildFeeBumpError>>()?;
 
         if tx.output.len() > 1 {
             let mut change_index = None;
@@ -2749,13 +2762,16 @@ mod test {
         let output = wallet.get_utxo(OutPoint { txid, vout: 0 }).unwrap();
         params.utxos.insert(
             output.outpoint,
-            WeightedUtxo {
-                satisfaction_weight: wallet
-                    .public_descriptor(output.keychain)
-                    .max_weight_to_satisfy()
-                    .unwrap(),
-                utxo: Utxo::Local(output),
-            },
+            (
+                0,
+                WeightedUtxo {
+                    satisfaction_weight: wallet
+                        .public_descriptor(output.keychain)
+                        .max_weight_to_satisfy()
+                        .unwrap(),
+                    utxo: Utxo::Local(output),
+                },
+            ),
         );
         // enforce selection of first output in transaction
         let received = wallet.filter_utxos(&params, wallet.latest_checkpoint().block_id().height);
