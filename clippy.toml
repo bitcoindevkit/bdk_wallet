@@ -1,4 +1,4 @@
 # TODO fix, see: https://rust-lang.github.io/rust-clippy/master/index.html#large_enum_variant
-enum-variant-size-threshold = 1032
+enum-variant-size-threshold = 1064
 # TODO fix, see: https://rust-lang.github.io/rust-clippy/master/index.html#result_large_err
-large-error-threshold = 993
+large-error-threshold = 1024

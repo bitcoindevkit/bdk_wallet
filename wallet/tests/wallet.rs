@@ -9,6 +9,7 @@ use bdk_chain::{
     keychain_txout::DEFAULT_LOOKAHEAD, BlockId, CanonicalizationParams, ChainPosition,
     ConfirmationBlockTime, DescriptorExt,
 };
+use bdk_wallet::coin_selection::InsufficientFunds;
 use bdk_wallet::coin_selection::{self, LargestFirstCoinSelection};
 use bdk_wallet::descriptor::{calc_checksum, DescriptorError, IntoWalletDescriptor};
 use bdk_wallet::error::CreateTxError;
@@ -51,6 +52,138 @@ const P2WPKH_FAKE_SIG_SIZE: usize = 72;
 const P2PKH_FAKE_SCRIPT_SIG_SIZE: usize = 107;
 
 const DB_MAGIC: &[u8] = &[0x21, 0x24, 0x48];
+
+#[test]
+fn test_lock_outpoint_persist() -> anyhow::Result<()> {
+    use bdk_chain::rusqlite;
+    let mut conn = rusqlite::Connection::open_in_memory()?;
+
+    let (desc, change_desc) = get_test_tr_single_sig_xprv_and_change_desc();
+    let mut wallet = Wallet::create(desc, change_desc)
+        .network(Network::Signet)
+        .create_wallet(&mut conn)?;
+
+    // Receive coins.
+    let mut outpoints = vec![];
+    for i in 0..3 {
+        let op = receive_output(&mut wallet, Amount::from_sat(10_000), ReceiveTo::Mempool(i));
+        outpoints.push(op);
+    }
+
+    // Test: lock outpoints
+    let unspent = wallet.list_unspent().collect::<Vec<_>>();
+    assert!(!unspent.is_empty());
+    for utxo in unspent {
+        wallet.lock_outpoint(utxo.outpoint, None);
+        assert!(
+            wallet.is_outpoint_locked(utxo.outpoint),
+            "Expect outpoint is locked"
+        );
+    }
+    wallet.persist(&mut conn)?;
+
+    // Test: The lock value is persistent
+    {
+        wallet = Wallet::load()
+            .load_wallet(&mut conn)?
+            .expect("wallet is persisted");
+
+        let unspent = wallet.list_unspent().collect::<Vec<_>>();
+        assert!(!unspent.is_empty());
+        for utxo in unspent {
+            assert!(
+                wallet.is_outpoint_locked(utxo.outpoint),
+                "Expect recover lock value"
+            );
+        }
+        let locked_unspent = wallet.list_locked_unspent().collect::<Vec<_>>();
+        assert_eq!(locked_unspent, outpoints);
+
+        // Test: Locked outpoints are excluded from coin selection
+        let addr = wallet.next_unused_address(KeychainKind::External).address;
+        let mut tx_builder = wallet.build_tx();
+        tx_builder.add_recipient(addr, Amount::from_sat(10_000));
+        let res = tx_builder.finish();
+        assert!(
+            matches!(
+                res,
+                Err(CreateTxError::CoinSelection(InsufficientFunds {
+                    available: Amount::ZERO,
+                    ..
+                })),
+            ),
+            "Locked outpoints should not be selected",
+        );
+    }
+
+    // Test: Unlock outpoints
+    {
+        wallet = Wallet::load()
+            .load_wallet(&mut conn)?
+            .expect("wallet is persisted");
+
+        let unspent = wallet.list_unspent().collect::<Vec<_>>();
+        for utxo in &unspent {
+            wallet.unlock_outpoint(utxo.outpoint);
+            assert!(
+                !wallet.is_outpoint_locked(utxo.outpoint),
+                "Expect outpoint is not locked"
+            );
+        }
+        assert!(!wallet.locked_outpoints().values().any(|u| u.is_locked));
+        assert!(wallet.list_locked_unspent().next().is_none());
+        wallet.persist(&mut conn)?;
+
+        // Test: Update lock expiry
+        let outpoint = unspent.first().unwrap().outpoint;
+        let mut expiry: u32 = 100;
+        wallet.lock_outpoint(outpoint, Some(expiry));
+        let changeset = wallet.staged().unwrap();
+        assert_eq!(
+            changeset
+                .locked_outpoints
+                .get(&outpoint)
+                .unwrap()
+                .expiration_height,
+            Some(expiry)
+        );
+
+        expiry *= 2;
+        wallet.lock_outpoint(outpoint, Some(expiry));
+        let changeset = wallet.staged().unwrap();
+        assert_eq!(
+            changeset
+                .locked_outpoints
+                .get(&outpoint)
+                .unwrap()
+                .expiration_height,
+            Some(expiry)
+        );
+        wallet.persist(&mut conn)?;
+
+        // Now advance the local chain
+        let block_199 = BlockId {
+            height: expiry - 1,
+            hash: BlockHash::all_zeros(),
+        };
+        insert_checkpoint(&mut wallet, block_199);
+        assert!(
+            wallet.is_outpoint_locked(outpoint),
+            "outpoint should be locked before expiration height"
+        );
+        let block_200 = BlockId {
+            height: expiry,
+            hash: BlockHash::all_zeros(),
+        };
+        insert_checkpoint(&mut wallet, block_200);
+        assert!(
+            !wallet.is_outpoint_locked(outpoint),
+            "outpoint should unlock at expiration height"
+        );
+    }
+
+    Ok(())
+}
 
 #[test]
 fn wallet_is_persisted() -> anyhow::Result<()> {

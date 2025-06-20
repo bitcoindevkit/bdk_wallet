@@ -1,11 +1,16 @@
+use alloc::collections::BTreeMap;
+
 use bdk_chain::{
     indexed_tx_graph, keychain_txout, local_chain, tx_graph, ConfirmationBlockTime, Merge,
 };
+use bitcoin::{OutPoint, Txid};
 use miniscript::{Descriptor, DescriptorPublicKey};
 use serde::{Deserialize, Serialize};
 
 type IndexedTxGraphChangeSet =
     indexed_tx_graph::ChangeSet<ConfirmationBlockTime, keychain_txout::ChangeSet>;
+
+use crate::UtxoLock;
 
 /// A change set for [`Wallet`]
 ///
@@ -114,6 +119,8 @@ pub struct ChangeSet {
     pub tx_graph: tx_graph::ChangeSet<ConfirmationBlockTime>,
     /// Changes to [`KeychainTxOutIndex`](keychain_txout::KeychainTxOutIndex).
     pub indexer: keychain_txout::ChangeSet,
+    /// Changes to locked outpoints.
+    pub locked_outpoints: BTreeMap<OutPoint, UtxoLock>,
 }
 
 impl Merge for ChangeSet {
@@ -142,6 +149,11 @@ impl Merge for ChangeSet {
             self.network = other.network;
         }
 
+        // To merge `locked_outpoints` we extend the existing collection. If there's
+        // an existing entry for a given outpoint, it is overwritten by the
+        // new utxo lock.
+        self.locked_outpoints.extend(other.locked_outpoints);
+
         Merge::merge(&mut self.local_chain, other.local_chain);
         Merge::merge(&mut self.tx_graph, other.tx_graph);
         Merge::merge(&mut self.indexer, other.indexer);
@@ -154,6 +166,7 @@ impl Merge for ChangeSet {
             && self.local_chain.is_empty()
             && self.tx_graph.is_empty()
             && self.indexer.is_empty()
+            && self.locked_outpoints.is_empty()
     }
 }
 
@@ -163,6 +176,8 @@ impl ChangeSet {
     pub const WALLET_SCHEMA_NAME: &'static str = "bdk_wallet";
     /// Name of table to store wallet descriptors and network.
     pub const WALLET_TABLE_NAME: &'static str = "bdk_wallet";
+    /// Name of table to store wallet locked outpoints.
+    pub const WALLET_OUTPOINT_LOCK_TABLE_NAME: &'static str = "bdk_wallet_locked_outpoints";
 
     /// Get v0 sqlite [ChangeSet] schema
     pub fn schema_v0() -> alloc::string::String {
@@ -177,12 +192,26 @@ impl ChangeSet {
         )
     }
 
+    /// Get v1 sqlite [`ChangeSet`] schema. Schema v1 adds a table for locked outpoints.
+    pub fn schema_v1() -> alloc::string::String {
+        format!(
+            "CREATE TABLE {} ( \
+                txid TEXT NOT NULL, \
+                vout INTEGER NOT NULL, \
+                is_locked INTEGER, \
+                expiration_height INTEGER, \
+                PRIMARY KEY(txid, vout) \
+                ) STRICT;",
+            Self::WALLET_OUTPOINT_LOCK_TABLE_NAME,
+        )
+    }
+
     /// Initialize sqlite tables for wallet tables.
     pub fn init_sqlite_tables(db_tx: &chain::rusqlite::Transaction) -> chain::rusqlite::Result<()> {
         crate::rusqlite_impl::migrate_schema(
             db_tx,
             Self::WALLET_SCHEMA_NAME,
-            &[&Self::schema_v0()],
+            &[&Self::schema_v0(), &Self::schema_v1()],
         )?;
 
         bdk_chain::local_chain::ChangeSet::init_sqlite_tables(db_tx)?;
@@ -218,6 +247,31 @@ impl ChangeSet {
             changeset.descriptor = desc.map(Impl::into_inner);
             changeset.change_descriptor = change_desc.map(Impl::into_inner);
             changeset.network = network.map(Impl::into_inner);
+        }
+
+        // Select locked outpoints.
+        let mut stmt = db_tx.prepare(&format!(
+            "SELECT txid, vout, is_locked, expiration_height FROM {}",
+            Self::WALLET_OUTPOINT_LOCK_TABLE_NAME,
+        ))?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, Impl<Txid>>("txid")?,
+                row.get::<_, u32>("vout")?,
+                row.get::<_, bool>("is_locked")?,
+                row.get::<_, Option<u32>>("expiration_height")?,
+            ))
+        })?;
+        for row in rows {
+            let (Impl(txid), vout, is_locked, expiration_height) = row?;
+            let utxo_lock = UtxoLock {
+                outpoint: OutPoint::new(txid, vout),
+                is_locked,
+                expiration_height,
+            };
+            changeset
+                .locked_outpoints
+                .insert(utxo_lock.outpoint, utxo_lock);
         }
 
         changeset.local_chain = local_chain::ChangeSet::from_sqlite(db_tx)?;
@@ -265,6 +319,21 @@ impl ChangeSet {
             network_statement.execute(named_params! {
                 ":id": 0,
                 ":network": Impl(network),
+            })?;
+        }
+
+        // Insert locked outpoints.
+        let mut stmt = db_tx.prepare_cached(&format!(
+            "INSERT INTO {}(txid, vout, is_locked, expiration_height) VALUES(:txid, :vout, :is_locked, :expiration_height) ON CONFLICT DO UPDATE SET is_locked=:is_locked, expiration_height=:expiration_height",
+            Self::WALLET_OUTPOINT_LOCK_TABLE_NAME,
+        ))?;
+        for (&outpoint, utxo_lock) in &self.locked_outpoints {
+            let OutPoint { txid, vout } = outpoint;
+            stmt.execute(named_params! {
+                ":txid": Impl(txid),
+                ":vout": vout,
+                ":is_locked": utxo_lock.is_locked,
+                ":expiration_height": utxo_lock.expiration_height,
             })?;
         }
 
