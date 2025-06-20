@@ -58,3 +58,7 @@ required-features = ["all-keys"]
 name = "miniscriptc"
 path = "examples/compiler.rs"
 required-features = ["compiler"]
+
+[[example]]
+name = "keyring"
+required-features = ["rusqlite"]
