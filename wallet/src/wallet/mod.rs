@@ -2457,13 +2457,57 @@ impl Wallet {
         self.stage.merge(indexed_graph_changeset.into());
     }
 
-    /// Apply evictions of the given txids with their associated timestamps.
+    /// Apply evictions of the given transaction IDs with their associated timestamps.
     ///
-    /// This means that any pending unconfirmed tx in this set will no longer be canonical by
-    /// default. Note that an evicted tx can become canonical if it is later seen again or
-    /// observed on-chain.
+    /// This function is used to mark specific unconfirmed transactions as evicted from the mempool.
+    /// Eviction means that these transactions are no longer considered canonical by default, which
+    /// implies that they are not part of the wallet's [`transactions`] set. This can happen, for
+    /// example, when a transaction is dropped from the mempool due to low fees or conflicts
+    /// with another transaction.
     ///
-    /// This stages the changes which need to be persisted.
+    /// Only transactions that are currently unconfirmed and canonical will be considered for
+    /// eviction. Transactions that are not relevant to the wallet are ignored. Note that an
+    /// evicted transaction can become canonical again if it is later observed on-chain or seen in
+    /// the mempool with a higher priority (e.g., due to a fee bump).
+    ///
+    /// ### Parameters
+    ///
+    /// - `evicted_txs`: An iterator of `(Txid, u64)` tuples, where:
+    ///   - `Txid`: The transaction ID of the transaction to be evicted.
+    ///   - `u64`: The timestamp indicating when the transaction was evicted from the mempool. This
+    ///     will usually correspond to the time of the latest chain sync. See docs for
+    ///     [`start_sync_with_revealed_spks`].
+    ///
+    /// ### Example
+    ///
+    /// ```rust,no_run
+    /// # use bitcoin::hashes::Hash;
+    /// use std::time::{SystemTime, UNIX_EPOCH};
+    /// # let mut wallet = bdk_wallet::doctest_wallet!();
+    /// # let txid_to_evict = bitcoin::Txid::all_zeros();
+    ///
+    /// let timestamp = SystemTime::now()
+    ///     .duration_since(UNIX_EPOCH)
+    ///     .unwrap()
+    ///     .as_secs();
+    ///
+    /// wallet.apply_evicted_txs(vec![(txid_to_evict, timestamp)]);
+    /// ```
+    ///
+    /// ### Note
+    ///
+    /// - This function is particularly useful when syncing with a blockchain backend that provides
+    ///   mempool eviction notifications.
+    /// - The changes are staged in the wallet's internal state and must be persisted to ensure they
+    ///   are retained across wallet restarts. Use [`Wallet::take_staged`] to retrieve the staged
+    ///   changes and persist them to your database of choice.
+    /// - Evicted transactions are removed from the wallet's canonical transaction set, but the data
+    ///   remains in the wallet's internal transaction graph for historical purposes.
+    /// - Ensure that the timestamps provided are accurate and monotonically increasing, as they
+    ///   influence the wallet's canonicalization logic.
+    ///
+    /// [`transactions`]: Wallet::transactions
+    /// [`start_sync_with_revealed_spks`]: Wallet::start_sync_with_revealed_spks
     pub fn apply_evicted_txs(&mut self, evicted_txs: impl IntoIterator<Item = (Txid, u64)>) {
         let chain = &self.chain;
         let canon_txids: Vec<Txid> = self
@@ -2671,7 +2715,7 @@ macro_rules! floating_rate {
 /// Macro for getting a wallet for use in a doctest
 macro_rules! doctest_wallet {
     () => {{
-        use $crate::bitcoin::{BlockHash, Transaction, absolute, TxOut, Network, hashes::Hash};
+        use $crate::bitcoin::{transaction, Amount, BlockHash, Transaction, absolute, TxOut, Network, hashes::Hash};
         use $crate::chain::{ConfirmationBlockTime, BlockId, TxGraph, tx_graph};
         use $crate::{Update, KeychainKind, Wallet};
         use $crate::test_utils::*;
