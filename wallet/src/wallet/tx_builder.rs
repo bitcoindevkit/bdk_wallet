@@ -141,6 +141,19 @@ pub(crate) struct TxParams {
     pub(crate) bumping_fee: Option<PreviousFee>,
     pub(crate) current_height: Option<absolute::LockTime>,
     pub(crate) allow_dust: bool,
+    pub(crate) uncanonical_utxo_policy: UncanonicalUtxoPolicy,
+}
+
+#[derive(Default, Debug, Clone)]
+pub(crate) enum UncanonicalUtxoPolicy {
+    /// Exlude all uncanonical UTXOs.
+    #[default]
+    Exclude,
+    /// Include uncanonical UTXOs which do not conflict with the canonical history.
+    Include,
+    /// Include uncanonical UTXOs, including those that conflict with unconfirmed canonical
+    /// history.
+    IncludeUnconfirmedConflicts,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -281,7 +294,8 @@ impl<'a, Cs> TxBuilder<'a, Cs> {
             .iter()
             .map(|outpoint| {
                 self.wallet
-                    .get_utxo_include_unbroadcasted(*outpoint)
+                    // TODO: We should really pick from the intent canonical view.
+                    .get_utxo(*outpoint)
                     .ok_or(AddUtxoError::UnknownUtxo(*outpoint))
                     .map(|output| {
                         (
@@ -459,20 +473,6 @@ impl<'a, Cs> TxBuilder<'a, Cs> {
         self
     }
 
-    /// Add unbroadcasted transactions to the unspendable list.
-    pub fn exclude_unbroadcasted(&mut self) -> &mut Self {
-        let unbroadcasted_ops = self.wallet.broadcast_queue().flat_map(|tx| {
-            let txid = tx.compute_txid();
-            (0_u32..)
-                .take(tx.output.len())
-                .map(move |vout| OutPoint::new(txid, vout))
-        });
-        for op in unbroadcasted_ops {
-            self.params.unspendable.insert(op);
-        }
-        self
-    }
-
     /// Sign with a specific sig hash
     ///
     /// **Use this option very carefully**
@@ -637,6 +637,19 @@ impl<'a, Cs> TxBuilder<'a, Cs> {
     pub fn add_data<T: AsRef<PushBytes>>(&mut self, data: &T) -> &mut Self {
         let script = ScriptBuf::new_op_return(data);
         self.add_recipient(script, Amount::ZERO);
+        self
+    }
+
+    /// Include uncanonical UTXOs which do not conflict with the canonical history.
+    pub fn include_uncanonical(&mut self) -> &mut Self {
+        self.params.uncanonical_utxo_policy = UncanonicalUtxoPolicy::Include;
+        self
+    }
+
+    /// Include uncanonical UTXOs, inclusive of those that conflict with unconfirmed canonical
+    /// transactions. UTXOs that conflict with confirmed history are still excluded.
+    pub fn include_uncanonical_conflicts(&mut self) -> &mut Self {
+        self.params.uncanonical_utxo_policy = UncanonicalUtxoPolicy::IncludeUnconfirmedConflicts;
         self
     }
 

@@ -5,7 +5,7 @@ use bitcoin::Txid;
 use miniscript::{Descriptor, DescriptorPublicKey};
 use serde::{Deserialize, Serialize};
 
-use super::broadcast_queue;
+use super::intent_tracker;
 
 type IndexedTxGraphChangeSet =
     indexed_tx_graph::ChangeSet<ConfirmationBlockTime, keychain_txout::ChangeSet>;
@@ -117,9 +117,9 @@ pub struct ChangeSet {
     pub tx_graph: tx_graph::ChangeSet<ConfirmationBlockTime>,
     /// Changes to [`KeychainTxOutIndex`](keychain_txout::KeychainTxOutIndex).
     pub indexer: keychain_txout::ChangeSet,
-    /// Changes to [`BroadcastQueue`](broadcast_queue::BroadcastQueue).
+    /// Changes to [`IntentTracker`](intent_tracker::IntentTracker).
     #[serde(default)]
-    pub broadcast_queue: broadcast_queue::ChangeSet,
+    pub intent_tracker: intent_tracker::ChangeSet,
 }
 
 impl Merge for ChangeSet {
@@ -151,7 +151,7 @@ impl Merge for ChangeSet {
         Merge::merge(&mut self.local_chain, other.local_chain);
         Merge::merge(&mut self.tx_graph, other.tx_graph);
         Merge::merge(&mut self.indexer, other.indexer);
-        Merge::merge(&mut self.broadcast_queue, other.broadcast_queue);
+        Merge::merge(&mut self.intent_tracker, other.intent_tracker);
     }
 
     fn is_empty(&self) -> bool {
@@ -161,7 +161,7 @@ impl Merge for ChangeSet {
             && self.local_chain.is_empty()
             && self.tx_graph.is_empty()
             && self.indexer.is_empty()
-            && self.broadcast_queue.is_empty()
+            && self.intent_tracker.is_empty()
     }
 }
 
@@ -249,9 +249,9 @@ impl ChangeSet {
         for row in row_iter {
             let Impl(txid) = row?;
             changeset
-                .broadcast_queue
+                .intent_tracker
                 .mutations
-                .push(broadcast_queue::Mutation::Push(txid));
+                .push(intent_tracker::Mutation::Push(txid));
         }
 
         changeset.local_chain = local_chain::ChangeSet::from_sqlite(db_tx)?;
@@ -310,12 +310,12 @@ impl ChangeSet {
             "DELETE FROM {} WHERE txid=:txid",
             Self::WALLET_BROADCAST_QUEUE_TABLE_NAME
         ))?;
-        for mutation in &self.broadcast_queue.mutations {
+        for mutation in &self.intent_tracker.mutations {
             match mutation {
-                broadcast_queue::Mutation::Push(txid) => {
+                intent_tracker::Mutation::Push(txid) => {
                     queue_insert_statement.execute(named_params! { ":txid": Impl(*txid) })?;
                 }
-                broadcast_queue::Mutation::Remove(txid) => {
+                intent_tracker::Mutation::Remove(txid) => {
                     queue_remove_statement.execute(named_params! { ":txid": Impl(*txid) })?;
                 }
             }
@@ -365,10 +365,10 @@ impl From<keychain_txout::ChangeSet> for ChangeSet {
     }
 }
 
-impl From<broadcast_queue::ChangeSet> for ChangeSet {
-    fn from(broadcast_queue: broadcast_queue::ChangeSet) -> Self {
+impl From<intent_tracker::ChangeSet> for ChangeSet {
+    fn from(broadcast_queue: intent_tracker::ChangeSet) -> Self {
         Self {
-            broadcast_queue,
+            intent_tracker: broadcast_queue,
             ..Default::default()
         }
     }
