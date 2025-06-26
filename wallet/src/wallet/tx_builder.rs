@@ -459,6 +459,45 @@ impl<'a, Cs> TxBuilder<'a, Cs> {
         self
     }
 
+    /// Excludes any outpoints whose enclosing transaction has fewer than `min_confirms`
+    /// confirmations.
+    ///
+    /// `min_confirms` is the minimum number of confirmations a transaction must have in order for
+    /// its outpoints to remain spendable.
+    /// - Passing `0` will include all transactions (no filtering).
+    /// - Passing `1` will exclude all unconfirmed transactions (equivalent to
+    ///   `exclude_unconfirmed`).
+    /// - Passing `6` will only allow outpoints from transactions with at least 6 confirmations.
+    ///
+    /// If you chain this with other filtering methods, the final set of unspendable outpoints will
+    /// be the union of all filters.
+    pub fn exclude_below_confirmations(&mut self, min_confirms: u32) -> &mut Self {
+        let tip_height = self.wallet.latest_checkpoint().height();
+        let to_exclude = self
+            .wallet
+            .list_unspent()
+            .filter(|utxo| {
+                utxo.chain_position
+                    .confirmation_height_upper_bound()
+                    .map_or(0, |h| tip_height.saturating_add(1).saturating_sub(h))
+                    < min_confirms
+            })
+            .map(|utxo| utxo.outpoint);
+        for op in to_exclude {
+            self.params.unspendable.insert(op);
+        }
+        self
+    }
+
+    /// Exclude outpoints whose enclosing transaction is unconfirmed.
+    ///
+    /// This is a shorthand for [`exclude_below_confirmations(1)`].
+    ///
+    /// [`exclude_below_confirmations(1)`]: Self::exclude_below_confirmations
+    pub fn exclude_unconfirmed(&mut self) -> &mut Self {
+        self.exclude_below_confirmations(1)
+    }
+
     /// Sign with a specific sig hash
     ///
     /// **Use this option very carefully**
@@ -1086,6 +1125,96 @@ mod test {
 
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].keychain, KeychainKind::Internal);
+    }
+
+    #[test]
+    fn test_exclude_unconfirmed() {
+        use crate::test_utils::*;
+        use bdk_chain::BlockId;
+        use bitcoin::{hashes::Hash, BlockHash, Network};
+
+        let mut wallet = Wallet::create_single(get_test_tr_single_sig())
+            .network(Network::Regtest)
+            .create_wallet_no_persist()
+            .unwrap();
+        let recipient = wallet.next_unused_address(KeychainKind::External).address;
+
+        insert_checkpoint(
+            &mut wallet,
+            BlockId {
+                height: 1,
+                hash: BlockHash::all_zeros(),
+            },
+        );
+        insert_checkpoint(
+            &mut wallet,
+            BlockId {
+                height: 2,
+                hash: BlockHash::all_zeros(),
+            },
+        );
+        receive_output(
+            &mut wallet,
+            Amount::ONE_BTC,
+            ReceiveTo::Block(chain::ConfirmationBlockTime {
+                block_id: BlockId {
+                    height: 1,
+                    hash: BlockHash::all_zeros(),
+                },
+                confirmation_time: 1,
+            }),
+        );
+        receive_output(
+            &mut wallet,
+            Amount::ONE_BTC * 2,
+            ReceiveTo::Block(chain::ConfirmationBlockTime {
+                block_id: BlockId {
+                    height: 2,
+                    hash: BlockHash::all_zeros(),
+                },
+                confirmation_time: 2,
+            }),
+        );
+        receive_output(&mut wallet, Amount::ONE_BTC * 3, ReceiveTo::Mempool(100));
+
+        // Exclude nothing.
+        {
+            let mut builder = wallet.build_tx();
+            builder
+                .fee_rate(FeeRate::ZERO)
+                .exclude_below_confirmations(0)
+                .drain_wallet()
+                .drain_to(recipient.script_pubkey());
+            let tx = builder.finish().unwrap();
+            let output = tx.unsigned_tx.output.first().expect("must have one output");
+            assert_eq!(output.value, Amount::ONE_BTC * 6);
+        }
+
+        // Exclude < 1 conf (a.k.a exclude unconfirmed).
+        {
+            let mut builder = wallet.build_tx();
+            builder
+                .fee_rate(FeeRate::ZERO)
+                .exclude_below_confirmations(1)
+                .drain_wallet()
+                .drain_to(recipient.script_pubkey());
+            let tx = builder.finish().unwrap();
+            let output = tx.unsigned_tx.output.first().expect("must have one output");
+            assert_eq!(output.value, Amount::ONE_BTC * 3);
+        }
+
+        // Exclude < 2 conf (a.k.a need at least 2 conf)
+        {
+            let mut builder = wallet.build_tx();
+            builder
+                .fee_rate(FeeRate::ZERO)
+                .exclude_below_confirmations(2)
+                .drain_wallet()
+                .drain_to(recipient.script_pubkey());
+            let tx = builder.finish().unwrap();
+            let output = tx.unsigned_tx.output.first().expect("must have one output");
+            assert_eq!(output.value, Amount::ONE_BTC);
+        }
     }
 
     #[test]
