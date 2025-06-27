@@ -150,7 +150,9 @@ impl<P: WalletPersister> PersistedWallet<P> {
     ) -> Result<Self, CreateWithPersistError<P::Error>> {
         let existing = P::initialize(persister).map_err(CreateWithPersistError::Persist)?;
         if !existing.is_empty() {
-            return Err(CreateWithPersistError::DataAlreadyExists(existing));
+            return Err(CreateWithPersistError::DataAlreadyExists(Box::new(
+                existing,
+            )));
         }
         let mut inner =
             Wallet::create_with_params(params).map_err(CreateWithPersistError::Descriptor)?;
@@ -176,7 +178,7 @@ impl<P: WalletPersister> PersistedWallet<P> {
                     _marker: PhantomData,
                 })
             })
-            .map_err(LoadWithPersistError::InvalidChangeSet)
+            .map_err(|cs| LoadWithPersistError::InvalidChangeSet(Box::new(cs)))
     }
 
     /// Persist staged changes of wallet into `persister`.
@@ -207,7 +209,9 @@ impl<P: AsyncWalletPersister> PersistedWallet<P> {
             .await
             .map_err(CreateWithPersistError::Persist)?;
         if !existing.is_empty() {
-            return Err(CreateWithPersistError::DataAlreadyExists(existing));
+            return Err(CreateWithPersistError::DataAlreadyExists(Box::new(
+                existing,
+            )));
         }
         let mut inner =
             Wallet::create_with_params(params).map_err(CreateWithPersistError::Descriptor)?;
@@ -237,7 +241,7 @@ impl<P: AsyncWalletPersister> PersistedWallet<P> {
                     _marker: PhantomData,
                 })
             })
-            .map_err(LoadWithPersistError::InvalidChangeSet)
+            .map_err(|cs| LoadWithPersistError::InvalidChangeSet(Box::new(cs)))
     }
 
     /// Persist staged changes of wallet into an async `persister`.
@@ -295,7 +299,7 @@ impl WalletPersister for bdk_chain::rusqlite::Connection {
 #[derive(Debug)]
 pub enum FileStoreError {
     /// Error when loading from the store.
-    Load(bdk_file_store::StoreErrorWithDump<ChangeSet>),
+    Load(Box<bdk_file_store::StoreErrorWithDump<ChangeSet>>),
     /// Error when writing to the store.
     Write(std::io::Error),
 }
@@ -322,7 +326,7 @@ impl WalletPersister for bdk_file_store::Store<ChangeSet> {
         persister
             .dump()
             .map(Option::unwrap_or_default)
-            .map_err(FileStoreError::Load)
+            .map_err(|e| FileStoreError::Load(Box::new(e)))
     }
 
     fn persist(persister: &mut Self, changeset: &ChangeSet) -> Result<(), Self::Error> {
@@ -336,7 +340,7 @@ pub enum LoadWithPersistError<E> {
     /// Error from persistence.
     Persist(E),
     /// Occurs when the loaded changeset cannot construct [`Wallet`].
-    InvalidChangeSet(crate::LoadError),
+    InvalidChangeSet(Box<crate::LoadError>),
 }
 
 impl<E: fmt::Display> fmt::Display for LoadWithPersistError<E> {
@@ -357,7 +361,7 @@ pub enum CreateWithPersistError<E> {
     /// Error from persistence.
     Persist(E),
     /// Persister already has wallet data.
-    DataAlreadyExists(ChangeSet),
+    DataAlreadyExists(Box<ChangeSet>),
     /// Occurs when the loaded changeset cannot construct [`Wallet`].
     Descriptor(DescriptorError),
 }
