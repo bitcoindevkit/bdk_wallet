@@ -44,6 +44,8 @@ bdk_chain = { version = "0.23.1", features = ["rusqlite"] }
 bdk_wallet = { path = ".", features = ["rusqlite", "file_store", "test-utils"] }
 anyhow = "1"
 rand = "^0.8"
+bdk_testenv = "0.13"
+bdk_bitcoind_rpc = { version = "0.20"  }
 
 [package.metadata.docs.rs]
 all-features = true
@@ -58,3 +60,7 @@ required-features = ["all-keys"]
 name = "miniscriptc"
 path = "examples/compiler.rs"
 required-features = ["compiler"]
+
+[[example]]
+name = "intent_tracker"
+path = "examples/intent_tracker.rs"
