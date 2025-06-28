@@ -19,10 +19,9 @@ use alloc::{
     sync::Arc,
     vec::Vec,
 };
-use chain::{CanonicalReason, ChainOracle, ObservedIn};
+use chain::CanonicalReason;
 use core::{cmp::Ordering, fmt, mem, ops::Deref};
-use intent_tracker::{CanonicalView, NetworkSeen, UncanonicalSpendInfo, UncanonicalTx};
-use std::collections::btree_map::Entry;
+use intent_tracker::{CanonicalView, NetworkSeen, SpendInfo, UncanonicalTx};
 
 use bdk_chain::{
     indexer::keychain_txout::KeychainTxOutIndex,
@@ -81,7 +80,7 @@ use crate::wallet::{
 // re-exports
 pub use bdk_chain::Balance;
 pub use changeset::ChangeSet;
-pub use intent_tracker::CanonicalizationTracker;
+pub use intent_tracker::IntentTracker;
 pub use params::*;
 pub use persisted::*;
 pub use utils::IsDust;
@@ -110,7 +109,7 @@ pub struct Wallet {
     change_signers: Arc<SignersContainer>,
     chain: LocalChain,
     indexed_graph: IndexedTxGraph<ConfirmationBlockTime, KeychainTxOutIndex<KeychainKind>>,
-    intent_tracker: CanonicalizationTracker,
+    intent_tracker: IntentTracker,
     network_view: CanonicalView<ConfirmationBlockTime>,
     intent_view: CanonicalView<ConfirmationBlockTime>,
     stage: ChangeSet,
@@ -478,7 +477,7 @@ impl Wallet {
             None => (None, Arc::new(SignersContainer::new())),
         };
 
-        let intent_tracker = CanonicalizationTracker::default();
+        let intent_tracker = IntentTracker::default();
 
         let mut stage = ChangeSet {
             descriptor: Some(descriptor.clone()),
@@ -511,7 +510,7 @@ impl Wallet {
             network_view: CanonicalView::default(),
             intent_view: CanonicalView::default(),
         };
-        wallet.update_views();
+        wallet.rebuild_all_views();
 
         Ok(wallet)
     }
@@ -701,7 +700,7 @@ impl Wallet {
         )
         .map_err(LoadError::Descriptor)?;
 
-        let intent_tracker = CanonicalizationTracker::from_changeset(changeset.intent_tracker);
+        let intent_tracker = IntentTracker::from_changeset(changeset.intent_tracker);
 
         let mut wallet = Wallet {
             signers,
@@ -715,7 +714,7 @@ impl Wallet {
             network_view: CanonicalView::default(),
             intent_view: CanonicalView::default(),
         };
-        wallet.update_views();
+        wallet.rebuild_all_views();
 
         Ok(Some(wallet))
     }
@@ -2668,57 +2667,78 @@ impl Wallet {
 
 /// Methods to interact with the broadcast queue.
 impl Wallet {
-    fn update_network_view(&mut self) {
+    fn rebuild_all_views(&mut self) {
+        let _ = self.rebuild_network_view();
+        let _ = self.rebuild_intent_view();
+    }
+
+    /// Updates the network canonical view and returns evicted txids from the old view.
+    fn rebuild_network_view(&mut self) -> impl Iterator<Item = Txid> + '_ {
+        let params = CanonicalizationParams::default();
+        let view = &mut self.network_view;
         let chain = &self.chain;
-        let tip = chain.tip().block_id();
-        let network_params = CanonicalizationParams::default();
-        let network_view_iter =
-            self.indexed_graph
-                .graph()
-                .canonical_iter(chain, tip, network_params);
-        self.network_view = CanonicalView::from_iter(network_view_iter).expect("infallible");
+        let chain_tip = chain.tip().block_id();
+        let graph = self.indexed_graph.graph();
+        Self::_rebuild_view(view, params, chain, chain_tip, graph)
     }
 
     /// Updates the intent canonical view and returns evicted txids from the old view.
-    fn update_intent_view(&mut self) -> impl Iterator<Item = Txid> + '_ {
+    fn rebuild_intent_view(&mut self) -> impl Iterator<Item = Txid> + '_ {
+        let params = self.intent_view_canonicalization_params();
+        let view = &mut self.intent_view;
         let chain = &self.chain;
-        let tip = chain.tip().block_id();
-        let intent_params = self.intent_view_canonicalization_params();
-        let intent_view_iter = self
-            .indexed_graph
-            .graph()
-            .canonical_iter(chain, tip, intent_params);
-        let mut temp_intent_view = CanonicalView::from_iter(intent_view_iter).expect("infallible");
-        core::mem::swap(&mut self.intent_view, &mut temp_intent_view);
-        temp_intent_view
+        let chain_tip = chain.tip().block_id();
+        let graph = self.indexed_graph.graph();
+        Self::_rebuild_view(view, params, chain, chain_tip, graph)
+    }
+
+    /// Recompute the given `view` and return txids that are evicted from the old view.
+    fn _rebuild_view<'v>(
+        view: &'v mut CanonicalView<ConfirmationBlockTime>,
+        params: CanonicalizationParams,
+        chain: &'v LocalChain,
+        chain_tip: BlockId,
+        graph: &'v TxGraph<ConfirmationBlockTime>,
+    ) -> impl Iterator<Item = Txid> + 'v {
+        let view_iter = graph.canonical_iter(chain, chain_tip, params);
+        let mut temp_view = CanonicalView::from_iter(view_iter).expect("infallible");
+        core::mem::swap(view, &mut temp_view);
+        temp_view
             .txs
             .into_keys()
-            .filter(|old_txid| !self.intent_view.txs.contains_key(old_txid))
+            .filter(|old_txid| !view.txs.contains_key(old_txid))
     }
 
-    fn update_views(&mut self) {
-        self.update_network_view();
-        let _ = self.update_intent_view();
-    }
+    // <<<<<<< HEAD
+    //     fn update_views(&mut self) {
+    //         self.update_network_view();
+    //         let _ = self.update_intent_view();
+    //     }
 
-    /// Stage changes and return evicted txids from intent canonical view.
-    ///
-    /// TODO: Do we also need to return evicted txids from network canonical view.
+    //     /// Stage changes and return evicted txids from intent canonical view.
+    //     ///
+    //     /// TODO: Do we also need to return evicted txids from network canonical view.
+    // =======
+
+    /// Stage changes, rebuild views and return evicted txids from intent canonical view.
     pub(crate) fn stage_changes<C: Into<ChangeSet>>(&mut self, changeset: C) -> Vec<Txid> {
         let changeset: ChangeSet = changeset.into();
 
         // TODO: Skip rebuilding views for certain types of changes.
-        self.update_network_view();
-        let evicted_txids = self.update_intent_view().collect::<Vec<_>>();
-        for &evicted_txid in &evicted_txids {
+        // TODO: Figure out what type of notifications users need.
+        // TODO: * I.e. if a tracked tx gets evicted from the canonical network view.
+        let _txids_evicted_from_network = self.rebuild_network_view();
+        drop(_txids_evicted_from_network);
+        let txids_evicted_from_intent = self.rebuild_intent_view().collect::<Vec<_>>();
+        for &evicted_txid in &txids_evicted_from_intent {
             self.stage
                 .merge(self.intent_tracker.remove(evicted_txid).into());
         }
         self.stage.merge(changeset);
-        evicted_txids
+        txids_evicted_from_intent
     }
 
-    /// [`CanonicalizationParams`] which includes transactions in the broadcast queue.
+    /// [`CanonicalizationParams`] which prioritize tracked transactions.
     pub(crate) fn intent_view_canonicalization_params(&self) -> CanonicalizationParams {
         CanonicalizationParams {
             assume_canonical: self.intent_tracker.txids().collect(),
@@ -2794,109 +2814,18 @@ impl Wallet {
                     .iter()
                     .filter_map(|txin| {
                         let op = txin.previous_output;
-
-                        let mut spend = UncanonicalSpendInfo::<ConfirmationBlockTime>::default();
-
-                        let mut visited = HashSet::<OutPoint>::new();
-                        let mut stack = Vec::<(OutPoint, u32)>::new(); // (prev-outpoint, distance)
-                        stack.push((op, 0));
-
-                        while let Some((prevout, distance)) = stack.pop() {
-                            if !visited.insert(prevout) {
-                                continue;
-                            }
-                            if self.network_view.txs.contains_key(&prevout.txid) {
-                                // This tx is canonical.
-                                continue;
-                            }
-
-                            let prev_tx_node = match graph.get_tx_node(prevout.txid) {
-                                Some(prev_tx) => prev_tx,
-                                None => continue,
-                            };
-
-                            let uncanonical_ancestor_entry =
-                                match spend.uncanonical_ancestors.entry(prevout.txid) {
-                                    Entry::Vacant(entry) => entry,
-                                    // Uncanonical tx already visited.
-                                    Entry::Occupied(_) => continue,
-                                };
-                            uncanonical_ancestor_entry.insert(
-                                if !prev_tx_node.anchors.is_empty()
-                                    || prev_tx_node.last_seen.is_some()
-                                {
-                                    NetworkSeen::Seen
-                                } else {
-                                    NetworkSeen::NeverSeen
-                                },
-                            );
-
-                            if let Some((conflict_txid, _, reason)) =
-                                self.network_view.spend(prevout)
-                            {
-                                if let Entry::Vacant(entry) =
-                                    spend.conflicting_txs.entry(conflict_txid)
-                                {
-                                    let conflict_tx_node = match graph.get_tx_node(conflict_txid) {
-                                        Some(tx_node) => tx_node,
-                                        None => continue,
-                                    };
-                                    let maybe_direct_anchor = conflict_tx_node
-                                        .anchors
-                                        .iter()
-                                        .find(|a| {
-                                            self.chain
-                                                .is_block_in_chain(a.block_id, tip.block_id())
-                                                .expect("infallible")
-                                                .unwrap_or(false)
-                                        })
-                                        .cloned();
-                                    let conflict_pos = match maybe_direct_anchor {
-                                        Some(anchor) => ChainPosition::Confirmed {
-                                            anchor,
-                                            transitively: None,
-                                        },
-                                        None => match reason.clone() {
-                                            CanonicalReason::Assumed { .. } => {
-                                                debug_assert!(false, "network view must not have any assumed-canonical txs");
-                                                ChainPosition::Unconfirmed {
-                                                    first_seen: None,
-                                                    last_seen: None,
-                                                }
-                                            }
-                                            CanonicalReason::Anchor { anchor, descendant } => {
-                                                ChainPosition::Confirmed {
-                                                    anchor,
-                                                    transitively: descendant,
-                                                }
-                                            }
-                                            CanonicalReason::ObservedIn { observed_in, .. } => {
-                                                ChainPosition::Unconfirmed {
-                                                    first_seen: conflict_tx_node.first_seen,
-                                                    last_seen: match observed_in {
-                                                        ObservedIn::Block(_) => None,
-                                                        ObservedIn::Mempool(last_seen) => {
-                                                            Some(last_seen)
-                                                        }
-                                                    },
-                                                }
-                                            }
-                                        },
-                                    };
-                                    entry.insert((distance, conflict_pos));
-                                }
-                            }
-
-                            stack.extend(
-                                prev_tx_node
-                                    .tx
-                                    .input
-                                    .iter()
-                                    .map(|txin| (txin.previous_output, distance + 1)),
-                            );
+                        let spend_info = SpendInfo::new(
+                            &self.chain,
+                            tip.block_id(),
+                            graph,
+                            &self.network_view,
+                            op,
+                        );
+                        if spend_info.is_empty() {
+                            None
+                        } else {
+                            Some((op, spend_info))
                         }
-
-                        Some((op, spend))
                     })
                     .collect();
 
@@ -2913,7 +2842,7 @@ impl Wallet {
     ///
     /// A self-spend if where all inputs and outputs are owned by this wallet.
     ///
-    /// This may return false-negatives if there is missing information from the wallet.
+    /// This may return false-negatives if there are missing information from the wallet.
     pub fn is_self_spend(&self, tx: &Transaction) -> bool {
         let index = &self.indexed_graph.index;
         for txout in &tx.output {
@@ -3049,7 +2978,7 @@ where
 }
 
 fn new_local_utxo(
-    broadcast_queue: &CanonicalizationTracker,
+    broadcast_queue: &IntentTracker,
     keychain: KeychainKind,
     derivation_index: u32,
     full_txo: FullTxOut<ConfirmationBlockTime>,
