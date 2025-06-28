@@ -801,6 +801,7 @@ mod test {
                 is_spent: false,
                 derivation_index: 42,
                 chain_position,
+                needs_broadcast: false,
             }),
         }
     }
@@ -856,6 +857,7 @@ mod test {
                             last_seen: Some(1),
                         }
                     },
+                    needs_broadcast: false,
                 }),
             });
         }
@@ -883,6 +885,7 @@ mod test {
                         first_seen: Some(1),
                         last_seen: Some(1),
                     },
+                    needs_broadcast: false,
                 }),
             })
             .collect()

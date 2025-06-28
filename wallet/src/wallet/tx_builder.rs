@@ -141,6 +141,19 @@ pub(crate) struct TxParams {
     pub(crate) bumping_fee: Option<PreviousFee>,
     pub(crate) current_height: Option<absolute::LockTime>,
     pub(crate) allow_dust: bool,
+    pub(crate) uncanonical_utxo_policy: UncanonicalUtxoPolicy,
+}
+
+#[derive(Default, Debug, Clone)]
+pub(crate) enum UncanonicalUtxoPolicy {
+    /// Exlude all uncanonical UTXOs.
+    #[default]
+    Exclude,
+    /// Include uncanonical UTXOs which do not conflict with the canonical history.
+    Include,
+    /// Include uncanonical UTXOs, including those that conflict with unconfirmed canonical
+    /// history.
+    IncludeUnconfirmedConflicts,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -281,6 +294,7 @@ impl<'a, Cs> TxBuilder<'a, Cs> {
             .iter()
             .map(|outpoint| {
                 self.wallet
+                    // TODO: We should really pick from the intent canonical view.
                     .get_utxo(*outpoint)
                     .ok_or(AddUtxoError::UnknownUtxo(*outpoint))
                     .map(|output| {
@@ -623,6 +637,19 @@ impl<'a, Cs> TxBuilder<'a, Cs> {
     pub fn add_data<T: AsRef<PushBytes>>(&mut self, data: &T) -> &mut Self {
         let script = ScriptBuf::new_op_return(data);
         self.add_recipient(script, Amount::ZERO);
+        self
+    }
+
+    /// Include uncanonical UTXOs which do not conflict with the canonical history.
+    pub fn include_uncanonical(&mut self) -> &mut Self {
+        self.params.uncanonical_utxo_policy = UncanonicalUtxoPolicy::Include;
+        self
+    }
+
+    /// Include uncanonical UTXOs, inclusive of those that conflict with unconfirmed canonical
+    /// transactions. UTXOs that conflict with confirmed history are still excluded.
+    pub fn include_uncanonical_conflicts(&mut self) -> &mut Self {
+        self.params.uncanonical_utxo_policy = UncanonicalUtxoPolicy::IncludeUnconfirmedConflicts;
         self
     }
 
@@ -1029,6 +1056,7 @@ mod test {
                     last_seen: Some(1),
                 },
                 derivation_index: 0,
+                needs_broadcast: false,
             },
             LocalOutput {
                 outpoint: OutPoint {
@@ -1049,6 +1077,7 @@ mod test {
                     transitively: None,
                 },
                 derivation_index: 1,
+                needs_broadcast: false,
             },
         ]
     }
