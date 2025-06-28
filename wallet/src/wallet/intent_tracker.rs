@@ -1,16 +1,21 @@
 //! Unbroadcasted transaction queue.
 
+use core::convert::Infallible;
+
 use alloc::sync::Arc;
 
 use alloc::vec::Vec;
 use bitcoin::OutPoint;
 use bitcoin::Transaction;
 use chain::tx_graph;
+use chain::tx_graph::TxNode;
 use chain::Anchor;
+use chain::BlockId;
 use chain::CanonicalIter;
 use chain::CanonicalReason;
 use chain::ChainOracle;
 use chain::ChainPosition;
+use chain::ObservedIn;
 use chain::TxGraph;
 
 use crate::collections::BTreeMap;
@@ -21,10 +26,11 @@ use crate::collections::VecDeque;
 use bdk_chain::bdk_core::Merge;
 use bitcoin::Txid;
 
+/// A consistent view of transactions.
 #[derive(Debug)]
 pub struct CanonicalView<A> {
-    pub txs: HashMap<Txid, (Arc<Transaction>, CanonicalReason<A>)>,
-    pub spends: HashMap<OutPoint, Txid>,
+    pub(crate) txs: HashMap<Txid, (Arc<Transaction>, CanonicalReason<A>)>,
+    pub(crate) spends: HashMap<OutPoint, Txid>,
 }
 
 impl<A> Default for CanonicalView<A> {
@@ -37,7 +43,7 @@ impl<A> Default for CanonicalView<A> {
 }
 
 impl<A> CanonicalView<A> {
-    pub fn from_iter<C>(iter: CanonicalIter<'_, A, C>) -> Result<Self, C::Error>
+    pub(crate) fn from_iter<C>(iter: CanonicalIter<'_, A, C>) -> Result<Self, C::Error>
     where
         A: Anchor,
         C: ChainOracle,
@@ -53,10 +59,48 @@ impl<A> CanonicalView<A> {
         Ok(view)
     }
 
+    /// Return the transaction that spends the given `op`.
     pub fn spend(&self, op: OutPoint) -> Option<(Txid, Arc<Transaction>, &CanonicalReason<A>)> {
         let txid = self.spends.get(&op)?;
         let (tx, reason) = self.txs.get(txid)?;
         Some((*txid, tx.clone(), reason))
+    }
+
+    /// Iterate all descendants of the given transaction in the [`CanonicalView`], avoiding
+    /// duplicates.
+    fn descendants(
+        &self,
+        tx: impl AsRef<Transaction>,
+    ) -> impl Iterator<Item = (Txid, Arc<Transaction>, &CanonicalReason<A>)> {
+        let tx: &Transaction = tx.as_ref();
+        let txid = tx.compute_txid();
+
+        let mut visited = HashSet::<Txid>::new();
+        visited.insert(txid);
+
+        let mut outpoints = core::iter::repeat_n(txid, tx.output.len())
+            .zip(0_u32..)
+            .map(|(txid, vout)| OutPoint::new(txid, vout))
+            .collect::<Vec<_>>();
+
+        core::iter::from_fn(move || {
+            while let Some(op) = outpoints.pop() {
+                let (txid, tx, reason) = match self.spend(op) {
+                    Some(spent_by) => spent_by,
+                    None => continue,
+                };
+                if !visited.insert(txid) {
+                    continue;
+                }
+                outpoints.extend(
+                    core::iter::repeat_n(txid, tx.output.len())
+                        .zip(0_u32..)
+                        .map(|(txid, vout)| OutPoint::new(txid, vout)),
+                );
+                return Some((txid, tx, reason));
+            }
+            None
+        })
     }
 }
 
@@ -83,8 +127,8 @@ impl NetworkSeen {
 ///
 /// This struct models an input that attempts to spend an output via a transaction path
 /// that is not part of the canonical network view (e.g., evicted, conflicted, or unknown).
-#[derive(Debug, Clone, Default)]
-pub struct UncanonicalSpendInfo<A> {
+#[derive(Debug, Clone)]
+pub struct SpendInfo<A> {
     /// Non-canonical ancestor transactions reachable from this input.
     ///
     /// Each entry maps an ancestor `Txid` to its observed status in the network.
@@ -95,12 +139,177 @@ pub struct UncanonicalSpendInfo<A> {
 
     /// Canonical transactions that conflict with this spend.
     ///
-    /// This may be a direct conflict or a conflict with one of the `uncanonical_ancestors`.
-    /// The value is a tuple of (conflict distance, chain position).   
+    /// This may be a direct conflict, a conflict with one of the [`uncanonical_ancestors`], or a
+    /// canonical descendant of a conflict (which are also conflicts). The value is the chain
+    /// position of the conflict.
     ///
-    /// Descendants of conflicts are also conflicts. These transactions will have the same distance
-    /// value as their conflicting parent.
-    pub conflicting_txs: BTreeMap<Txid, (u32, ChainPosition<A>)>,
+    /// [`uncanonical_ancestors`]: Self::uncanonical_ancestors
+    pub conflicting_txs: BTreeMap<Txid, ChainPosition<A>>,
+}
+
+impl<A> Default for SpendInfo<A> {
+    fn default() -> Self {
+        Self {
+            uncanonical_ancestors: BTreeMap::new(),
+            conflicting_txs: BTreeMap::new(),
+        }
+    }
+}
+
+impl<A: Anchor> SpendInfo<A> {
+    pub(crate) fn new<C>(
+        chain: &C,
+        chain_tip: BlockId,
+        tx_graph: &TxGraph<A>,
+        network_view: &CanonicalView<A>,
+        op: OutPoint,
+    ) -> Self
+    where
+        C: ChainOracle<Error = Infallible>,
+    {
+        use crate::collections::btree_map::Entry;
+
+        let mut spend_info = Self::default();
+
+        let mut visited = HashSet::<OutPoint>::new();
+        let mut stack = Vec::<OutPoint>::new();
+        stack.push(op);
+
+        while let Some(prev_op) = stack.pop() {
+            if !visited.insert(prev_op) {
+                // Outpoint already visited.
+                continue;
+            }
+            if network_view.txs.contains_key(&prev_op.txid) {
+                // Tx is already canonical.
+                continue;
+            }
+
+            let prev_tx_node = match tx_graph.get_tx_node(prev_op.txid) {
+                Some(prev_tx) => prev_tx,
+                // Tx not known by tx-graph.
+                None => continue,
+            };
+
+            match spend_info.uncanonical_ancestors.entry(prev_op.txid) {
+                Entry::Vacant(entry) => entry.insert(
+                    if !prev_tx_node.anchors.is_empty() || prev_tx_node.last_seen.is_some() {
+                        NetworkSeen::Seen
+                    } else {
+                        NetworkSeen::NeverSeen
+                    },
+                ),
+                // Tx already visited.
+                Entry::Occupied(_) => continue,
+            };
+
+            // Find conflicts to populate `conflicting_txs`.
+            if let Some((conflict_txid, conflict_tx, reason)) = network_view.spend(prev_op) {
+                let conflict_tx_entry = match spend_info.conflicting_txs.entry(conflict_txid) {
+                    Entry::Vacant(vacant_entry) => vacant_entry,
+                    // Skip if conflicting tx already visited.
+                    Entry::Occupied(_) => continue,
+                };
+                let conflict_tx_node = match tx_graph.get_tx_node(conflict_txid) {
+                    Some(tx_node) => tx_node,
+                    // Skip if conflict tx does not exist in our graph.
+                    None => continue,
+                };
+                conflict_tx_entry.insert(Self::get_pos(
+                    chain,
+                    chain_tip,
+                    &conflict_tx_node,
+                    reason,
+                ));
+
+                // Find descendants of `conflict_tx` too.
+                for (conflict_txid, _, reason) in network_view.descendants(conflict_tx) {
+                    let conflict_tx_entry = match spend_info.conflicting_txs.entry(conflict_txid) {
+                        Entry::Vacant(vacant_entry) => vacant_entry,
+                        // Skip if conflicting tx already visited.
+                        Entry::Occupied(_) => continue,
+                    };
+                    let conflict_tx_node = match tx_graph.get_tx_node(conflict_txid) {
+                        Some(tx_node) => tx_node,
+                        // Skip if conflict tx does not exist in our graph.
+                        None => continue,
+                    };
+                    conflict_tx_entry.insert(Self::get_pos(
+                        chain,
+                        chain_tip,
+                        &conflict_tx_node,
+                        reason,
+                    ));
+                }
+            }
+
+            stack.extend(
+                prev_tx_node
+                    .tx
+                    .input
+                    .iter()
+                    .map(|txin| txin.previous_output),
+            );
+        }
+
+        spend_info
+    }
+
+    fn get_pos<C>(
+        chain: &C,
+        chain_tip: BlockId,
+        tx_node: &TxNode<'_, Arc<Transaction>, A>,
+        canonical_reason: &CanonicalReason<A>,
+    ) -> ChainPosition<A>
+    where
+        C: ChainOracle<Error = Infallible>,
+    {
+        let maybe_direct_anchor = tx_node
+            .anchors
+            .iter()
+            .find(|a| {
+                chain
+                    .is_block_in_chain(a.anchor_block(), chain_tip)
+                    .expect("infallible")
+                    .unwrap_or(false)
+            })
+            .cloned();
+        match maybe_direct_anchor {
+            Some(anchor) => ChainPosition::Confirmed {
+                anchor,
+                transitively: None,
+            },
+            None => match canonical_reason.clone() {
+                CanonicalReason::Assumed { .. } => {
+                    debug_assert!(
+                        false,
+                        "network view must not have any assumed-canonical txs"
+                    );
+                    ChainPosition::Unconfirmed {
+                        first_seen: None,
+                        last_seen: None,
+                    }
+                }
+                CanonicalReason::Anchor { anchor, descendant } => ChainPosition::Confirmed {
+                    anchor,
+                    transitively: descendant,
+                },
+                CanonicalReason::ObservedIn { observed_in, .. } => ChainPosition::Unconfirmed {
+                    first_seen: tx_node.first_seen,
+                    last_seen: match observed_in {
+                        ObservedIn::Block(_) => None,
+                        ObservedIn::Mempool(last_seen) => Some(last_seen),
+                    },
+                },
+            },
+        }
+    }
+
+    /// If the spend info is empty, then it can belong in the canonical history without displacing
+    /// existing transactions or need to add additional transactions other than itself.
+    pub fn is_empty(&self) -> bool {
+        self.uncanonical_ancestors.is_empty() && self.conflicting_txs.is_empty()
+    }
 }
 
 /// Tracked and uncanonical transaction.
@@ -113,7 +322,7 @@ pub struct UncanonicalTx<A> {
     /// Whether the transaction was one seen by the network.
     pub network_seen: NetworkSeen,
     /// Spends, identified by prevout, which are uncanonical.
-    pub uncanonical_spends: BTreeMap<OutPoint, UncanonicalSpendInfo<A>>,
+    pub uncanonical_spends: BTreeMap<OutPoint, SpendInfo<A>>,
 }
 
 impl<A: Anchor> UncanonicalTx<A> {
@@ -154,13 +363,14 @@ impl<A: Anchor> UncanonicalTx<A> {
         self.uncanonical_spends
             .values()
             .flat_map(|spend| &spend.conflicting_txs)
-            .map(|(&txid, (_, pos))| (txid, pos))
+            .map(|(&txid, pos)| (txid, pos))
             .filter({
                 let mut dedup = HashSet::<Txid>::new();
                 move |(txid, _)| dedup.insert(*txid)
             })
     }
 
+    /// Iterate over confirmed, network-canonical txids which conflict with this transaction.
     pub fn confirmed_conflicts(&self) -> impl Iterator<Item = (Txid, &A)> {
         self.conflicts().filter_map(|(txid, pos)| match pos {
             ChainPosition::Confirmed { anchor, .. } => Some((txid, anchor)),
@@ -168,6 +378,7 @@ impl<A: Anchor> UncanonicalTx<A> {
         })
     }
 
+    /// Iterate over unconfirmed, network-canonical txids which conflict with this transaction.
     pub fn unconfirmed_conflicts(&self) -> impl Iterator<Item = Txid> + '_ {
         self.conflicts().filter_map(|(txid, pos)| match pos {
             ChainPosition::Confirmed { .. } => None,
@@ -185,20 +396,20 @@ impl<A: Anchor> UncanonicalTx<A> {
             .map(|(&txid, &network_seen)| (txid, network_seen))
     }
 
+    /// Whether this transaction conflicts with network-canonical transactions.
     pub fn contains_conflicts(&self) -> bool {
         self.conflicts().next().is_some()
     }
 
+    /// Whether this transaction conflicts with confirmed, network-canonical transactions.
     pub fn contains_confirmed_conflicts(&self) -> bool {
         self.confirmed_conflicts().next().is_some()
     }
 }
 
-/// An ordered unbroadcasted staging area.
-///
-/// It is ordered in case of RBF txs.
+/// An ordered tracking area for uncanonical transactions.
 #[derive(Debug, Clone, Default)]
-pub struct CanonicalizationTracker {
+pub struct IntentTracker {
     /// Tracks the order that transactions are added.
     order: VecDeque<Txid>,
 
@@ -233,10 +444,10 @@ impl Merge for ChangeSet {
     }
 }
 
-impl CanonicalizationTracker {
+impl IntentTracker {
     /// Construct [`Unbroadcasted`] from the given `changeset`.
     pub fn from_changeset(changeset: ChangeSet) -> Self {
-        let mut out = CanonicalizationTracker::default();
+        let mut out = IntentTracker::default();
         out.apply_changeset(changeset);
         out
     }
