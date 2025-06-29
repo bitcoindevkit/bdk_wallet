@@ -1511,7 +1511,7 @@ impl Wallet {
 
         let (required_utxos, optional_utxos) = {
             // NOTE: manual selection overrides unspendable
-            let mut required: Vec<WeightedUtxo> = params.utxos.values().cloned().collect();
+            let mut required: Vec<WeightedUtxo> = params.utxos.clone();
             let optional = self.filter_utxos(&params, current_height.to_consensus_u32());
 
             // if drain_wallet is true, all UTxOs are required
@@ -1740,52 +1740,45 @@ impl Wallet {
                     })
                     .map(|(prev_tx, prev_txout, chain_position)| {
                         match txout_index.index_of_spk(prev_txout.script_pubkey.clone()) {
-                            Some(&(keychain, derivation_index)) => (
-                                txin.previous_output,
-                                WeightedUtxo {
-                                    satisfaction_weight: self
-                                        .public_descriptor(keychain)
-                                        .max_weight_to_satisfy()
-                                        .unwrap(),
-                                    utxo: Utxo::Local(LocalOutput {
-                                        outpoint: txin.previous_output,
-                                        txout: prev_txout.clone(),
-                                        keychain,
-                                        is_spent: true,
-                                        derivation_index,
-                                        chain_position,
-                                    }),
-                                },
-                            ),
+                            Some(&(keychain, derivation_index)) => WeightedUtxo {
+                                satisfaction_weight: self
+                                    .public_descriptor(keychain)
+                                    .max_weight_to_satisfy()
+                                    .unwrap(),
+                                utxo: Utxo::Local(LocalOutput {
+                                    outpoint: txin.previous_output,
+                                    txout: prev_txout.clone(),
+                                    keychain,
+                                    is_spent: true,
+                                    derivation_index,
+                                    chain_position,
+                                }),
+                            },
                             None => {
                                 let satisfaction_weight = Weight::from_wu_usize(
                                     serialize(&txin.script_sig).len() * 4
                                         + serialize(&txin.witness).len(),
                                 );
-
-                                (
-                                    txin.previous_output,
-                                    WeightedUtxo {
-                                        utxo: Utxo::Foreign {
-                                            outpoint: txin.previous_output,
-                                            sequence: txin.sequence,
-                                            psbt_input: Box::new(psbt::Input {
-                                                witness_utxo: prev_txout
-                                                    .script_pubkey
-                                                    .witness_version()
-                                                    .map(|_| prev_txout.clone()),
-                                                non_witness_utxo: Some(prev_tx.as_ref().clone()),
-                                                ..Default::default()
-                                            }),
-                                        },
-                                        satisfaction_weight,
+                                WeightedUtxo {
+                                    utxo: Utxo::Foreign {
+                                        outpoint: txin.previous_output,
+                                        sequence: txin.sequence,
+                                        psbt_input: Box::new(psbt::Input {
+                                            witness_utxo: prev_txout
+                                                .script_pubkey
+                                                .witness_version()
+                                                .map(|_| prev_txout.clone()),
+                                            non_witness_utxo: Some(prev_tx.as_ref().clone()),
+                                            ..Default::default()
+                                        }),
                                     },
-                                )
+                                    satisfaction_weight,
+                                }
                             }
                         }
                     })
             })
-            .collect::<Result<HashMap<OutPoint, WeightedUtxo>, BuildFeeBumpError>>()?;
+            .collect::<Result<Vec<WeightedUtxo>, BuildFeeBumpError>>()?;
 
         if tx.output.len() > 1 {
             let mut change_index = None;
@@ -2099,6 +2092,11 @@ impl Wallet {
             vec![]
         // only process optional UTxOs if manually_selected_only is false
         } else {
+            let manually_selected_outpoints = params
+                .utxos
+                .iter()
+                .map(|wutxo| wutxo.utxo.outpoint())
+                .collect::<HashSet<OutPoint>>();
             self.indexed_graph
                 .graph()
                 // get all unspent UTxOs from wallet
@@ -2116,9 +2114,10 @@ impl Wallet {
                         .is_mature(current_height)
                         .then(|| new_local_utxo(k, i, full_txo))
                 })
-                // only process UTxOs not selected manually, they will be considered later in the
-                // chain NOTE: this avoid UTxOs in both required and optional list
-                .filter(|may_spend| !params.utxos.contains_key(&may_spend.outpoint))
+                // only process UTXOs not selected manually, they will be considered later in the
+                // chain
+                // NOTE: this avoid UTXOs in both required and optional list
+                .filter(|may_spend| !manually_selected_outpoints.contains(&may_spend.outpoint))
                 // only add to optional UTxOs those which satisfy the change policy if we reuse
                 // change
                 .filter(|local_output| {
@@ -2745,18 +2744,10 @@ mod test {
         let txid = two_output_tx.compute_txid();
         insert_tx(&mut wallet, two_output_tx);
 
-        let mut params = TxParams::default();
-        let output = wallet.get_utxo(OutPoint { txid, vout: 0 }).unwrap();
-        params.utxos.insert(
-            output.outpoint,
-            WeightedUtxo {
-                satisfaction_weight: wallet
-                    .public_descriptor(output.keychain)
-                    .max_weight_to_satisfy()
-                    .unwrap(),
-                utxo: Utxo::Local(output),
-            },
-        );
+        let outpoint = OutPoint { txid, vout: 0 };
+        let mut builder = wallet.build_tx();
+        builder.add_utxo(outpoint).expect("should add local utxo");
+        let params = builder.params.clone();
         // enforce selection of first output in transaction
         let received = wallet.filter_utxos(&params, wallet.latest_checkpoint().block_id().height);
         // notice expected doesn't include the first output from two_output_tx as it should be

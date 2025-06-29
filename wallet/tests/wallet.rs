@@ -4699,3 +4699,62 @@ fn test_tx_details_method() {
     let tx_details_2_option = test_wallet.tx_details(txid_2);
     assert!(tx_details_2_option.is_none());
 }
+
+#[test]
+fn test_tx_ordering_untouched_preserves_insertion_ordering() {
+    let (mut wallet, txid) = get_funded_wallet_wpkh();
+    let script_pubkey = wallet
+        .next_unused_address(KeychainKind::External)
+        .address
+        .script_pubkey();
+    let tx1 = Transaction {
+        input: vec![TxIn {
+            previous_output: OutPoint { txid, vout: 0 },
+            ..Default::default()
+        }],
+        output: vec![
+            TxOut {
+                value: Amount::from_sat(500),
+                script_pubkey: script_pubkey.clone(),
+            };
+            4
+        ],
+        ..new_tx(0)
+    };
+
+    insert_tx(&mut wallet, tx1);
+    let utxos = wallet
+        .list_unspent()
+        .map(|o| o.outpoint)
+        .take(2)
+        .collect::<Vec<_>>();
+
+    let mut builder = wallet.build_tx();
+    builder
+        .ordering(bdk_wallet::TxOrdering::Untouched)
+        .add_utxos(&utxos)
+        .unwrap()
+        .add_recipient(script_pubkey.clone(), Amount::from_sat(400))
+        .add_recipient(script_pubkey.clone(), Amount::from_sat(300))
+        .add_recipient(script_pubkey.clone(), Amount::from_sat(500));
+
+    let tx = builder.finish().unwrap().unsigned_tx;
+    let txins = tx
+        .input
+        .iter()
+        .take(2) // First two UTxOs should be manually selected and sorted by insertion
+        .map(|txin| txin.previous_output)
+        .collect::<Vec<_>>();
+
+    assert!(txins == utxos);
+
+    let txouts = tx
+        .output
+        .iter()
+        .take(3) // Exclude possible change output
+        .map(|txout| txout.value.to_sat())
+        .collect::<Vec<_>>();
+
+    // Check vout is sorted by recipient insertion order
+    assert!(txouts == vec![400, 300, 500]);
+}
