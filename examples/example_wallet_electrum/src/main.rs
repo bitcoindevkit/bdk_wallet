@@ -1,3 +1,4 @@
+use bdk_wallet::bitcoin::Txid;
 use bdk_wallet::file_store::Store;
 use bdk_wallet::Wallet;
 use std::io::Write;
@@ -44,7 +45,7 @@ fn main() -> Result<(), anyhow::Error> {
     let balance = wallet.balance();
     println!("Wallet balance before syncing: {}", balance.total());
 
-    print!("Syncing...");
+    println!("=== Performing Full Sync ===");
     let client = BdkElectrumClient::new(electrum_client::Client::new(ELECTRUM_URL)?);
 
     // Populate the electrum client's transaction cache so it doesn't redownload transaction we
@@ -71,7 +72,12 @@ fn main() -> Result<(), anyhow::Error> {
     wallet.persist(&mut db)?;
 
     let balance = wallet.balance();
-    println!("Wallet balance after syncing: {}", balance.total());
+    println!("Wallet balance after full sync: {}", balance.total());
+    println!(
+        "Wallet has {} transactions and {} utxos after full sync",
+        wallet.transactions().count(),
+        wallet.list_unspent().count()
+    );
 
     if balance.total() < SEND_AMOUNT {
         println!(
@@ -91,6 +97,74 @@ fn main() -> Result<(), anyhow::Error> {
     let tx = psbt.extract_tx()?;
     client.transaction_broadcast(&tx)?;
     println!("Tx broadcasted! Txid: {}", tx.compute_txid());
+
+    let unconfirmed_txids: HashSet<Txid> = wallet
+        .transactions()
+        .filter(|tx| tx.chain_position.is_unconfirmed())
+        .map(|tx| tx.tx_node.txid)
+        .collect();
+
+    client.populate_tx_cache(wallet.tx_graph().full_txs().map(|tx_node| tx_node.tx));
+
+    println!("\n=== Performing Partial Sync ===\n");
+    print!("SCANNING: ");
+    let mut last_printed = 0;
+    let sync_request = wallet
+        .start_sync_with_revealed_spks()
+        .inspect(move |_, sync_progress| {
+            let progress_percent =
+                (100 * sync_progress.consumed()) as f32 / sync_progress.total() as f32;
+            let progress_percent = progress_percent.round() as u32;
+            if progress_percent.is_multiple_of(5) && progress_percent > last_printed {
+                print!("{}% ", progress_percent);
+                std::io::stdout().flush().expect("must flush");
+                last_printed = progress_percent;
+            }
+        });
+    client.populate_tx_cache(wallet.tx_graph().full_txs().map(|tx_node| tx_node.tx));
+    let sync_update = client.sync(sync_request, BATCH_SIZE, false)?;
+    println!();
+
+    let mut evicted_txs = Vec::new();
+    for txid in unconfirmed_txids {
+        let tx_node = wallet
+            .tx_graph()
+            .full_txs()
+            .find(|full_tx| full_tx.txid == txid);
+        let wallet_tx = wallet.get_tx(txid);
+
+        let is_evicted = match wallet_tx {
+            Some(wallet_tx) => {
+                !wallet_tx.chain_position.is_unconfirmed()
+                    && !wallet_tx.chain_position.is_confirmed()
+            }
+            None => true,
+        };
+
+        if is_evicted {
+            if let Some(full_tx) = tx_node {
+                evicted_txs.push((full_tx.txid, full_tx.last_seen.unwrap_or(0)));
+            } else {
+                evicted_txs.push((txid, 0));
+            }
+        }
+    }
+
+    if !evicted_txs.is_empty() {
+        wallet.apply_evicted_txs(evicted_txs.clone());
+        println!("Applied {} evicted transactions", evicted_txs.len());
+    }
+
+    wallet.apply_update(sync_update)?;
+    wallet.persist(&mut db)?;
+
+    let balance_after_sync = wallet.balance();
+    println!("Wallet balance after sync: {}", balance_after_sync.total());
+    println!(
+        "Wallet has {} transactions and {} utxos after partial sync",
+        wallet.transactions().count(),
+        wallet.list_unspent().count()
+    );
 
     Ok(())
 }
