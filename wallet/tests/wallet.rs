@@ -27,8 +27,8 @@ use bitcoin::script::PushBytesBuf;
 use bitcoin::sighash::{EcdsaSighashType, TapSighashType};
 use bitcoin::taproot::TapNodeHash;
 use bitcoin::{
-    absolute, transaction, Address, Amount, BlockHash, FeeRate, Network, OutPoint, ScriptBuf,
-    Sequence, Transaction, TxIn, TxOut, Txid, Weight,
+    absolute, transaction, Address, Amount, BlockHash, FeeRate, Network, NetworkKind, OutPoint,
+    ScriptBuf, Sequence, Transaction, TxIn, TxOut, Txid, Weight,
 };
 use bitcoin::{psbt, SignedAmount};
 use miniscript::{descriptor::KeyMap, Descriptor, DescriptorPublicKey};
@@ -69,7 +69,7 @@ fn wallet_is_persisted() -> anyhow::Result<()> {
         let file_path = temp_dir.path().join(filename);
         let (external_desc, internal_desc) = get_test_tr_single_sig_xprv_and_change_desc();
 
-        // create new wallet
+        // Create new wallet.
         let wallet_spk_index = {
             let mut db = create_db(&file_path)?;
             let mut wallet = Wallet::create(external_desc, internal_desc)
@@ -78,12 +78,12 @@ fn wallet_is_persisted() -> anyhow::Result<()> {
                 .create_wallet(&mut db)?;
             wallet.reveal_next_address(KeychainKind::External);
 
-            // persist new wallet changes
+            // Persist new wallet changes.
             assert!(wallet.persist(&mut db)?, "must write");
             wallet.spk_index().clone()
         };
 
-        // recover wallet
+        // Recover wallet.
         {
             let mut db = open_db(&file_path).context("failed to recover db")?;
             let wallet = Wallet::load()
@@ -106,12 +106,12 @@ fn wallet_is_persisted() -> anyhow::Result<()> {
             assert_eq!(
                 *wallet.public_descriptor(KeychainKind::External),
                 external_desc
-                    .into_wallet_descriptor(&secp, wallet.network())
+                    .into_wallet_descriptor(&secp, NetworkKind::from(wallet.network()))
                     .unwrap()
                     .0
             );
         }
-        // Test SPK cache
+        // Test SPK cache.
         {
             let mut db = open_db(&file_path).context("failed to recover db")?;
             let mut wallet = Wallet::load()
@@ -149,7 +149,8 @@ fn wallet_is_persisted() -> anyhow::Result<()> {
             assert_eq!(spk_cache.len(), 1);
             assert_eq!(spk_cache.keys().next(), Some(&25));
         }
-        // SPK cache requires load params
+
+        // SPK cache requires load params.
         {
             let mut db = open_db(&file_path).context("failed to recover db")?;
             let mut wallet = Wallet::load()
