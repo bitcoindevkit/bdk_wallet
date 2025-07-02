@@ -12,6 +12,32 @@ use crate::{
 
 use super::{ChangeSet, LoadError, PersistedWallet};
 
+fn make_multipath_descriptor_to_extract<D>(
+    multipath_descriptor: D,
+    index: usize,
+) -> DescriptorToExtract
+where
+    D: IntoWalletDescriptor + Send + 'static,
+{
+    Box::new(move |secp, network| {
+        let (desc, keymap) = multipath_descriptor.into_wallet_descriptor(secp, network)?;
+
+        if !desc.is_multipath() {
+            return Err(DescriptorError::MultiPath);
+        }
+
+        let descriptors = desc
+            .into_single_descriptors()
+            .map_err(|_| DescriptorError::MultiPath)?;
+
+        if descriptors.len() != 2 {
+            return Err(DescriptorError::MultiPath);
+        }
+
+        Ok((descriptors[index].clone(), keymap))
+    })
+}
+
 /// This atrocity is to avoid having type parameters on [`CreateParams`] and [`LoadParams`].
 ///
 /// The better option would be to do `Box<dyn IntoWalletDescriptor>`, but we cannot due to Rust's
@@ -80,6 +106,34 @@ impl CreateParams {
             descriptor: make_descriptor_to_extract(descriptor),
             descriptor_keymap: KeyMap::default(),
             change_descriptor: Some(make_descriptor_to_extract(change_descriptor)),
+            change_descriptor_keymap: KeyMap::default(),
+            network: Network::Bitcoin,
+            genesis_hash: None,
+            lookahead: DEFAULT_LOOKAHEAD,
+            use_spk_cache: false,
+        }
+    }
+
+    /// Construct parameters with a multipath descriptor that will be parsed into receive and change
+    /// descriptors.
+    ///
+    /// This function parses a multipath descriptor with exactly 2 paths (receive and change)
+    /// and creates parameters using the existing receive and change wallet creation logic.
+    ///
+    /// Default values:
+    /// * `network` = [`Network::Bitcoin`]
+    /// * `genesis_hash` = `None`
+    /// * `lookahead` = [`DEFAULT_LOOKAHEAD`]
+    pub fn new_multipath<D: IntoWalletDescriptor + Send + Clone + 'static>(
+        multipath_descriptor: D,
+    ) -> Self {
+        Self {
+            descriptor: make_multipath_descriptor_to_extract(multipath_descriptor.clone(), 0),
+            descriptor_keymap: KeyMap::default(),
+            change_descriptor: Some(make_multipath_descriptor_to_extract(
+                multipath_descriptor,
+                1,
+            )),
             change_descriptor_keymap: KeyMap::default(),
             network: Network::Bitcoin,
             genesis_hash: None,
