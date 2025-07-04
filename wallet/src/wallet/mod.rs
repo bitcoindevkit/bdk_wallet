@@ -402,6 +402,45 @@ impl Wallet {
         CreateParams::new(descriptor, change_descriptor)
     }
 
+    /// Build a new [`Wallet`] from a multipath descriptor.
+    ///
+    /// This function parses a multipath descriptor with exactly 2 paths (receive and change)
+    /// and creates a wallet using the existing receive and change wallet creation logic.
+    ///
+    /// Multipath descriptors follow [BIP 389] and allow defining both receive and change
+    /// derivation paths in a single descriptor using the `<0;1>` syntax.
+    ///
+    /// If you have previously created a wallet, use [`load`](Self::load) instead.
+    ///
+    /// # Errors
+    /// Returns an error if the descriptor is invalid or not a 2-path multipath descriptor.
+    ///
+    /// # Synopsis
+    ///
+    /// ```rust
+    /// # use bdk_wallet::Wallet;
+    /// # use bitcoin::Network;
+    /// # use bdk_wallet::KeychainKind;
+    /// # const MULTIPATH_DESC: &str = "wpkh([9a6a2580/84'/1'/0']tpubDDnGNapGEY6AZAdQbfRJgMg9fvz8pUBrLwvyvUqEgcUfgzM6zc2eVK4vY9x9L5FJWdX8WumXuLEDV5zDZnTfbn87vLe9XceCFwTu9so9Kks/<0;1>/*)";
+    /// let wallet = Wallet::create_multipath(MULTIPATH_DESC)
+    ///     .network(Network::Testnet)
+    ///     .create_wallet_no_persist()
+    ///     .unwrap();
+    ///
+    /// // The multipath descriptor automatically creates separate receive and change descriptors
+    /// let receive_addr = wallet.peek_address(KeychainKind::External, 0);  // Uses path /0/*
+    /// let change_addr = wallet.peek_address(KeychainKind::Internal, 0);   // Uses path /1/*
+    /// assert_ne!(receive_addr.address, change_addr.address);
+    /// ```
+    ///
+    /// [BIP 389]: https://github.com/bitcoin/bips/blob/master/bip-0389.mediawiki
+    pub fn create_multipath<D>(multipath_descriptor: D) -> CreateParams
+    where
+        D: IntoWalletDescriptor + Send + Clone + 'static,
+    {
+        CreateParams::new_multipath(multipath_descriptor)
+    }
+
     /// Create a new [`Wallet`] with given `params`.
     ///
     /// Refer to [`Wallet::create`] for more.
@@ -2764,5 +2803,60 @@ mod test {
             .unwrap()];
 
         assert_eq!(expected, received);
+    }
+
+    #[test]
+    fn test_create_multipath_wallet() {
+        let multipath_descriptor = "wpkh([9a6a2580/84'/1'/0']tpubDDnGNapGEY6AZAdQbfRJgMg9fvz8pUBrLwvyvUqEgcUfgzM6zc2eVK4vY9x9L5FJWdX8WumXuLEDV5zDZnTfbn87vLe9XceCFwTu9so9Kks/<0;1>/*)";
+
+        // Test successful creation of multipath wallet
+        let params = Wallet::create_multipath(multipath_descriptor);
+        let wallet = params.network(Network::Testnet).create_wallet_no_persist();
+        assert!(wallet.is_ok());
+
+        let wallet = wallet.unwrap();
+
+        // Verify that the wallet has both external and internal keychains
+        let keychains: Vec<_> = wallet.keychains().collect();
+        assert_eq!(keychains.len(), 2);
+
+        // Verify that the descriptors are different (receive vs change)
+        let external_desc = keychains
+            .iter()
+            .find(|(k, _)| *k == KeychainKind::External)
+            .unwrap()
+            .1;
+        let internal_desc = keychains
+            .iter()
+            .find(|(k, _)| *k == KeychainKind::Internal)
+            .unwrap()
+            .1;
+        assert_ne!(external_desc.to_string(), internal_desc.to_string());
+
+        // Verify that addresses can be generated
+        let external_addr = wallet.peek_address(KeychainKind::External, 0);
+        let internal_addr = wallet.peek_address(KeychainKind::Internal, 0);
+        assert_ne!(external_addr.address, internal_addr.address);
+    }
+
+    #[test]
+    fn test_create_multipath_wallet_invalid_descriptor() {
+        // Test with invalid single-path descriptor
+        let single_path_descriptor = "wpkh([9a6a2580/84'/1'/0']tpubDDnGNapGEY6AZAdQbfRJgMg9fvz8pUBrLwvyvUqEgcUfgzM6zc2eVK4vY9x9L5FJWdX8WumXuLEDV5zDZnTfbn87vLe9XceCFwTu9so9Kks/0/*)";
+        let params = Wallet::create_multipath(single_path_descriptor);
+        let wallet = params.network(Network::Testnet).create_wallet_no_persist();
+        assert!(matches!(wallet, Err(DescriptorError::MultiPath)));
+
+        // Test with invalid 3-path multipath descriptor
+        let three_path_descriptor = "wpkh([9a6a2580/84'/1'/0']tpubDDnGNapGEY6AZAdQbfRJgMg9fvz8pUBrLwvyvUqEgcUfgzM6zc2eVK4vY9x9L5FJWdX8WumXuLEDV5zDZnTfbn87vLe9XceCFwTu9so9Kks/<0;1;2>/*)";
+        let params = Wallet::create_multipath(three_path_descriptor);
+        let wallet = params.network(Network::Testnet).create_wallet_no_persist();
+        assert!(matches!(wallet, Err(DescriptorError::MultiPath)));
+
+        // Test with completely invalid descriptor
+        let invalid_descriptor = "invalid_descriptor";
+        let params = Wallet::create_multipath(invalid_descriptor);
+        let wallet = params.network(Network::Testnet).create_wallet_no_persist();
+        assert!(wallet.is_err());
     }
 }
