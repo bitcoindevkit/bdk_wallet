@@ -40,7 +40,7 @@ fn main() -> Result<(), anyhow::Error> {
 
     let address = wallet.next_unused_address(KeychainKind::External);
     wallet.persist(&mut db)?;
-    println!("Generated Address: {}", address);
+    println!("Generated Address: {address}");
 
     let balance = wallet.balance();
     println!("Wallet balance before syncing: {}", balance.total());
@@ -57,9 +57,9 @@ fn main() -> Result<(), anyhow::Error> {
         let mut once = HashSet::<KeychainKind>::new();
         move |k, spk_i, _| {
             if once.insert(k) {
-                print!("\nScanning keychain [{:?}]", k);
+                print!("\nScanning keychain [{k:?}]");
             }
-            print!(" {:<3}", spk_i);
+            print!(" {spk_i:<3}");
             stdout.flush().expect("must flush");
         }
     });
@@ -80,10 +80,7 @@ fn main() -> Result<(), anyhow::Error> {
     );
 
     if balance.total() < SEND_AMOUNT {
-        println!(
-            "Please send at least {} to the receiving address",
-            SEND_AMOUNT
-        );
+        println!("Please send at least {SEND_AMOUNT} to the receiving address");
         std::process::exit(0);
     }
 
@@ -116,7 +113,7 @@ fn main() -> Result<(), anyhow::Error> {
                 (100 * sync_progress.consumed()) as f32 / sync_progress.total() as f32;
             let progress_percent = progress_percent.round() as u32;
             if progress_percent.is_multiple_of(5) && progress_percent > last_printed {
-                print!("{}% ", progress_percent);
+                print!("{progress_percent}% ");
                 std::io::stdout().flush().expect("must flush");
                 last_printed = progress_percent;
             }

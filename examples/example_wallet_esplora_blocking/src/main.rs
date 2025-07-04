@@ -54,9 +54,9 @@ fn main() -> Result<(), anyhow::Error> {
         let mut once = BTreeSet::<KeychainKind>::new();
         move |keychain, spk_i, _| {
             if once.insert(keychain) {
-                print!("\nScanning keychain [{:?}] ", keychain);
+                print!("\nScanning keychain [{keychain:?}] ");
             }
-            print!(" {:<3}", spk_i);
+            print!(" {spk_i:<3}");
             stdout.flush().expect("must flush")
         }
     });
@@ -71,10 +71,7 @@ fn main() -> Result<(), anyhow::Error> {
     println!("Wallet balance after syncing: {}", balance.total());
 
     if balance.total() < SEND_AMOUNT {
-        println!(
-            "Please send at least {} to the receiving address",
-            SEND_AMOUNT
-        );
+        println!("Please send at least {SEND_AMOUNT} to the receiving address");
         std::process::exit(0);
     }
 
