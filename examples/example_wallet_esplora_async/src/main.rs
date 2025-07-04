@@ -52,9 +52,9 @@ async fn main() -> Result<(), anyhow::Error> {
         let mut once = BTreeSet::<KeychainKind>::new();
         move |keychain, spk_i, _| {
             if once.insert(keychain) {
-                print!("\nScanning keychain [{:?}]", keychain);
+                print!("\nScanning keychain [{keychain:?}]");
             }
-            print!(" {:<3}", spk_i);
+            print!(" {spk_i:<3}");
             stdout.flush().expect("must flush")
         }
     });
@@ -76,10 +76,7 @@ async fn main() -> Result<(), anyhow::Error> {
     );
 
     if balance.total() < SEND_AMOUNT {
-        println!(
-            "Please send at least {} to the receiving address",
-            SEND_AMOUNT
-        );
+        println!("Please send at least {SEND_AMOUNT} to the receiving address");
         std::process::exit(0);
     }
 
@@ -110,7 +107,7 @@ async fn main() -> Result<(), anyhow::Error> {
                 (100 * sync_progress.consumed()) as f32 / sync_progress.total() as f32;
             let progress_percent = progress_percent.round() as u32;
             if progress_percent.is_multiple_of(5) && progress_percent > printed {
-                print!("{}% ", progress_percent);
+                print!("{progress_percent}% ");
                 std::io::stdout().flush().expect("must flush");
                 printed = progress_percent;
             }
