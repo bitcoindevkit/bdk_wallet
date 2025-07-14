@@ -2479,8 +2479,10 @@ impl Wallet {
     ///
     /// ## Notes
     ///
-    /// - This function is particularly useful when syncing with a blockchain backend that provides
-    ///   mempool eviction notifications.
+    /// - Not all blockchain backends support automatic mempool eviction handling - this method may
+    ///   be used in such cases. It can also be used to negate the effect of
+    ///   [`apply_unconfirmed_txs`] for a particular transaction without the need for an additional
+    ///   sync.
     /// - The changes are staged in the wallet's internal state and must be persisted to ensure they
     ///   are retained across wallet restarts. Use [`Wallet::take_staged`] to retrieve the staged
     ///   changes and persist them to your database of choice.
@@ -2490,6 +2492,7 @@ impl Wallet {
     ///   influence the wallet's canonicalization logic.
     ///
     /// [`transactions`]: Wallet::transactions
+    /// [`apply_unconfirmed_txs`]: Wallet::apply_unconfirmed_txs
     /// [`start_sync_with_revealed_spks`]: Wallet::start_sync_with_revealed_spks
     pub fn apply_evicted_txs(&mut self, evicted_txs: impl IntoIterator<Item = (Txid, u64)>) {
         let chain = &self.chain;
