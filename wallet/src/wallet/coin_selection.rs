@@ -275,11 +275,12 @@ impl CoinSelectionAlgorithm for OldestFirstCoinSelection {
     ) -> Result<CoinSelectionResult, InsufficientFunds> {
         // We put the "required UTXOs" first and make sure the optional UTXOs are sorted from
         // oldest to newest according to blocktime
-        // For utxo that doesn't exist in DB, they will have lowest priority to be selected
+        // For UTXOs that doesn't exist in DB (Utxo::Foreign), they will have lowest priority to be
+        // selected
         let utxos = {
             optional_utxos.sort_unstable_by_key(|wu| match &wu.utxo {
-                Utxo::Local(local) => Some(local.chain_position),
-                Utxo::Foreign { .. } => None,
+                Utxo::Local(local) => (false, Some(local.chain_position)),
+                Utxo::Foreign { .. } => (true, None),
             });
 
             required_utxos
@@ -726,10 +727,11 @@ fn calculate_cs_result(
 mod test {
     use assert_matches::assert_matches;
     use bitcoin::hashes::Hash;
-    use bitcoin::OutPoint;
+    use bitcoin::{psbt, OutPoint, Sequence};
     use chain::{ChainPosition, ConfirmationBlockTime};
     use core::str::FromStr;
     use rand::rngs::StdRng;
+    use std::boxed::Box;
 
     use bitcoin::{Amount, BlockHash, ScriptBuf, TxIn, TxOut};
 
@@ -776,6 +778,30 @@ mod test {
                 transitively: None,
             },
         )
+    }
+
+    fn foreign_utxo(value: Amount, index: u32) -> WeightedUtxo {
+        assert!(index < 10);
+        let outpoint = OutPoint::from_str(&format!(
+            "000000000000000000000000000000000000000000000000000000000000000{}:0",
+            index
+        ))
+        .unwrap();
+        WeightedUtxo {
+            utxo: Utxo::Foreign {
+                outpoint,
+                sequence: Sequence(0xFFFFFFFD),
+                psbt_input: Box::new(psbt::Input {
+                    witness_utxo: Some(TxOut {
+                        value,
+                        script_pubkey: ScriptBuf::new(),
+                    }),
+                    non_witness_utxo: None,
+                    ..Default::default()
+                }),
+            },
+            satisfaction_weight: Weight::from_wu_usize(P2WPKH_SATISFACTION_SIZE),
+        }
     }
 
     fn utxo(
@@ -1049,6 +1075,59 @@ mod test {
         assert_eq!(result.selected.len(), 3);
         assert_eq!(result.selected_amount(), Amount::from_sat(500_000));
         assert_eq!(result.fee_amount, Amount::from_sat(204));
+    }
+
+    #[test]
+    fn test_oldest_first_coin_selection_uses_all_optional_with_foreign_utxo_locals_sorted_first() {
+        let utxos = get_oldest_first_test_utxos();
+        let mut all_utxos = vec![foreign_utxo(Amount::from_sat(120_000), 1)];
+        all_utxos.extend_from_slice(&utxos);
+        let drain_script = ScriptBuf::default();
+        let target_amount = Amount::from_sat(619_000) + FEE_AMOUNT;
+
+        let result = OldestFirstCoinSelection
+            .coin_select(
+                vec![],
+                all_utxos,
+                FeeRate::from_sat_per_vb_unchecked(1),
+                target_amount,
+                &drain_script,
+                &mut thread_rng(),
+            )
+            .unwrap();
+
+        assert_eq!(result.selected.len(), 4);
+        assert_eq!(result.selected_amount(), Amount::from_sat(620_000));
+        assert_eq!(result.fee_amount, Amount::from_sat(272));
+        assert!(matches!(result.selected[3], Utxo::Foreign { .. }));
+    }
+
+    #[test]
+    fn test_oldest_first_coin_selection_uses_only_all_optional_local_utxos_not_a_single_foreign() {
+        let utxos = get_oldest_first_test_utxos();
+        let mut all_utxos = vec![foreign_utxo(Amount::from_sat(120_000), 1)];
+        all_utxos.extend_from_slice(&utxos);
+        let drain_script = ScriptBuf::default();
+        let target_amount = Amount::from_sat(499_000) + FEE_AMOUNT;
+
+        let result = OldestFirstCoinSelection
+            .coin_select(
+                vec![],
+                all_utxos,
+                FeeRate::from_sat_per_vb_unchecked(1),
+                target_amount,
+                &drain_script,
+                &mut thread_rng(),
+            )
+            .unwrap();
+
+        assert_eq!(result.selected.len(), 3);
+        assert_eq!(result.selected_amount(), Amount::from_sat(500_000));
+        assert_eq!(result.fee_amount, Amount::from_sat(204));
+        assert!(result
+            .selected
+            .iter()
+            .all(|utxo| matches!(utxo, Utxo::Local(..))));
     }
 
     #[test]

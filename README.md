@@ -36,7 +36,7 @@ It is built upon the excellent [`rust-bitcoin`] and [`rust-miniscript`] crates.
 There is currently only one published crate in this repository:
 
 - [`wallet`](./wallet): Contains the central high level `Wallet` type that is built from the low-level mechanisms provided by the other components.
-  
+
 Crates that `bdk_wallet` depends on are found in the [`bdk`] repository.
 
 Fully working examples of how to use these components are in `/examples`:
@@ -54,6 +54,12 @@ Fully working examples of how to use these components are in `/examples`:
 The libraries in this repository maintain a MSRV of 1.63.0.
 
 To build with the MSRV of 1.63.0 you will need to pin dependencies by running the [`pin-msrv.sh`](./ci/pin-msrv.sh) script.
+
+## Just
+
+This project has a [`justfile`](/justfile) for easy command running. You must have [`just`](https://github.com/casey/just) installed.
+
+To see a list of available recipes: `just -l`
 
 ## License
 
