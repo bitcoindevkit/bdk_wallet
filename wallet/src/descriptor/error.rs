@@ -21,7 +21,7 @@ pub enum Error {
     InvalidDescriptorChecksum,
     /// The descriptor contains hardened derivation steps on public extended keys
     HardenedDerivationXpub,
-    /// The descriptor contains multipath keys
+    /// The descriptor contains multipath keys with an invalid number of paths (must have exactly 2 paths for receive and change)
     MultiPath,
     /// Error thrown while working with [`keys`](crate::keys)
     Key(crate::keys::KeyError),
@@ -68,7 +68,7 @@ impl fmt::Display for Error {
             ),
             Self::MultiPath => write!(
                 f,
-                "The descriptor contains multipath keys, which are not supported yet"
+                "The descriptor contains multipath keys with invalid number of paths (must have exactly 2 paths for receive and change)"
             ),
             Self::Key(err) => write!(f, "Key error: {}", err),
             Self::Policy(err) => write!(f, "Policy error: {}", err),
