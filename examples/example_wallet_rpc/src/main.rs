@@ -166,10 +166,7 @@ fn main() -> anyhow::Result<()> {
                 wallet.apply_block_connected_to(&block_emission.block, height, connected_to)?;
                 wallet.persist(&mut db)?;
                 let elapsed = start_apply_block.elapsed().as_secs_f32();
-                println!(
-                    "Applied block {} at height {} in {}s",
-                    hash, height, elapsed
-                );
+                println!("Applied block {hash} at height {height} in {elapsed}s",);
             }
             Emission::Mempool(event) => {
                 let start_apply_mempool = Instant::now();
