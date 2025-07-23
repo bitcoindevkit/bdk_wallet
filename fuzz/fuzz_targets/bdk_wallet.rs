@@ -7,10 +7,11 @@ use std::{
 };
 
 use bdk_wallet::{
-    bitcoin::{hashes::Hash as _, BlockHash, Network, Txid},
+    bitcoin::{self, hashes::Hash as _, BlockHash, Network, Txid},
     chain::{BlockId, ConfirmationBlockTime, TxUpdate},
     rusqlite::Connection,
-    KeychainKind, Update, Wallet,
+    signer::TapLeavesOptions,
+    KeychainKind, SignOptions, TxOrdering, Update, Wallet,
 };
 
 use bdk_wallet::bitcoin::{
@@ -19,8 +20,8 @@ use bdk_wallet::bitcoin::{
 
 use bdk_wallet_fuzz::{
     fuzz_utils::*, try_consume_anchors, try_consume_bool, try_consume_byte, try_consume_checkpoint,
-    try_consume_seen_or_evicted_ats, try_consume_txouts, try_consume_txs, try_consume_u32,
-    try_consume_u64, try_consume_u8,
+    try_consume_seen_or_evicted_ats, try_consume_sign_options, try_consume_tx_builder,
+    try_consume_txouts, try_consume_txs, try_consume_u32, try_consume_u64, try_consume_u8,
 };
 
 // descriptors
@@ -114,8 +115,47 @@ fuzz_target!(|data: &[u8]| {
                 wallet.apply_update(update).unwrap();
             }
             WalletAction::CreateTx => {
-                // todo!()
-                continue;
+                // generate fuzzed tx builder
+                let tx_builder = try_consume_tx_builder!(&mut new_data, &mut wallet);
+
+                // generate fuzzed psbt
+                let mut psbt = match tx_builder.finish() {
+                    Ok(psbt) => psbt,
+                    Err(_) => continue,
+                };
+
+                // generate fuzzed sign options
+                // let sign_options = consume_sign_options(new_data);
+                let sign_options = try_consume_sign_options!(data_iter);
+
+                // generate fuzzed signed psbt
+                let _is_signed = match wallet.sign(&mut psbt, sign_options.clone()) {
+                    Ok(is_signed) => is_signed,
+                    Err(_) => continue,
+                };
+
+                // generated fuzzed finalized psbt
+                // extract and apply fuzzed tx
+                match wallet.finalize_psbt(&mut psbt, sign_options) {
+                    Ok(is_finalized) => match is_finalized {
+                        true => match psbt.extract_tx() {
+                            Ok(tx) => {
+                                let mut update = Update::default();
+                                update.tx_update.txs.push(tx.into());
+                                wallet.apply_update(update).unwrap()
+                            }
+                            Err(e) => {
+                                assert!(matches!(
+                                    e,
+                                    bitcoin::psbt::ExtractTxError::AbsurdFeeRate { .. }
+                                ));
+                                return;
+                            }
+                        },
+                        false => continue,
+                    },
+                    Err(_) => continue,
+                }
             }
             WalletAction::PersistAndLoad => {
                 let expected_balance = wallet.balance();

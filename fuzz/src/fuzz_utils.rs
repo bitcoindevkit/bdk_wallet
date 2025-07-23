@@ -166,6 +166,193 @@ macro_rules! try_consume_checkpoint {
     }};
 }
 
+#[macro_export]
+macro_rules! try_consume_sign_options {
+    ($data_iter:expr) => {{
+        let mut sign_options = SignOptions::default();
+
+        if try_consume_bool!($data_iter) {
+            sign_options.trust_witness_utxo = true;
+        }
+
+        if try_consume_bool!($data_iter) {
+            let height = try_consume_u32!($data_iter);
+            sign_options.assume_height = Some(height);
+        }
+
+        if try_consume_bool!($data_iter) {
+            sign_options.allow_all_sighashes = true;
+        }
+
+        if try_consume_bool!($data_iter) {
+            sign_options.try_finalize = false;
+        }
+
+        if try_consume_bool!($data_iter) {
+            // FIXME: how can we use the other include/exclude variants here ?
+            if try_consume_bool!($data_iter) {
+                sign_options.tap_leaves_options = TapLeavesOptions::All;
+            } else {
+                sign_options.tap_leaves_options = TapLeavesOptions::None;
+            }
+        }
+
+        if try_consume_bool!($data_iter) {
+            sign_options.sign_with_tap_internal_key = false;
+        }
+
+        if try_consume_bool!($data_iter) {
+            sign_options.allow_grinding = false;
+        }
+
+        sign_options
+    }};
+}
+
+#[macro_export]
+macro_rules! try_consume_tx_builder {
+    ($data:expr, $wallet:expr) => {{
+        let mut data_iter = $data.into_iter();
+
+        let utxo = $wallet.list_unspent().next();
+
+        let recipients_count = *try_consume_byte!(data_iter) as usize;
+        let mut recipients = Vec::with_capacity(recipients_count);
+        for _ in 0..recipients_count {
+            let spk = consume_spk($data, $wallet);
+            let amount = *try_consume_byte!(data_iter) as u64 * 1_000;
+            let amount = bitcoin::Amount::from_sat(amount);
+            recipients.push((spk, amount));
+        }
+
+        let drain_to = consume_spk($data, $wallet);
+
+        let mut tx_builder = match try_consume_bool!(data_iter) {
+            true => $wallet.build_tx(),
+            false => {
+                // FIXME: (@leonardo) get a randomized txid.
+                let txid = $wallet
+                    .tx_graph()
+                    .full_txs()
+                    .next()
+                    .map(|tx_node| tx_node.txid);
+                match txid {
+                    Some(txid) => match $wallet.build_fee_bump(txid) {
+                        Ok(builder) => builder,
+                        Err(_) => continue,
+                    },
+                    None => continue,
+                }
+            }
+        };
+
+        if try_consume_bool!(data_iter) {
+            let mut rate = *try_consume_byte!(data_iter) as u64;
+            if try_consume_bool!(data_iter) {
+                rate *= 1_000;
+            }
+            let rate =
+                bitcoin::FeeRate::from_sat_per_vb(rate).expect("It should be a valid fee rate.");
+            tx_builder.fee_rate(rate);
+        }
+
+        if try_consume_bool!(data_iter) {
+            let mut fee = *try_consume_byte!(data_iter) as u64;
+            if try_consume_bool!(data_iter) {
+                fee *= 1_000;
+            }
+            let fee = bitcoin::Amount::from_sat(fee);
+            tx_builder.fee_absolute(fee);
+        }
+
+        if try_consume_bool!(data_iter) {
+            if let Some(ref utxo) = utxo {
+                tx_builder
+                    .add_utxo(utxo.outpoint)
+                    .expect("It should be a known UTXO.");
+            }
+        }
+
+        // FIXME: add the fuzzed option for `TxBuilder.add_foreign_utxo`.
+
+        if try_consume_bool!(data_iter) {
+            tx_builder.manually_selected_only();
+        }
+
+        if try_consume_bool!(data_iter) {
+            if let Some(ref utxo) = utxo {
+                tx_builder.add_unspendable(utxo.outpoint);
+            }
+        }
+
+        if try_consume_bool!(data_iter) {
+            let sighash =
+                bitcoin::psbt::PsbtSighashType::from_u32(*try_consume_byte!(data_iter) as u32);
+            tx_builder.sighash(sighash);
+        }
+
+        if try_consume_bool!(data_iter) {
+            let ordering = if try_consume_bool!(data_iter) {
+                TxOrdering::Shuffle
+            } else {
+                TxOrdering::Untouched
+            };
+            tx_builder.ordering(ordering);
+        }
+
+        if try_consume_bool!(data_iter) {
+            let lock_time = try_consume_u32!(data_iter);
+            let lock_time = bitcoin::absolute::LockTime::from_consensus(lock_time);
+            tx_builder.nlocktime(lock_time);
+        }
+
+        if try_consume_bool!(data_iter) {
+            let version = try_consume_u32!(data_iter);
+            tx_builder.version(version as i32);
+        }
+
+        if try_consume_bool!(data_iter) {
+            tx_builder.do_not_spend_change();
+        }
+
+        if try_consume_bool!(data_iter) {
+            tx_builder.only_spend_change();
+        }
+
+        if try_consume_bool!(data_iter) {
+            tx_builder.only_witness_utxo();
+        }
+
+        if try_consume_bool!(data_iter) {
+            tx_builder.include_output_redeem_witness_script();
+        }
+
+        if try_consume_bool!(data_iter) {
+            tx_builder.add_global_xpubs();
+        }
+
+        if try_consume_bool!(data_iter) {
+            tx_builder.drain_wallet();
+        }
+
+        if try_consume_bool!(data_iter) {
+            tx_builder.allow_dust(true);
+        }
+
+        if try_consume_bool!(data_iter) {
+            tx_builder.set_recipients(recipients);
+        }
+
+        // FIXME: add the fuzzed option for `TxBuilder.add_data()` method.
+
+        if try_consume_bool!(data_iter) {
+            tx_builder.drain_to(drain_to);
+        }
+
+        tx_builder
+    }};
+}
+
 pub fn consume_txid(data: &mut &[u8]) -> Txid {
     let bytes: [u8; 32] = consume_bytes(data, 32).try_into().unwrap_or([0; 32]);
 
