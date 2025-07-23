@@ -7,9 +7,9 @@ use std::{
 };
 
 use bdk_wallet::{
-    bitcoin::{Network, Txid},
+    bitcoin::{hashes::Hash as _, BlockHash, Network, Txid},
     chain::{BlockId, ConfirmationBlockTime, TxUpdate},
-    descriptor::DescriptorError,
+    rusqlite::Connection,
     KeychainKind, Update, Wallet,
 };
 
@@ -52,10 +52,11 @@ impl WalletAction {
 
 fuzz_target!(|data: &[u8]| {
     // creates initial wallet.
-    let wallet: Result<Wallet, DescriptorError> =
-        Wallet::create(INTERNAL_DESCRIPTOR, EXTERNAL_DESCRIPTOR)
-            .network(NETWORK)
-            .create_wallet_no_persist();
+    let mut db_conn = Connection::open_in_memory()
+        .expect("Should start an in-memory database connection successfully!");
+    let wallet = Wallet::create(EXTERNAL_DESCRIPTOR, INTERNAL_DESCRIPTOR)
+        .network(NETWORK)
+        .create_wallet(&mut db_conn);
 
     // asserts that the wallet creation did not fail.
     let mut wallet = match wallet {
@@ -117,8 +118,44 @@ fuzz_target!(|data: &[u8]| {
                 continue;
             }
             WalletAction::PersistAndLoad => {
-                // todo!()
-                continue;
+                let expected_balance = wallet.balance();
+                let expected_internal_index = wallet.next_derivation_index(KeychainKind::Internal);
+                let expected_external_index = wallet.next_derivation_index(KeychainKind::External);
+                let expected_tip = wallet.latest_checkpoint();
+                let expected_genesis_hash =
+                    BlockHash::from_byte_array(NETWORK.chain_hash().to_bytes());
+
+                // generate fuzzed persist
+                if let Err(e) = wallet.persist(&mut db_conn) {
+                    assert!(
+                        matches!(e, bdk_wallet::rusqlite::Error::ToSqlConversionFailure(..)),
+                        "It should always persist successfully!"
+                    );
+                    return;
+                };
+
+                // generate fuzzed load
+                wallet = Wallet::load()
+                    .descriptor(KeychainKind::External, Some(EXTERNAL_DESCRIPTOR))
+                    .descriptor(KeychainKind::Internal, Some(INTERNAL_DESCRIPTOR))
+                    .check_network(NETWORK)
+                    .check_genesis_hash(expected_genesis_hash)
+                    .load_wallet(&mut db_conn)
+                    .expect("It should always load from persistence successfully!")
+                    .expect("It should load the wallet successfully!");
+
+                // verify the persisted data is accurate
+                assert_eq!(wallet.network(), NETWORK);
+                assert_eq!(wallet.balance(), expected_balance);
+                assert_eq!(
+                    wallet.next_derivation_index(KeychainKind::Internal),
+                    expected_internal_index
+                );
+                assert_eq!(
+                    wallet.next_derivation_index(KeychainKind::External),
+                    expected_external_index
+                );
+                assert_eq!(wallet.latest_checkpoint(), expected_tip);
             }
         }
     }
