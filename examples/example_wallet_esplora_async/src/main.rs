@@ -13,29 +13,29 @@ const STOP_GAP: usize = 5;
 const PARALLEL_REQUESTS: usize = 5;
 
 const DB_PATH: &str = "bdk-example-esplora-async.sqlite";
-const NETWORK: Network = Network::Signet;
+const NETWORK: Network = Network::Testnet;
 const EXTERNAL_DESC: &str = "wpkh(tprv8ZgxMBicQKsPdy6LMhUtFHAgpocR8GC6QmwMSFpZs7h6Eziw3SpThFfczTDh5rW2krkqffa11UpX3XkeTTB2FvzZKWXqPY54Y6Rq4AQ5R8L/84'/1'/0'/0/*)";
 const INTERNAL_DESC: &str = "wpkh(tprv8ZgxMBicQKsPdy6LMhUtFHAgpocR8GC6QmwMSFpZs7h6Eziw3SpThFfczTDh5rW2krkqffa11UpX3XkeTTB2FvzZKWXqPY54Y6Rq4AQ5R8L/84'/1'/0'/1/*)";
-const ESPLORA_URL: &str = "http://signet.bitcoindevkit.net";
+const ESPLORA_URL: &str = "https://blockstream.info/testnet/api";
 
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
-    let mut conn = Connection::open(DB_PATH)?;
+    let mut db = Connection::open(DB_PATH)?;
     let wallet_opt = Wallet::load()
         .descriptor(KeychainKind::External, Some(EXTERNAL_DESC))
         .descriptor(KeychainKind::Internal, Some(INTERNAL_DESC))
         .extract_keys()
         .check_network(NETWORK)
-        .load_wallet(&mut conn)?;
+        .load_wallet(&mut db)?;
     let mut wallet = match wallet_opt {
         Some(wallet) => wallet,
         None => Wallet::create(EXTERNAL_DESC, INTERNAL_DESC)
             .network(NETWORK)
-            .create_wallet(&mut conn)?,
+            .create_wallet(&mut db)?,
     };
 
     let address = wallet.next_unused_address(KeychainKind::External);
-    wallet.persist(&mut conn)?;
+    wallet.persist(&mut db)?;
     println!("Next unused address: ({}) {address}", address.index);
 
     let balance = wallet.balance();
@@ -63,7 +63,7 @@ async fn main() -> Result<(), anyhow::Error> {
         .await?;
 
     wallet.apply_update(update)?;
-    wallet.persist(&mut conn)?;
+    wallet.persist(&mut db)?;
     println!();
 
     let balance = wallet.balance();
@@ -78,8 +78,15 @@ async fn main() -> Result<(), anyhow::Error> {
         println!("Please send at least {SEND_AMOUNT} to the receiving address");
         std::process::exit(0);
     }
+
+    // set fee rate for inclusion in 3 blocks so we can bump it later
+    let fee_rate_estimates = client.get_fee_estimates().await?;
+    let target_fee_rate =
+        FeeRate::from_sat_per_vb(fee_rate_estimates.get(&3).unwrap().round() as u64).unwrap();
+
     let mut tx_builder = wallet.build_tx();
     tx_builder.add_recipient(address.script_pubkey(), SEND_AMOUNT);
+    tx_builder.fee_rate(target_fee_rate);
 
     let mut psbt = tx_builder.finish()?;
     let finalized = wallet.sign(&mut psbt, SignOptions::default())?;
@@ -89,7 +96,7 @@ async fn main() -> Result<(), anyhow::Error> {
     let tx = psbt.extract_tx()?;
     client.broadcast(&tx).await?;
     let txid = tx.compute_txid();
-    println!("Tx broadcasted! Txid: {txid}");
+    println!("Tx broadcasted! Txid: https://mempool.space/testnet/tx/{txid}");
 
     println!("Partial Sync...");
     print!("SCANNING: ");
@@ -109,9 +116,10 @@ async fn main() -> Result<(), anyhow::Error> {
     let sync_update = client.sync(sync_request, PARALLEL_REQUESTS).await?;
     println!();
     wallet.apply_update(sync_update)?;
-    wallet.persist(&mut conn)?;
+    wallet.persist(&mut db)?;
 
-    let feerate = FeeRate::from_sat_per_kwu(tx_feerate.to_sat_per_kwu() + 250);
+    // bump fee rate for tx by at least 1 sat per vbyte
+    let feerate = FeeRate::from_sat_per_vb(tx_feerate.to_sat_per_vb_ceil() + 1).unwrap();
     let mut builder = wallet.build_fee_bump(txid).expect("failed to bump tx");
     builder.fee_rate(feerate);
     let mut bumped_psbt = builder.finish().unwrap();
@@ -134,7 +142,10 @@ async fn main() -> Result<(), anyhow::Error> {
         "New fee ({new_fee}) should be higher than original ({original_fee})",
     );
     client.broadcast(&bumped_tx).await?;
-    println!("Broadcasted bumped tx. Txid: {}", bumped_tx.compute_txid());
+    println!(
+        "Broadcasted bumped tx. Txid: https://mempool.space/testnet/tx/{}",
+        bumped_tx.compute_txid()
+    );
 
     println!("syncing after broadcasting bumped tx...");
     print!("SCANNING: ");
@@ -155,16 +166,8 @@ async fn main() -> Result<(), anyhow::Error> {
 
     let mut evicted_txs = Vec::new();
 
-    let last_seen = wallet
-        .tx_graph()
-        .full_txs()
-        .find(|full_tx| full_tx.txid == txid)
-        .map_or(0, |full_tx| full_tx.last_seen.unwrap_or(0));
-    if !evicted_txs
-        .iter()
-        .any(|(evicted_txid, _)| evicted_txid == &txid)
-    {
-        evicted_txs.push((txid, last_seen));
+    for (txid, last_seen) in &sync_update.tx_update.evicted_ats {
+        evicted_txs.push((*txid, *last_seen));
     }
 
     if !evicted_txs.is_empty() {
@@ -174,7 +177,7 @@ async fn main() -> Result<(), anyhow::Error> {
     }
 
     wallet.apply_update(sync_update)?;
-    wallet.persist(&mut conn)?;
+    wallet.persist(&mut db)?;
 
     let balance_after_sync = wallet.balance();
     println!("Wallet balance after sync: {}", balance_after_sync.total());

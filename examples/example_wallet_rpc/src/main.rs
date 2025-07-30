@@ -2,9 +2,9 @@ use bdk_bitcoind_rpc::{
     bitcoincore_rpc::{Auth, Client, RpcApi},
     Emitter, MempoolEvent,
 };
+use bdk_wallet::rusqlite::Connection;
 use bdk_wallet::{
     bitcoin::{Block, Network},
-    file_store::Store,
     KeychainKind, Wallet,
 };
 use clap::{self, Parser};
@@ -15,7 +15,7 @@ use std::{
     time::Instant,
 };
 
-const DB_MAGIC: &str = "bdk-rpc-wallet-example";
+const DB_PATH: &str = "test_data/bdk-example-rpc.sqlite";
 
 /// Bitcoind RPC example using `bdk_wallet::Wallet`.
 ///
@@ -38,18 +38,18 @@ pub struct Args {
     #[clap(env = "BITCOIN_NETWORK", long, default_value = "regtest")]
     pub network: Network,
     /// Where to store wallet data
-    #[clap(
-        env = "BDK_DB_PATH",
-        long,
-        default_value = ".bdk_wallet_rpc_example.db"
-    )]
+    #[clap(env = "BDK_DB_PATH", long, default_value = "bdk-example-rpc.db")]
     pub db_path: PathBuf,
 
     /// RPC URL
     #[clap(env = "RPC_URL", long, default_value = "127.0.0.1:18443")]
     pub url: String,
     /// RPC auth cookie file
-    #[clap(env = "RPC_COOKIE", long)]
+    #[clap(
+        env = "RPC_COOKIE",
+        long,
+        default_value = "test_data/bitcoind/regtest/.cookie"
+    )]
     pub rpc_cookie: Option<PathBuf>,
     /// RPC auth username
     #[clap(env = "RPC_USER", long)]
@@ -91,8 +91,7 @@ fn main() -> anyhow::Result<()> {
     );
 
     let start_load_wallet = Instant::now();
-    let (mut db, _) =
-        Store::<bdk_wallet::ChangeSet>::load_or_create(DB_MAGIC.as_bytes(), args.db_path)?;
+    let mut db = Connection::open(DB_PATH)?;
     let wallet_opt = Wallet::load()
         .descriptor(KeychainKind::External, Some(args.descriptor.clone()))
         .descriptor(KeychainKind::Internal, args.change_descriptor.clone())
@@ -114,6 +113,9 @@ fn main() -> anyhow::Result<()> {
         "Loaded wallet in {}s",
         start_load_wallet.elapsed().as_secs_f32()
     );
+
+    let address = wallet.reveal_next_address(KeychainKind::External).address;
+    println!("Wallet address: {address}");
 
     let balance = wallet.balance();
     println!("Wallet balance before syncing: {}", balance.total());

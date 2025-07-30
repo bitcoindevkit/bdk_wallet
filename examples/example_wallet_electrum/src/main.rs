@@ -1,5 +1,4 @@
 use bdk_wallet::bitcoin::FeeRate;
-use bdk_wallet::file_store::Store;
 use bdk_wallet::psbt::PsbtUtils;
 use bdk_wallet::Wallet;
 use std::io::Write;
@@ -9,23 +8,21 @@ use bdk_electrum::BdkElectrumClient;
 use bdk_wallet::bitcoin::Amount;
 use bdk_wallet::bitcoin::Network;
 use bdk_wallet::chain::collections::HashSet;
+use bdk_wallet::rusqlite::Connection;
 use bdk_wallet::{KeychainKind, SignOptions};
 
-const DB_MAGIC: &str = "bdk_wallet_electrum_example";
 const SEND_AMOUNT: Amount = Amount::from_sat(5000);
 const STOP_GAP: usize = 50;
 const BATCH_SIZE: usize = 5;
 
+const DB_PATH: &str = "bdk-example-electrum.sqlite";
 const NETWORK: Network = Network::Testnet;
 const EXTERNAL_DESC: &str = "wpkh(tprv8ZgxMBicQKsPdy6LMhUtFHAgpocR8GC6QmwMSFpZs7h6Eziw3SpThFfczTDh5rW2krkqffa11UpX3XkeTTB2FvzZKWXqPY54Y6Rq4AQ5R8L/84'/1'/0'/0/*)";
 const INTERNAL_DESC: &str = "wpkh(tprv8ZgxMBicQKsPdy6LMhUtFHAgpocR8GC6QmwMSFpZs7h6Eziw3SpThFfczTDh5rW2krkqffa11UpX3XkeTTB2FvzZKWXqPY54Y6Rq4AQ5R8L/84'/1'/0'/1/*)";
 const ELECTRUM_URL: &str = "ssl://electrum.blockstream.info:60002";
 
 fn main() -> Result<(), anyhow::Error> {
-    let db_path = "bdk-electrum-example.db";
-
-    let (mut db, _) = Store::<bdk_wallet::ChangeSet>::load_or_create(DB_MAGIC.as_bytes(), db_path)?;
-
+    let mut db = Connection::open(DB_PATH)?;
     let wallet_opt = Wallet::load()
         .descriptor(KeychainKind::External, Some(EXTERNAL_DESC))
         .descriptor(KeychainKind::Internal, Some(INTERNAL_DESC))
@@ -97,7 +94,7 @@ fn main() -> Result<(), anyhow::Error> {
     let tx = psbt.extract_tx()?;
     client.transaction_broadcast(&tx)?;
     let txid = tx.compute_txid();
-    println!("Tx broadcasted! Txid: {txid}");
+    println!("Tx broadcasted! Txid: https://mempool.space/testnet/tx/{txid}");
 
     println!("Partial Sync...");
     print!("SCANNING: ");
@@ -120,8 +117,8 @@ fn main() -> Result<(), anyhow::Error> {
     wallet.apply_update(sync_update)?;
     wallet.persist(&mut db)?;
 
-    // bump fee tx
-    let feerate = FeeRate::from_sat_per_kwu(tx_feerate.to_sat_per_kwu() + 250);
+    // bump fee rate for tx by at least 1 sat per vbyte
+    let feerate = FeeRate::from_sat_per_vb(tx_feerate.to_sat_per_vb_ceil() + 1).unwrap();
     let mut builder = wallet.build_fee_bump(txid).expect("failed to bump tx");
     builder.fee_rate(feerate);
     let mut bumped_psbt = builder.finish().unwrap();
@@ -141,12 +138,13 @@ fn main() -> Result<(), anyhow::Error> {
     );
     assert!(
         new_fee > original_fee,
-        "New fee ({}) should be higher than original ({})",
-        new_fee,
-        original_fee
+        "New fee ({new_fee}) should be higher than original ({original_fee})"
     );
     client.transaction_broadcast(&bumped_tx)?;
-    println!("Broadcasted bumped tx. Txid: {}", bumped_tx.compute_txid());
+    println!(
+        "Broadcasted bumped tx. Txid: https://mempool.space/testnet/tx/{}",
+        bumped_tx.compute_txid()
+    );
 
     print!("Syncing after bumped tx broadcast...");
     let sync_request = wallet.start_sync_with_revealed_spks().inspect(|_, _| {});

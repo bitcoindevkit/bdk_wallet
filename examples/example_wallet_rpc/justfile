@@ -1,0 +1,107 @@
+set quiet := true
+default_wallet := 'test'
+default_private := 'false'
+default_testdata := 'test_data'
+
+alias s := start
+alias k := kill
+alias c := clean
+
+# list of recipes
+default:
+  just --list
+
+# start regtest bitcoind in default test data directory
+start:
+    mkdir -p {{default_testdata}}/bitcoind; bitcoind -datadir={{default_testdata}}/bitcoind -regtest -server -fallbackfee=0.0002 -rpcallowip=0.0.0.0/0 -rpcbind=0.0.0.0 -blockfilterindex=1 -peerblockfilters=1 -daemon
+    @echo "Regtest bitcoind process started with PID: $(cat {{default_testdata}}/bitcoind/regtest/bitcoind.pid)"
+
+# stop regtest bitcoind
+kill:
+    #!/bin/bash
+    if [ -f "{{default_testdata}}/bitcoind/regtest/bitcoind.pid" ]; then
+        kill $(cat {{default_testdata}}/bitcoind/regtest/bitcoind.pid)
+        echo "Regtest bitcoind process stopped."
+    else
+        echo "Regtest bitcoind.pid file does not exist"
+    fi
+
+# delete regtest bitcoind data
+clean:
+    rm -rf {{default_testdata}}
+
+# run the example
+run:
+    cargo run -- "wpkh(tprv8ZgxMBicQKsPdy6LMhUtFHAgpocR8GC6QmwMSFpZs7h6Eziw3SpThFfczTDh5rW2krkqffa11UpX3XkeTTB2FvzZKWXqPY54Y6Rq4AQ5R8L/84'/1'/0'/0/*)" "wpkh(tprv8ZgxMBicQKsPdy6LMhUtFHAgpocR8GC6QmwMSFpZs7h6Eziw3SpThFfczTDh5rW2krkqffa11UpX3XkeTTB2FvzZKWXqPY54Y6Rq4AQ5R8L/84'/1'/0'/1/*)"
+
+# delete regtest bitcoind data
+[group('regtest')]
+clean-regtest:
+    rm -rf {{default_testdata}}/bitcoind
+
+# create a regtest wallet
+[group('regtest')]
+create wallet=default_wallet:
+    bitcoin-cli -datadir={{default_testdata}}/bitcoind -regtest createwallet {{wallet}}
+
+# list regtest wallets
+[group('regtest')]
+list wallet=default_wallet:
+    bitcoin-cli -datadir={{default_testdata}}/bitcoind -regtest listwallets
+
+# load regtest wallet
+[group('regtest')]
+load wallet=default_wallet:
+    bitcoin-cli -datadir={{default_testdata}}/bitcoind -regtest loadwallet {{wallet}}
+
+# unload regtest wallet
+[group('regtest')]
+unload wallet=default_wallet:
+    bitcoin-cli -datadir={{default_testdata}}/bitcoind -regtest unloadwallet {{wallet}}
+
+# view debug log for regtest wallet address
+[group('regtest')]
+debug:
+    less +G {{default_testdata}}/bitcoind/regtest/debug.log
+
+# get regtest wallet address
+[group('regtest')]
+address wallet=default_wallet:
+    bitcoin-cli -datadir={{default_testdata}}/bitcoind -regtest -rpcwallet={{wallet}} getnewaddress
+
+# generate n new blocks to given address
+[group('regtest')]
+generate n address:
+    bitcoin-cli -datadir={{default_testdata}}/bitcoind -regtest generatetoaddress {{n}} {{address}}
+
+# get regtest wallet balance
+[group('regtest')]
+balance wallet=default_wallet:
+    bitcoin-cli -datadir={{default_testdata}}/bitcoind -regtest -rpcwallet={{wallet}} getbalance
+
+# list wallet descriptors info, private = (true | false)
+[group('regtest')]
+descriptors private wallet=default_wallet:
+    bitcoin-cli -datadir={{default_testdata}}/bitcoind -regtest -rpcwallet={{wallet}} listdescriptors {{private}} | jq '[.descriptors[].desc]' | grep \"wpkh
+
+# send n btc to address from wallet
+[group('regtest')]
+send n address wallet=default_wallet:
+    bitcoin-cli -named -datadir={{default_testdata}}/bitcoind -regtest -rpcwallet={{wallet}} sendtoaddress address={{address}} amount={{n}}
+
+# manually created bitcoin-cli RPC command, see just rpc help
+[group('regtest')]
+rpc command wallet=default_wallet:
+    bitcoin-cli -named -datadir={{default_testdata}}/bitcoind -regtest -rpcwallet={{wallet}} {{command}}
+
+[group('regtest')]
+sign psbt wallet=default_wallet:
+    bitcoin-cli -named -datadir={{default_testdata}}/bitcoind -regtest -rpcwallet={{wallet}} walletprocesspsbt psbt={{psbt}}
+
+[group('regtest')]
+finalize psbt wallet=default_wallet:
+    bitcoin-cli -named -datadir={{default_testdata}}/bitcoind -regtest -rpcwallet={{wallet}} finalizepsbt psbt={{psbt}} extract=true
+
+[group('regtest')]
+broadcast tx wallet=default_wallet:
+    bitcoin-cli -named -datadir={{default_testdata}}/bitcoind -regtest -rpcwallet={{wallet}} sendrawtransaction {{tx}}
