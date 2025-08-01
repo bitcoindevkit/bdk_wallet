@@ -355,7 +355,7 @@ impl<A: Anchor> UncanonicalTx<A> {
     }
 
     /// Iterate over transactions that are currently canonical in the network, but would be rendered
-    /// uncanonical if this transaction were to become canonical.
+    /// uncanonical (be replaced) if this transaction were to become canonical.
     ///
     /// This includes both direct and indirect conflicts, such as any transaction that relies on
     /// conflicting ancestry.

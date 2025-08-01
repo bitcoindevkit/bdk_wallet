@@ -30,6 +30,23 @@ where
     Ok(())
 }
 
+/// Demonstate how we handle the following situations:
+///
+/// ## An outgoing transaction depends on an incoming transaction that gets replaced.
+///
+/// Given:
+/// * Wallet receives an incoming unconfirmed transaction.
+/// * Wallet creates outgoing transaction that spends from the incoming transaction.
+/// * The wallet tracks the outgoing transaction (with `wallet.track_tx`).
+/// * The incoming transaction gets replaced.
+///
+/// When:
+/// * `wallet.uncanonical_txs` is called, expect:
+///     * 1 transaction is returned (the created outgoing transaction).
+///     * `UncanonicalTx::is_safe_to_untrack(0)` should return true.
+///     * `UncanonicalTx::is_safe_to_untrack(>0)` should return false.
+///     * TODO: Can replace == false, no inputs available.
+
 /// Receive an unconfirmed tx, spend from it, and the unconfirmed tx get's RBF'ed.
 /// Our API should be able to recognise that the outgoing tx became evicted and allow the caller
 /// to respond accordingly.
