@@ -4,6 +4,7 @@ use anyhow::Ok;
 use bdk_esplora::{esplora_client, EsploraAsyncExt};
 use bdk_wallet::{
     bitcoin::{Amount, Network},
+    miniscript::Descriptor,
     rusqlite::Connection,
     KeychainKind, SignOptions, Wallet,
 };
@@ -77,7 +78,19 @@ async fn main() -> Result<(), anyhow::Error> {
     tx_builder.add_recipient(address.script_pubkey(), SEND_AMOUNT);
 
     let mut psbt = tx_builder.finish()?;
-    let finalized = wallet.sign(&mut psbt, SignOptions::default())?;
+
+    let secp = bdk_wallet::bitcoin::key::Secp256k1::new();
+
+    let (_, external_keymap) = Descriptor::parse_descriptor(&secp, EXTERNAL_DESC)?;
+    let (_, internal_keymap) = Descriptor::parse_descriptor(&secp, INTERNAL_DESC)?;
+    let key_map = external_keymap.into_iter().chain(internal_keymap).collect();
+
+    // It's using the signer implementation from `test_utils`, you should implement your own signing
+    // implementation for `KeyMap`.
+    let signer = bdk_wallet::test_utils::SignerWrapper::new(key_map);
+    let _ = psbt.sign(&signer, &secp);
+
+    let finalized = wallet.finalize_psbt(&mut psbt, SignOptions::default())?;
     assert!(finalized);
 
     let tx = psbt.extract_tx()?;
