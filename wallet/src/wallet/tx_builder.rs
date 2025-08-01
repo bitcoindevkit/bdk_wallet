@@ -848,9 +848,9 @@ pub enum TxOrdering {
     /// Randomized (default)
     #[default]
     Shuffle,
-    /// Unchanged
+    /// Untouched
     ///
-    /// Unchanged insertion order for recipients and for manually added UTXOs. This guarantees all
+    /// Untouched insertion order for recipients and for manually added UTXOs. This guarantees all
     /// recipients preserve insertion order in the transaction's output vector and manually added
     /// UTXOs preserve insertion order in the transaction's input vector, but does not make any
     /// guarantees about algorithmically selected UTXOs. However, by design they will always be
