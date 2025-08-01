@@ -1,26 +1,24 @@
-use std::{collections::BTreeSet, io::Write};
-
 use bdk_esplora::{esplora_client, EsploraExt};
+use bdk_wallet::rusqlite::Connection;
 use bdk_wallet::{
-    bitcoin::{Amount, Network},
-    file_store::Store,
+    bitcoin::{Amount, FeeRate, Network},
+    psbt::PsbtUtils,
     KeychainKind, SignOptions, Wallet,
 };
+use std::{collections::BTreeSet, io::Write};
 
-const DB_MAGIC: &str = "bdk_wallet_esplora_example";
-const DB_PATH: &str = "bdk-example-esplora-blocking.db";
 const SEND_AMOUNT: Amount = Amount::from_sat(5000);
 const STOP_GAP: usize = 5;
 const PARALLEL_REQUESTS: usize = 5;
 
-const NETWORK: Network = Network::Signet;
+const DB_PATH: &str = "bdk-example-esplora-blocking.sqlite";
+const NETWORK: Network = Network::Testnet;
 const EXTERNAL_DESC: &str = "wpkh(tprv8ZgxMBicQKsPdy6LMhUtFHAgpocR8GC6QmwMSFpZs7h6Eziw3SpThFfczTDh5rW2krkqffa11UpX3XkeTTB2FvzZKWXqPY54Y6Rq4AQ5R8L/84'/1'/0'/0/*)";
 const INTERNAL_DESC: &str = "wpkh(tprv8ZgxMBicQKsPdy6LMhUtFHAgpocR8GC6QmwMSFpZs7h6Eziw3SpThFfczTDh5rW2krkqffa11UpX3XkeTTB2FvzZKWXqPY54Y6Rq4AQ5R8L/84'/1'/0'/1/*)";
-const ESPLORA_URL: &str = "http://signet.bitcoindevkit.net";
+const ESPLORA_URL: &str = "https://blockstream.info/testnet/api";
 
 fn main() -> Result<(), anyhow::Error> {
-    let (mut db, _) = Store::<bdk_wallet::ChangeSet>::load_or_create(DB_MAGIC.as_bytes(), DB_PATH)?;
-
+    let mut db = Connection::open(DB_PATH)?;
     let wallet_opt = Wallet::load()
         .descriptor(KeychainKind::External, Some(EXTERNAL_DESC))
         .descriptor(KeychainKind::Internal, Some(INTERNAL_DESC))
@@ -44,7 +42,7 @@ fn main() -> Result<(), anyhow::Error> {
     let balance = wallet.balance();
     println!("Wallet balance before syncing: {}", balance.total());
 
-    print!("Syncing...");
+    println!("Full Sync...");
     let client = esplora_client::Builder::new(ESPLORA_URL).build_blocking();
 
     let request = wallet.start_full_scan().inspect({
@@ -54,13 +52,14 @@ fn main() -> Result<(), anyhow::Error> {
             if once.insert(keychain) {
                 print!("\nScanning keychain [{keychain:?}] ");
             }
-            print!(" {spk_i:<3}");
+            if spk_i.is_multiple_of(5) {
+                print!(" {spk_i:<3}");
+            }
             stdout.flush().expect("must flush")
         }
     });
 
     let update = client.full_scan(request, STOP_GAP, PARALLEL_REQUESTS)?;
-
     wallet.apply_update(update)?;
     wallet.persist(&mut db)?;
     println!();
@@ -73,16 +72,101 @@ fn main() -> Result<(), anyhow::Error> {
         std::process::exit(0);
     }
 
+    // set fee rate for inclusion in 3 blocks so we can bump it later
+    let fee_rate_estimates = client.get_fee_estimates()?;
+    let target_fee_rate =
+        FeeRate::from_sat_per_vb(fee_rate_estimates.get(&3).unwrap().round() as u64).unwrap();
+
     let mut tx_builder = wallet.build_tx();
     tx_builder.add_recipient(address.script_pubkey(), SEND_AMOUNT);
+    tx_builder.fee_rate(target_fee_rate);
 
     let mut psbt = tx_builder.finish()?;
     let finalized = wallet.sign(&mut psbt, SignOptions::default())?;
     assert!(finalized);
-
+    let original_fee = psbt.fee_amount().unwrap();
+    let tx_feerate = psbt.fee_rate().unwrap();
     let tx = psbt.extract_tx()?;
     client.broadcast(&tx)?;
-    println!("Tx broadcasted! Txid: {}", tx.compute_txid());
+    let txid = tx.compute_txid();
+    println!("Tx broadcasted! Txid: https://mempool.space/testnet/tx/{txid}");
+
+    println!("Partial Sync...");
+    print!("SCANNING: ");
+    let mut printed = 0;
+    let sync_request = wallet
+        .start_sync_with_revealed_spks()
+        .inspect(move |_, sync_progress| {
+            let progress_percent =
+                (100 * sync_progress.consumed()) as f32 / sync_progress.total() as f32;
+            let progress_percent = progress_percent.round() as u32;
+            if progress_percent.is_multiple_of(5) && progress_percent > printed {
+                print!("{progress_percent}% ");
+                std::io::stdout().flush().expect("must flush");
+                printed = progress_percent;
+            }
+        });
+    let sync_update = client.sync(sync_request, PARALLEL_REQUESTS)?;
+
+    wallet.apply_update(sync_update)?;
+    wallet.persist(&mut db)?;
+    println!();
+
+    // bump fee rate for tx by at least 1 sat per vbyte
+    let feerate = FeeRate::from_sat_per_vb(tx_feerate.to_sat_per_vb_ceil() + 1).unwrap();
+    let mut builder = wallet.build_fee_bump(txid).unwrap();
+    builder.fee_rate(feerate);
+    let mut new_psbt = builder.finish().unwrap();
+    let finalize_tx = wallet.sign(&mut new_psbt, SignOptions::default())?;
+    assert!(finalize_tx);
+    let new_fee = new_psbt.fee_amount().unwrap();
+    let bumped_tx = new_psbt.extract_tx()?;
+    assert_eq!(
+        bumped_tx
+            .output
+            .iter()
+            .find(|txout| txout.script_pubkey == address.script_pubkey())
+            .unwrap()
+            .value,
+        SEND_AMOUNT,
+        "Outputs should remain the same"
+    );
+    assert!(
+        new_fee > original_fee,
+        "Replacement tx fee ({new_fee}) should be higher than original ({original_fee})",
+    );
+    client.broadcast(&bumped_tx)?;
+    println!(
+        "Broadcast replacement transaction. Txid: https://mempool.space/testnet/tx/{}",
+        bumped_tx.compute_txid()
+    );
+
+    println!("Syncing after bumped tx...");
+    let sync_request = wallet.start_sync_with_revealed_spks().inspect(|_, _| {});
+    let sync_update = client.sync(sync_request, PARALLEL_REQUESTS)?;
+    println!();
+
+    let mut evicted_txs = Vec::new();
+    for (txid, last_seen) in &sync_update.tx_update.evicted_ats {
+        evicted_txs.push((*txid, *last_seen));
+    }
+
+    if !evicted_txs.is_empty() {
+        let evicted_count = evicted_txs.len();
+        wallet.apply_evicted_txs(evicted_txs);
+        println!("Applied {evicted_count} evicted transactions");
+    }
+
+    wallet.apply_update(sync_update)?;
+    wallet.persist(&mut db)?;
+
+    let balance_after_sync = wallet.balance();
+    println!("Wallet balance after sync: {}", balance_after_sync.total());
+    println!(
+        "Wallet has {} transactions and {} utxos",
+        wallet.transactions().count(),
+        wallet.list_unspent().count()
+    );
 
     Ok(())
 }
