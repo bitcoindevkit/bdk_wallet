@@ -128,7 +128,7 @@ impl NetworkSeen {
 /// This struct models an input that attempts to spend an output via a transaction path
 /// that is not part of the canonical network view (e.g., evicted, conflicted, or unknown).
 #[derive(Debug, Clone)]
-pub struct SpendInfo<A> {
+pub struct UncanonicalSpendInfo<A> {
     /// Non-canonical ancestor transactions reachable from this input.
     ///
     /// Each entry maps an ancestor `Txid` to its observed status in the network.
@@ -144,19 +144,19 @@ pub struct SpendInfo<A> {
     /// position of the conflict.
     ///
     /// [`uncanonical_ancestors`]: Self::uncanonical_ancestors
-    pub conflicting_txs: BTreeMap<Txid, ChainPosition<A>>,
+    pub canonical_conflicts: BTreeMap<Txid, ChainPosition<A>>,
 }
 
-impl<A> Default for SpendInfo<A> {
+impl<A> Default for UncanonicalSpendInfo<A> {
     fn default() -> Self {
         Self {
             uncanonical_ancestors: BTreeMap::new(),
-            conflicting_txs: BTreeMap::new(),
+            canonical_conflicts: BTreeMap::new(),
         }
     }
 }
 
-impl<A: Anchor> SpendInfo<A> {
+impl<A: Anchor> UncanonicalSpendInfo<A> {
     pub(crate) fn new<C>(
         chain: &C,
         chain_tip: BlockId,
@@ -205,7 +205,7 @@ impl<A: Anchor> SpendInfo<A> {
 
             // Find conflicts to populate `conflicting_txs`.
             if let Some((conflict_txid, conflict_tx, reason)) = network_view.spend(prev_op) {
-                let conflict_tx_entry = match spend_info.conflicting_txs.entry(conflict_txid) {
+                let conflict_tx_entry = match spend_info.canonical_conflicts.entry(conflict_txid) {
                     Entry::Vacant(vacant_entry) => vacant_entry,
                     // Skip if conflicting tx already visited.
                     Entry::Occupied(_) => continue,
@@ -224,11 +224,12 @@ impl<A: Anchor> SpendInfo<A> {
 
                 // Find descendants of `conflict_tx` too.
                 for (conflict_txid, _, reason) in network_view.descendants(conflict_tx) {
-                    let conflict_tx_entry = match spend_info.conflicting_txs.entry(conflict_txid) {
-                        Entry::Vacant(vacant_entry) => vacant_entry,
-                        // Skip if conflicting tx already visited.
-                        Entry::Occupied(_) => continue,
-                    };
+                    let conflict_tx_entry =
+                        match spend_info.canonical_conflicts.entry(conflict_txid) {
+                            Entry::Vacant(vacant_entry) => vacant_entry,
+                            // Skip if conflicting tx already visited.
+                            Entry::Occupied(_) => continue,
+                        };
                     let conflict_tx_node = match tx_graph.get_tx_node(conflict_txid) {
                         Some(tx_node) => tx_node,
                         // Skip if conflict tx does not exist in our graph.
@@ -308,7 +309,7 @@ impl<A: Anchor> SpendInfo<A> {
     /// If the spend info is empty, then it can belong in the canonical history without displacing
     /// existing transactions or need to add additional transactions other than itself.
     pub fn is_empty(&self) -> bool {
-        self.uncanonical_ancestors.is_empty() && self.conflicting_txs.is_empty()
+        self.uncanonical_ancestors.is_empty() && self.canonical_conflicts.is_empty()
     }
 }
 
@@ -319,16 +320,17 @@ pub struct UncanonicalTx<A> {
     pub txid: Txid,
     /// The uncanonical transaction.
     pub tx: Arc<Transaction>,
-    /// Whether the transaction was one seen by the network.
+    /// Whether the transaction was once seen by the network.
     pub network_seen: NetworkSeen,
     /// Spends, identified by prevout, which are uncanonical.
-    pub uncanonical_spends: BTreeMap<OutPoint, SpendInfo<A>>,
+    pub uncanonical_spends: BTreeMap<OutPoint, UncanonicalSpendInfo<A>>,
 }
 
 impl<A: Anchor> UncanonicalTx<A> {
     /// Whether the transaction was once observed in the network.
     ///
-    /// Assuming that the chain-source does not lie, we can safely remove transactions that
+    /// Assuming that the chain-source does not lie, we can safely remove transactions that were
+    /// never seen by the network.
     pub fn was_seen(&self) -> bool {
         self.network_seen.was_seen()
     }
@@ -355,14 +357,14 @@ impl<A: Anchor> UncanonicalTx<A> {
     }
 
     /// Iterate over transactions that are currently canonical in the network, but would be rendered
-    /// uncanonical if this transaction were to become canonical.
+    /// uncanonical (be replaced) if this transaction were to become canonical.
     ///
     /// This includes both direct and indirect conflicts, such as any transaction that relies on
     /// conflicting ancestry.
     pub fn conflicts(&self) -> impl Iterator<Item = (Txid, &ChainPosition<A>)> {
         self.uncanonical_spends
             .values()
-            .flat_map(|spend| &spend.conflicting_txs)
+            .flat_map(|spend| &spend.canonical_conflicts)
             .map(|(&txid, pos)| (txid, pos))
             .filter({
                 let mut dedup = HashSet::<Txid>::new();
@@ -487,7 +489,7 @@ impl IntentTracker {
         false
     }
 
-    /// Push a `txid` to the broadcast queue (if it does not exist already) and displaces all
+    /// Push a `txid` in the `IntentTracker` (if it does not exist already) and displaces all
     /// coflicting txids in the queue.
     pub fn push_and_displace_conflicts<A>(&mut self, tx_graph: &TxGraph<A>, txid: Txid) -> ChangeSet
     where

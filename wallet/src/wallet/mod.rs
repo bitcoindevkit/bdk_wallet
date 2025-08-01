@@ -21,7 +21,7 @@ use alloc::{
 };
 use chain::CanonicalReason;
 use core::{cmp::Ordering, fmt, mem, ops::Deref};
-use intent_tracker::{CanonicalView, NetworkSeen, SpendInfo, UncanonicalTx};
+use intent_tracker::{CanonicalView, NetworkSeen, UncanonicalSpendInfo, UncanonicalTx};
 
 use bdk_chain::{
     indexer::keychain_txout::KeychainTxOutIndex,
@@ -2709,17 +2709,6 @@ impl Wallet {
             .filter(|old_txid| !view.txs.contains_key(old_txid))
     }
 
-    // <<<<<<< HEAD
-    //     fn update_views(&mut self) {
-    //         self.update_network_view();
-    //         let _ = self.update_intent_view();
-    //     }
-
-    //     /// Stage changes and return evicted txids from intent canonical view.
-    //     ///
-    //     /// TODO: Do we also need to return evicted txids from network canonical view.
-    // =======
-
     /// Stage changes, rebuild views and return evicted txids from intent canonical view.
     pub(crate) fn stage_changes<C: Into<ChangeSet>>(&mut self, changeset: C) -> Vec<Txid> {
         let changeset: ChangeSet = changeset.into();
@@ -2814,7 +2803,7 @@ impl Wallet {
                     .iter()
                     .filter_map(|txin| {
                         let op = txin.previous_output;
-                        let spend_info = SpendInfo::new(
+                        let spend_info = UncanonicalSpendInfo::new(
                             &self.chain,
                             tip.block_id(),
                             graph,
