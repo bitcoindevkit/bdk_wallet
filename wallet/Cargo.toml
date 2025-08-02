@@ -44,6 +44,7 @@ bdk_chain = { version = "0.23.0", features = ["rusqlite"] }
 bdk_wallet = { path = ".", features = ["rusqlite", "file_store", "test-utils"] }
 anyhow = "1"
 rand = "^0.8"
+bip329 = "0.4.0"
 
 [package.metadata.docs.rs]
 all-features = true
@@ -58,3 +59,8 @@ required-features = ["all-keys"]
 name = "miniscriptc"
 path = "examples/compiler.rs"
 required-features = ["compiler"]
+
+[[example]]
+name = "bip329_example"
+path = "examples/bip329_example.rs"
+required-features = ["keys-bip39"]
