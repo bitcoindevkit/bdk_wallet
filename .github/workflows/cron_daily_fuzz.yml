@@ -1,0 +1,71 @@
+on:
+  schedule:
+    - cron: "00 05 * * *" # At 05:00 (UTC) every day.
+  workflow_dispatch: # allows manual triggering
+
+permissions: {}
+
+name: Daily Fuzz
+
+jobs:
+  fuzz:
+    name: Cargo Fuzz
+    runs-on: ubuntu-latest
+    env:
+      # The version of `cargo-fuzz` to install and use.
+      CARGO_FUZZ_VERSION: 0.13.1
+
+      # The number of seconds to run the fuzz target. 1800 seconds = 30 minutes.
+      FUZZ_TIME: 1800
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - fuzz_target: bdk_wallet
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install the nightly Rust channel
+        uses: actions-rs/toolchain@v1
+        with:
+            toolchain: nightly
+            override: true
+            profile: minimal
+
+      - name: Check cache for cargo-fuzz
+        id: cache-cargo-fuzz
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.tool_cache }}/cargo-fuzz
+          key: cargo-fuzz-bin-${{ env.CARGO_FUZZ_VERSION }}
+
+      - name: Install cargo-fuzz
+        if: steps.cache-cargo-fuzz.outputs.cache-hit != 'true'
+        run: |
+          cargo install --root "${{ runner.tool_cache }}/cargo-fuzz" --version $CARGO_FUZZ_VERSION cargo-fuzz --locked
+        env:
+          CARGO_FUZZ_VERSION: ${{ env.CARGO_FUZZ_VERSION }}
+
+      - name: Add cargo-fuzz to PATH
+        run: echo "${{ runner.tool_cache }}/cargo-fuzz/bin" >> $GITHUB_PATH
+
+      - name: Build & Run Fuzz Target
+        run: |
+          cargo fuzz build ${{ matrix.fuzz_target }}
+          cargo fuzz run ${{ matrix.fuzz_target }} -- -max_total_time=$FUZZ_TIME
+        env:
+          FUZZ_TIME: ${{ env.FUZZ_TIME }}
+
+      - name: Upload fuzzing artifacts on failure
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: fuzzing-artifacts-${{ matrix.fuzz_target }}-${{ github.sha }}
+          path: fuzz/artifacts
+
+# TODO: add a verify-execution job similar to rust-bitcoin's one
