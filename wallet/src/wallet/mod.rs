@@ -2367,6 +2367,23 @@ impl Wallet {
         Ok(())
     }
 
+    /// Applies a changeset.
+    ///
+    /// # Warning
+    ///
+    /// Applying changesets out of order may leave your wallet in an inconsistent state.
+    pub fn apply_changeset(&mut self, changeset: ChangeSet) {
+        self.chain
+            .apply_changeset(&changeset.local_chain)
+            .expect("must not remove genesis block");
+        self.indexed_graph
+            .apply_changeset(indexed_tx_graph::ChangeSet {
+                tx_graph: changeset.tx_graph.clone(),
+                indexer: changeset.indexer.clone(),
+            });
+        self.stage.merge(changeset);
+    }
+
     /// Get a reference of the staged [`ChangeSet`] that is yet to be committed (if any).
     pub fn staged(&self) -> Option<&ChangeSet> {
         if self.stage.is_empty() {
