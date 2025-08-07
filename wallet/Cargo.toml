@@ -21,11 +21,11 @@ miniscript = { version = "12.3.1", features = [ "serde" ], default-features = fa
 bitcoin = { version = "0.32.6", features = [ "serde", "base64" ], default-features = false }
 serde = { version = "^1.0", features = ["derive"] }
 serde_json = { version = "^1.0" }
-bdk_chain = { version = "0.23.1", features = [ "miniscript", "serde" ], default-features = false }
+bdk_chain = { version = "0.23.1", features = [ "miniscript", "serde" ], default-features = false, path = "../../bdk/crates/chain" }
 
 # Optional dependencies
 bip39 = { version = "2.0", optional = true }
-bdk_file_store = { version = "0.21.1", optional = true }
+bdk_file_store = { version = "0.21.1", optional = true, path = "../../bdk/crates/file_store" }
 
 [features]
 default = ["std"]
@@ -40,10 +40,12 @@ test-utils = ["std"]
 [dev-dependencies]
 assert_matches = "1.5.0"
 tempfile = "3"
-bdk_chain = { version = "0.23.1", features = ["rusqlite"] }
+bdk_chain = { version = "0.23.1", features = ["rusqlite"], path = "../../bdk/crates/chain" }
 bdk_wallet = { path = ".", features = ["rusqlite", "file_store", "test-utils"] }
 anyhow = "1"
 rand = "^0.8"
+bdk_testenv = { version = "0.13", path = "../../bdk/crates/testenv" }
+bdk_bitcoind_rpc = { version = "0.21", path = "../../bdk/crates/bitcoind_rpc" }
 
 [package.metadata.docs.rs]
 all-features = true
@@ -58,3 +60,7 @@ required-features = ["all-keys"]
 name = "miniscriptc"
 path = "examples/compiler.rs"
 required-features = ["compiler"]
+
+[[example]]
+name = "intent_tracker"
+path = "examples/intent_tracker.rs"

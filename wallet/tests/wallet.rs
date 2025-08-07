@@ -2873,13 +2873,13 @@ fn single_descriptor_wallet_can_create_tx_and_receive_change() {
 }
 
 #[test]
-fn test_transactions_sort_by() {
+fn test_canonical_txs_sort_by() {
     let (mut wallet, _txid) = get_funded_wallet_wpkh();
     receive_output(&mut wallet, Amount::from_sat(25_000), ReceiveTo::Mempool(0));
 
     // sort by chain position, unconfirmed then confirmed by descending block height
     let sorted_txs: Vec<WalletTx> =
-        wallet.transactions_sort_by(|t1, t2| t2.chain_position.cmp(&t1.chain_position));
+        wallet.canonical_txs_sort_by(|t1, t2| t2.chain_position.cmp(&t1.chain_position));
     let conf_heights: Vec<Option<u32>> = sorted_txs
         .iter()
         .map(|tx| tx.chain_position.confirmation_height_upper_bound())

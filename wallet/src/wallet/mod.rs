@@ -19,10 +19,11 @@ use alloc::{
     sync::Arc,
     vec::Vec,
 };
+use chain::CanonicalReason;
 use core::{cmp::Ordering, fmt, mem, ops::Deref};
+use intent_tracker::{CanonicalView, NetworkSeen, SpendInfo, UncanonicalTx};
 
 use bdk_chain::{
-    indexed_tx_graph,
     indexer::keychain_txout::KeychainTxOutIndex,
     local_chain::{ApplyHeaderError, CannotConnectError, CheckPoint, CheckPointIter, LocalChain},
     spk_client::{
@@ -53,6 +54,7 @@ mod changeset;
 pub mod coin_selection;
 pub mod error;
 pub mod export;
+pub mod intent_tracker;
 mod params;
 mod persisted;
 pub mod signer;
@@ -78,6 +80,7 @@ use crate::wallet::{
 // re-exports
 pub use bdk_chain::Balance;
 pub use changeset::ChangeSet;
+pub use intent_tracker::IntentTracker;
 pub use params::*;
 pub use persisted::*;
 pub use utils::IsDust;
@@ -106,6 +109,9 @@ pub struct Wallet {
     change_signers: Arc<SignersContainer>,
     chain: LocalChain,
     indexed_graph: IndexedTxGraph<ConfirmationBlockTime, KeychainTxOutIndex<KeychainKind>>,
+    intent_tracker: IntentTracker,
+    network_view: CanonicalView<ConfirmationBlockTime>,
+    intent_view: CanonicalView<ConfirmationBlockTime>,
     stage: ChangeSet,
     network: Network,
     secp: SecpCtx,
@@ -471,10 +477,13 @@ impl Wallet {
             None => (None, Arc::new(SignersContainer::new())),
         };
 
+        let intent_tracker = IntentTracker::default();
+
         let mut stage = ChangeSet {
             descriptor: Some(descriptor.clone()),
             change_descriptor: change_descriptor.clone(),
             local_chain: chain_changeset,
+            intent_tracker: intent_tracker.initial_changeset(),
             network: Some(network),
             ..Default::default()
         };
@@ -489,15 +498,21 @@ impl Wallet {
             params.use_spk_cache,
         )?;
 
-        Ok(Wallet {
+        let mut wallet = Wallet {
             signers,
             change_signers,
             network,
             chain,
             indexed_graph,
+            intent_tracker,
             stage,
             secp,
-        })
+            network_view: CanonicalView::default(),
+            intent_view: CanonicalView::default(),
+        };
+        wallet.rebuild_all_views();
+
+        Ok(wallet)
     }
 
     /// Build [`Wallet`] by loading from persistence or [`ChangeSet`].
@@ -685,15 +700,23 @@ impl Wallet {
         )
         .map_err(LoadError::Descriptor)?;
 
-        Ok(Some(Wallet {
+        let intent_tracker = IntentTracker::from_changeset(changeset.intent_tracker);
+
+        let mut wallet = Wallet {
             signers,
             change_signers,
             chain,
             indexed_graph,
+            intent_tracker,
             stage,
             network,
             secp,
-        }))
+            network_view: CanonicalView::default(),
+            intent_view: CanonicalView::default(),
+        };
+        wallet.rebuild_all_views();
+
+        Ok(Some(wallet))
     }
 
     /// Get the Bitcoin network the wallet is using.
@@ -762,14 +785,14 @@ impl Wallet {
     /// ```
     pub fn reveal_next_address(&mut self, keychain: KeychainKind) -> AddressInfo {
         let keychain = self.map_keychain(keychain);
-        let index = &mut self.indexed_graph.index;
-        let stage = &mut self.stage;
 
-        let ((index, spk), index_changeset) = index
+        let ((index, spk), index_changeset) = self
+            .indexed_graph
+            .index
             .reveal_next_spk(keychain)
             .expect("keychain must exist");
 
-        stage.merge(index_changeset.into());
+        self.stage_changes(index_changeset);
 
         AddressInfo {
             index,
@@ -800,7 +823,7 @@ impl Wallet {
             .reveal_to_target(keychain, index)
             .expect("keychain must exist");
 
-        self.stage.merge(index_changeset.into());
+        self.stage_changes(index_changeset);
 
         spks.into_iter().map(move |(index, spk)| AddressInfo {
             index,
@@ -826,8 +849,7 @@ impl Wallet {
             .next_unused_spk(keychain)
             .expect("keychain must exist");
 
-        self.stage
-            .merge(indexed_tx_graph::ChangeSet::from(index_changeset).into());
+        self.stage_changes(index_changeset);
 
         AddressInfo {
             index,
@@ -888,17 +910,32 @@ impl Wallet {
         self.indexed_graph.index.index_of_spk(spk).cloned()
     }
 
-    /// Return the list of unspent outputs of this wallet
+    /// Return the list of unspent outputs of this wallet.
     pub fn list_unspent(&self) -> impl Iterator<Item = LocalOutput> + '_ {
+        self._list_unspent(CanonicalizationParams::default())
+    }
+
+    /// List unspent outputs (UTXOs) of this wallet assuming that intended transactions are
+    /// canonical.
+    ///
+    /// TODO: Better docs here.
+    pub fn list_intended_unspent(&self) -> impl Iterator<Item = LocalOutput> + '_ {
+        self._list_unspent(self.intent_view_canonicalization_params())
+    }
+
+    fn _list_unspent(
+        &self,
+        params: CanonicalizationParams,
+    ) -> impl Iterator<Item = LocalOutput> + '_ {
         self.indexed_graph
             .graph()
             .filter_chain_unspents(
                 &self.chain,
                 self.chain.tip().block_id(),
-                CanonicalizationParams::default(),
+                params,
                 self.indexed_graph.index.outpoints().iter().cloned(),
             )
-            .map(|((k, i), full_txo)| new_local_utxo(k, i, full_txo))
+            .map(|((k, i), full_txo)| new_local_utxo(&self.intent_tracker, k, i, full_txo))
     }
 
     /// Get the [`TxDetails`] of a wallet transaction.
@@ -940,7 +977,7 @@ impl Wallet {
                 CanonicalizationParams::default(),
                 self.indexed_graph.index.outpoints().iter().cloned(),
             )
-            .map(|((k, i), full_txo)| new_local_utxo(k, i, full_txo))
+            .map(|((k, i), full_txo)| new_local_utxo(&self.intent_tracker, k, i, full_txo))
     }
 
     /// Get all the checkpoints the wallet is currently storing indexed by height.
@@ -984,17 +1021,20 @@ impl Wallet {
 
     /// Returns the utxo owned by this wallet corresponding to `outpoint` if it exists in the
     /// wallet's database.
-    pub fn get_utxo(&self, op: OutPoint) -> Option<LocalOutput> {
+    pub fn get_utxo(&self, outpoint: OutPoint) -> Option<LocalOutput> {
+        self._get_utxo(CanonicalizationParams::default(), outpoint)
+    }
+    fn _get_utxo(&self, params: CanonicalizationParams, op: OutPoint) -> Option<LocalOutput> {
         let ((keychain, index), _) = self.indexed_graph.index.txout(op)?;
         self.indexed_graph
             .graph()
             .filter_chain_unspents(
                 &self.chain,
                 self.chain.tip().block_id(),
-                CanonicalizationParams::default(),
+                params,
                 core::iter::once(((), op)),
             )
-            .map(|(_, full_txo)| new_local_utxo(keychain, index, full_txo))
+            .map(|(_, full_txo)| new_local_utxo(&self.intent_tracker, keychain, index, full_txo))
             .next()
     }
 
@@ -1017,7 +1057,7 @@ impl Wallet {
     /// [`list_output`]: Self::list_output
     pub fn insert_txout(&mut self, outpoint: OutPoint, txout: TxOut) {
         let additions = self.indexed_graph.insert_txout(outpoint, txout);
-        self.stage.merge(additions.into());
+        self.stage_changes(additions);
     }
 
     /// Calculates the fee of a given transaction. Returns [`Amount::ZERO`] if `tx` is a coinbase
@@ -1178,9 +1218,13 @@ impl Wallet {
 
     /// Iterate over relevant and canonical transactions in the wallet.
     ///
-    /// A transaction is relevant when it spends from or spends to at least one tracked output. A
-    /// transaction is canonical when it is confirmed in the best chain, or does not conflict
-    /// with any transaction confirmed in the best chain.
+    /// A transaction is relevant when it spends from or spends to at least one tracked output.
+    ///
+    /// A transaction is canonical when either:
+    /// * It is confirmed in the best chain and does not conflict with a transaction in the
+    ///   broadcast queue.
+    /// * It seen in the mempool, is not evicted and does not conflict with a transaction that is
+    ///   confirmed or seen later in the mempool.
     ///
     /// To iterate over all transactions, including those that are irrelevant and not canonical, use
     /// [`TxGraph::full_txs`].
@@ -1188,6 +1232,25 @@ impl Wallet {
     /// To iterate over all canonical transactions, including those that are irrelevant, use
     /// [`TxGraph::list_canonical_txs`].
     pub fn transactions(&self) -> impl Iterator<Item = WalletTx> + '_ {
+        self.canonical_txs()
+    }
+
+    /// Iterate over relevant and canonical transactions in the wallet.
+    ///
+    /// A transaction is relevant when it spends from or spends to at least one tracked output.
+    ///
+    /// A transaction is canonical when either:
+    /// * It is confirmed in the best chain and does not conflict with a transaction in the
+    ///   broadcast queue.
+    /// * It seen in the mempool, is not evicted and does not conflict with a transaction that is
+    ///   confirmed or seen later in the mempool.
+    ///
+    /// To iterate over all transactions, including those that are irrelevant and not canonical, use
+    /// [`TxGraph::full_txs`].
+    ///
+    /// To iterate over all canonical transactions, including those that are irrelevant, use
+    /// [`TxGraph::list_canonical_txs`].
+    pub fn canonical_txs(&self) -> impl Iterator<Item = WalletTx> + '_ {
         let tx_graph = self.indexed_graph.graph();
         let tx_index = &self.indexed_graph.index;
         tx_graph
@@ -1212,10 +1275,10 @@ impl Wallet {
     /// # let mut wallet:Wallet = todo!();
     /// // Transactions by chain position: first unconfirmed then descending by confirmed height.
     /// let sorted_txs: Vec<WalletTx> =
-    ///     wallet.transactions_sort_by(|tx1, tx2| tx2.chain_position.cmp(&tx1.chain_position));
+    ///     wallet.canonical_txs_sort_by(|tx1, tx2| tx2.chain_position.cmp(&tx1.chain_position));
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    pub fn transactions_sort_by<F>(&self, compare: F) -> Vec<WalletTx>
+    pub fn canonical_txs_sort_by<F>(&self, compare: F) -> Vec<WalletTx>
     where
         F: FnMut(&WalletTx, &WalletTx) -> Ordering,
     {
@@ -1227,10 +1290,19 @@ impl Wallet {
     /// Return the balance, separated into available, trusted-pending, untrusted-pending and
     /// immature values.
     pub fn balance(&self) -> Balance {
+        self._balance(CanonicalizationParams::default())
+    }
+
+    /// Return the balance that includes tracked transactions which are not canonical.
+    pub fn intended_balance(&self) -> Balance {
+        self._balance(self.intent_view_canonicalization_params())
+    }
+
+    fn _balance(&self, params: CanonicalizationParams) -> Balance {
         self.indexed_graph.graph().balance(
             &self.chain,
             self.chain.tip().block_id(),
-            CanonicalizationParams::default(),
+            params,
             self.indexed_graph.index.outpoints().iter().cloned(),
             |&(k, _), _| k == KeychainKind::Internal,
         )
@@ -1653,7 +1725,7 @@ impl Wallet {
             if let Some((_, index_changeset)) =
                 self.indexed_graph.index.reveal_to_target(keychain, index)
             {
-                self.stage.merge(index_changeset.into());
+                self.stage_changes(index_changeset);
                 self.mark_used(keychain, index);
             }
         }
@@ -1710,7 +1782,11 @@ impl Wallet {
         let txout_index = &self.indexed_graph.index;
         let chain_tip = self.chain.tip().block_id();
         let chain_positions = graph
-            .list_canonical_txs(&self.chain, chain_tip, CanonicalizationParams::default())
+            .list_canonical_txs(
+                &self.chain,
+                chain_tip,
+                self.intent_view_canonicalization_params(),
+            )
             .map(|canon_tx| (canon_tx.tx_node.txid, canon_tx.chain_position))
             .collect::<HashMap<Txid, _>>();
 
@@ -1750,6 +1826,13 @@ impl Wallet {
             .input
             .drain(..)
             .map(|txin| -> Result<_, BuildFeeBumpError> {
+                // cannot fee-bump if a conflicting transaction is already confirmed
+                if let Some((spend_txid, _, reason)) = self.network_view.spend(txin.previous_output)
+                {
+                    if spend_txid != txid && matches!(reason, CanonicalReason::Anchor { .. }) {
+                        return Err(BuildFeeBumpError::TransactionConfirmed(spend_txid));
+                    }
+                }
                 graph
                     // Get previous transaction
                     .get_tx(txin.previous_output.txid)
@@ -1781,6 +1864,9 @@ impl Wallet {
                                     is_spent: true,
                                     derivation_index,
                                     chain_position,
+                                    needs_broadcast: self
+                                        .intent_tracker
+                                        .contains(txin.previous_output.txid),
                                 }),
                             },
                             None => {
@@ -1976,7 +2062,11 @@ impl Wallet {
         let confirmation_heights = self
             .indexed_graph
             .graph()
-            .list_canonical_txs(&self.chain, chain_tip, CanonicalizationParams::default())
+            .list_canonical_txs(
+                &self.chain,
+                chain_tip,
+                self.intent_view_canonicalization_params(),
+            )
             .filter(|canon_tx| prev_txids.contains(&canon_tx.tx_node.txid))
             // This is for a small performance gain. Although `.filter` filters out excess txs, it
             // will still consume the internal `CanonicalIter` entirely. Having a `.take` here
@@ -2117,6 +2207,19 @@ impl Wallet {
     /// Given the options returns the list of utxos that must be used to form the
     /// transaction and any further that may be used if needed.
     fn filter_utxos(&self, params: &TxParams, current_height: u32) -> Vec<WeightedUtxo> {
+        let uncanonical_txids_to_exclude = self
+            .uncanonical_txs()
+            .filter_map(|utx| match params.uncanonical_utxo_policy {
+                crate::UncanonicalUtxoPolicy::Include if utx.contains_conflicts() => None,
+                crate::UncanonicalUtxoPolicy::IncludeUnconfirmedConflicts
+                    if utx.contains_confirmed_conflicts() =>
+                {
+                    None
+                }
+                _ => Some(utx.txid),
+            })
+            .collect::<HashSet<_>>();
+
         if params.manually_selected_only {
             vec![]
         // only process optional UTxOs if manually_selected_only is false
@@ -2134,14 +2237,18 @@ impl Wallet {
                 .filter_chain_unspents(
                     &self.chain,
                     self.chain.tip().block_id(),
-                    CanonicalizationParams::default(),
+                    self.intent_view_canonicalization_params(),
                     self.indexed_graph.index.outpoints().iter().cloned(),
                 )
+                // remove all uncanonical outputs that do not satisfy the uncanonical output policy
+                .filter(move |(_, full_txo)| {
+                    !uncanonical_txids_to_exclude.contains(&full_txo.outpoint.txid)
+                })
                 // only create LocalOutput if UTxO is mature
                 .filter_map(move |((k, i), full_txo)| {
                     full_txo
                         .is_mature(current_height)
-                        .then(|| new_local_utxo(k, i, full_txo))
+                        .then(|| new_local_utxo(&self.intent_tracker, k, i, full_txo))
                 })
                 // only process UTXOs not selected manually, they will be considered later in the
                 // chain
@@ -2363,7 +2470,7 @@ impl Wallet {
             .reveal_to_target_multi(&update.last_active_indices);
         changeset.merge(index_changeset.into());
         changeset.merge(self.indexed_graph.apply_update(update.tx_update).into());
-        self.stage.merge(changeset);
+        self.stage_changes(changeset);
         Ok(())
     }
 
@@ -2459,7 +2566,7 @@ impl Wallet {
                 .apply_block_relevant(block, height)
                 .into(),
         );
-        self.stage.merge(changeset);
+        self.stage_changes(changeset);
         Ok(())
     }
 
@@ -2482,7 +2589,7 @@ impl Wallet {
         let indexed_graph_changeset = self
             .indexed_graph
             .batch_insert_relevant_unconfirmed(unconfirmed_txs);
-        self.stage.merge(indexed_graph_changeset.into());
+        self.stage_changes(indexed_graph_changeset);
     }
 
     /// Apply evictions of the given transaction IDs with their associated timestamps.
@@ -2531,7 +2638,7 @@ impl Wallet {
             .list_canonical_txs(
                 chain,
                 chain.tip().block_id(),
-                CanonicalizationParams::default(),
+                self.intent_view_canonicalization_params(),
             )
             .map(|c| c.tx_node.txid)
             .collect();
@@ -2555,6 +2662,208 @@ impl Wallet {
         } else {
             keychain
         }
+    }
+}
+
+/// Methods to interact with the broadcast queue.
+impl Wallet {
+    fn rebuild_all_views(&mut self) {
+        let _ = self.rebuild_network_view();
+        let _ = self.rebuild_intent_view();
+    }
+
+    /// Updates the network canonical view and returns evicted txids from the old view.
+    fn rebuild_network_view(&mut self) -> impl Iterator<Item = Txid> + '_ {
+        let params = CanonicalizationParams::default();
+        let view = &mut self.network_view;
+        let chain = &self.chain;
+        let chain_tip = chain.tip().block_id();
+        let graph = self.indexed_graph.graph();
+        Self::_rebuild_view(view, params, chain, chain_tip, graph)
+    }
+
+    /// Updates the intent canonical view and returns evicted txids from the old view.
+    fn rebuild_intent_view(&mut self) -> impl Iterator<Item = Txid> + '_ {
+        let params = self.intent_view_canonicalization_params();
+        let view = &mut self.intent_view;
+        let chain = &self.chain;
+        let chain_tip = chain.tip().block_id();
+        let graph = self.indexed_graph.graph();
+        Self::_rebuild_view(view, params, chain, chain_tip, graph)
+    }
+
+    /// Recompute the given `view` and return txids that are evicted from the old view.
+    fn _rebuild_view<'v>(
+        view: &'v mut CanonicalView<ConfirmationBlockTime>,
+        params: CanonicalizationParams,
+        chain: &'v LocalChain,
+        chain_tip: BlockId,
+        graph: &'v TxGraph<ConfirmationBlockTime>,
+    ) -> impl Iterator<Item = Txid> + 'v {
+        let view_iter = graph.canonical_iter(chain, chain_tip, params);
+        let mut temp_view = CanonicalView::from_iter(view_iter).expect("infallible");
+        core::mem::swap(view, &mut temp_view);
+        temp_view
+            .txs
+            .into_keys()
+            .filter(|old_txid| !view.txs.contains_key(old_txid))
+    }
+
+    // <<<<<<< HEAD
+    //     fn update_views(&mut self) {
+    //         self.update_network_view();
+    //         let _ = self.update_intent_view();
+    //     }
+
+    //     /// Stage changes and return evicted txids from intent canonical view.
+    //     ///
+    //     /// TODO: Do we also need to return evicted txids from network canonical view.
+    // =======
+
+    /// Stage changes, rebuild views and return evicted txids from intent canonical view.
+    pub(crate) fn stage_changes<C: Into<ChangeSet>>(&mut self, changeset: C) -> Vec<Txid> {
+        let changeset: ChangeSet = changeset.into();
+
+        // TODO: Skip rebuilding views for certain types of changes.
+        // TODO: Figure out what type of notifications users need.
+        // TODO: * I.e. if a tracked tx gets evicted from the canonical network view.
+        let _txids_evicted_from_network = self.rebuild_network_view();
+        drop(_txids_evicted_from_network);
+        let txids_evicted_from_intent = self.rebuild_intent_view().collect::<Vec<_>>();
+        for &evicted_txid in &txids_evicted_from_intent {
+            self.stage
+                .merge(self.intent_tracker.remove(evicted_txid).into());
+        }
+        self.stage.merge(changeset);
+        txids_evicted_from_intent
+    }
+
+    /// [`CanonicalizationParams`] which prioritize tracked transactions.
+    pub(crate) fn intent_view_canonicalization_params(&self) -> CanonicalizationParams {
+        CanonicalizationParams {
+            assume_canonical: self.intent_tracker.txids().collect(),
+        }
+    }
+
+    /// Keep track of a transaction and untrack all conflicts of it (if any).
+    ///
+    /// The caller is responsible for replacing, cpfp-ing, or manually abandoning the transaction if
+    /// it ever becomes network-uncanonical (TODO: Expand on this).
+    ///
+    /// Unsigned transactions can be inserted and later reinserted when signed (TODO: Work on this
+    /// API, maybe don't include this for now?).
+    pub fn track_tx<T: Into<Arc<Transaction>>>(&mut self, tx: T) -> Vec<Txid> {
+        let tx: Arc<Transaction> = tx.into();
+        let txid = tx.compute_txid();
+
+        let mut changeset = ChangeSet::default();
+        changeset.merge(self.indexed_graph.insert_tx(tx).into());
+        changeset.merge(self.intent_tracker.push(txid).into());
+        self.stage_changes(changeset)
+    }
+
+    /// Untrack transaction so that the wallet will forget about it if it becomes network
+    /// uncanonical.
+    ///
+    /// This will also untrack all descendants of this transaction.
+    ///
+    /// Returns all transactions untracked by this operation.
+    pub fn untrack_tx(&mut self, txid: Txid) -> Vec<Txid> {
+        let mut changeset = ChangeSet::default();
+        changeset.merge(self.intent_tracker.remove(txid).into());
+        self.stage_changes(changeset)
+    }
+
+    /// List transactions that are tracked but not network-canonical.
+    ///
+    /// # Order
+    ///
+    /// Transactions are returned in the order that they were tracked with
+    /// [`track_tx`](Self::track_tx).
+    ///
+    /// These are the transactions that commands action!
+    pub fn uncanonical_txs(
+        &self,
+    ) -> impl Iterator<Item = UncanonicalTx<ConfirmationBlockTime>> + '_ {
+        let graph = self.indexed_graph.graph();
+        let tip = self.chain.tip();
+        self.intent_tracker
+            .txids()
+            .filter(|txid| {
+                debug_assert!(
+                    self.intent_view.txs.contains_key(txid),
+                    "A tracked tx must exist in the `intent_view`",
+                );
+                !self.network_view.txs.contains_key(txid)
+            })
+            .filter_map(|txid| {
+                let txn_opt = graph.get_tx_node(txid);
+                debug_assert!(txn_opt.is_some(), "A tracked txid must exist in the graph");
+                txn_opt
+            })
+            .filter_map(move |tx_node| {
+                let txid = tx_node.txid;
+                let tx = tx_node.tx;
+                let network_seen = if tx_node.last_seen.is_some() || !tx_node.anchors.is_empty() {
+                    NetworkSeen::Seen
+                } else {
+                    NetworkSeen::NeverSeen
+                };
+                let uncanonical_spends = tx
+                    .input
+                    .iter()
+                    .filter_map(|txin| {
+                        let op = txin.previous_output;
+                        let spend_info = SpendInfo::new(
+                            &self.chain,
+                            tip.block_id(),
+                            graph,
+                            &self.network_view,
+                            op,
+                        );
+                        if spend_info.is_empty() {
+                            None
+                        } else {
+                            Some((op, spend_info))
+                        }
+                    })
+                    .collect();
+
+                Some(UncanonicalTx {
+                    txid,
+                    tx,
+                    network_seen,
+                    uncanonical_spends,
+                })
+            })
+    }
+
+    /// Whether the transaction is a self-spend.
+    ///
+    /// A self-spend if where all inputs and outputs are owned by this wallet.
+    ///
+    /// This may return false-negatives if there are missing information from the wallet.
+    pub fn is_self_spend(&self, tx: &Transaction) -> bool {
+        let index = &self.indexed_graph.index;
+        for txout in &tx.output {
+            if index.index_of_spk(txout.script_pubkey.clone()).is_none() {
+                return false;
+            }
+        }
+        for txin in &tx.input {
+            if index.txout(txin.previous_output).is_none() {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Mark a transaction as successfully broadcasted.
+    pub fn insert_tx_broadcasted_at(&mut self, txid: Txid, at: u64) {
+        let mut update = TxUpdate::default();
+        update.seen_ats.insert((txid, at));
+        let changeset = self.indexed_graph.apply_update(update);
+        self.stage_changes(changeset);
     }
 }
 
@@ -2669,6 +2978,7 @@ where
 }
 
 fn new_local_utxo(
+    broadcast_queue: &IntentTracker,
     keychain: KeychainKind,
     derivation_index: u32,
     full_txo: FullTxOut<ConfirmationBlockTime>,
@@ -2680,6 +2990,7 @@ fn new_local_utxo(
         chain_position: full_txo.chain_position,
         keychain,
         derivation_index,
+        needs_broadcast: broadcast_queue.contains(full_txo.outpoint.txid),
     }
 }
 
