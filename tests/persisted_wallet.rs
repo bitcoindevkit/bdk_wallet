@@ -420,7 +420,7 @@ fn single_descriptor_wallet_persist_and_recover() {
     assert_matches!(
         err,
         Err(LoadWithPersistError::InvalidChangeSet(LoadError::Mismatch(LoadMismatch::Descriptor { keychain, loaded, expected })))
-        if keychain == KeychainKind::Internal && loaded.is_none() && expected == Some(exp_desc),
+        if keychain == KeychainKind::Internal && loaded.is_none() && expected == Some(Box::new(exp_desc)),
         "single descriptor wallet should refuse change descriptor param"
     );
 }
