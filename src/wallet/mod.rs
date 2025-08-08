@@ -227,9 +227,9 @@ pub enum LoadMismatch {
         /// Keychain identifying the descriptor.
         keychain: KeychainKind,
         /// The loaded descriptor.
-        loaded: Option<ExtendedDescriptor>,
+        loaded: Option<Box<ExtendedDescriptor>>,
         /// The expected descriptor.
-        expected: Option<ExtendedDescriptor>,
+        expected: Option<Box<ExtendedDescriptor>>,
     },
 }
 
@@ -599,8 +599,8 @@ impl Wallet {
                 if descriptor.descriptor_id() != exp_desc.descriptor_id() {
                     return Err(LoadError::Mismatch(LoadMismatch::Descriptor {
                         keychain: KeychainKind::External,
-                        loaded: Some(descriptor),
-                        expected: Some(exp_desc),
+                        loaded: Some(Box::new(descriptor)),
+                        expected: Some(Box::new(exp_desc)),
                     }));
                 }
                 if params.extract_keys {
@@ -609,7 +609,7 @@ impl Wallet {
             } else {
                 return Err(LoadError::Mismatch(LoadMismatch::Descriptor {
                     keychain: KeychainKind::External,
-                    loaded: Some(descriptor),
+                    loaded: Some(Box::new(descriptor)),
                     expected: None,
                 }));
             }
@@ -630,7 +630,7 @@ impl Wallet {
                     return Err(LoadError::Mismatch(LoadMismatch::Descriptor {
                         keychain: KeychainKind::Internal,
                         loaded: None,
-                        expected: Some(exp_desc),
+                        expected: Some(Box::new(exp_desc)),
                     }));
                 }
             }
@@ -644,7 +644,7 @@ impl Wallet {
                 None => {
                     return Err(LoadError::Mismatch(LoadMismatch::Descriptor {
                         keychain: KeychainKind::Internal,
-                        loaded: Some(desc),
+                        loaded: Some(Box::new(desc)),
                         expected: None,
                     }))
                 }
@@ -656,8 +656,8 @@ impl Wallet {
                     if desc.descriptor_id() != exp_desc.descriptor_id() {
                         return Err(LoadError::Mismatch(LoadMismatch::Descriptor {
                             keychain: KeychainKind::Internal,
-                            loaded: Some(desc),
-                            expected: Some(exp_desc),
+                            loaded: Some(Box::new(desc)),
+                            expected: Some(Box::new(exp_desc)),
                         }));
                     }
                     if params.extract_keys {
