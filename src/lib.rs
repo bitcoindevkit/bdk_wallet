@@ -8,9 +8,6 @@
 #![no_std]
 #![warn(missing_docs)]
 #![allow(clippy::uninlined_format_args)]
-// TODO: these can be removed after <https://github.com/bitcoindevkit/bdk_wallet/issues/245>
-#![allow(clippy::result_large_err)]
-#![allow(clippy::large_enum_variant)]
 
 #[cfg(feature = "std")]
 #[macro_use]
