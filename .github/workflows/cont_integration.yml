@@ -149,7 +149,7 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           name: Clippy Results
-          args: --all-features --all-targets -- -D warnings
+          args: --workspace --exclude 'example_*' --all-features --all-targets -- -D warnings
 
   build-examples:
     needs: prepare
