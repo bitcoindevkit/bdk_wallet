@@ -12,7 +12,7 @@ build:
 check:
    cargo +nightly fmt --all -- --check
    cargo check --workspace --exclude 'example_*' --all-features
-   cargo clippy --all-features --all-targets -- -D warnings
+   cargo clippy --workspace --exclude 'example_*' --all-features --all-targets -- -D warnings
    @[ "$(git log --pretty='format:%G?' -1 HEAD)" = "N" ] && \
        echo "\n⚠️  Unsigned commit: BDK requires that commits be signed." || \
        true
