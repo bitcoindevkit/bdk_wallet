@@ -30,7 +30,7 @@ use bdk_chain::{
         SyncResponse,
     },
     tx_graph::{CalculateFeeError, CanonicalTx, TxGraph, TxUpdate},
-    BlockId, CanonicalizationParams, ChainPosition, ConfirmationBlockTime, DescriptorExt,
+    Anchor, BlockId, CanonicalizationParams, ChainPosition, ConfirmationBlockTime, DescriptorExt,
     FullTxOut, Indexed, IndexedTxGraph, Indexer, Merge,
 };
 use bitcoin::{
@@ -46,6 +46,7 @@ use bitcoin::{
 use miniscript::{
     descriptor::KeyMap,
     psbt::{PsbtExt, PsbtInputExt, PsbtInputSatisfier},
+    ForEachKey,
 };
 use rand_core::RngCore;
 
@@ -55,6 +56,8 @@ pub mod error;
 pub mod export;
 mod params;
 mod persisted;
+#[allow(unused)]
+pub mod psbt_params;
 pub mod signer;
 pub mod tx_builder;
 pub(crate) mod utils;
@@ -80,8 +83,7 @@ pub use bdk_chain::Balance;
 pub use changeset::ChangeSet;
 pub use params::*;
 pub use persisted::*;
-pub use utils::IsDust;
-pub use utils::TxDetails;
+pub use utils::{IsDust, TxDetails};
 
 /// A Bitcoin wallet
 ///
@@ -2632,6 +2634,203 @@ impl Wallet {
             .spks_from_indexer(&self.indexed_graph.index)
     }
 }
+
+use bdk_tx::{
+    selection_algorithm_lowest_fee_bnb, ChangePolicyType, Finalizer, Input, InputCandidates,
+    Output, PsbtParams, Selector, SelectorParams, TxStatus,
+};
+use miniscript::plan::{Assets, Plan};
+use psbt_params::SelectionStrategy;
+
+/// Maps a chain position to tx confirmation status, if `pos` is the confirmed
+/// variant.
+///
+/// # Panics
+///
+/// - If the confirmation height or time is not a valid absolute [`Height`] or [`Time`].
+///
+/// [`Height`]: bitcoin::absolute::Height
+/// [`Time`]: bitcoin::absolute::Time
+fn status_from_position(pos: ChainPosition<ConfirmationBlockTime>) -> Option<TxStatus> {
+    if let ChainPosition::Confirmed { anchor, .. } = pos {
+        let conf_height = anchor.confirmation_height_upper_bound();
+        let height =
+            absolute::Height::from_consensus(conf_height).expect("must be valid block height");
+        let time = absolute::Time::from_consensus(
+            anchor
+                .confirmation_time
+                .try_into()
+                .expect("confirmation time should fit into u32"),
+        )
+        .expect("must be valid block time");
+
+        Some(TxStatus { height, time })
+    } else {
+        None
+    }
+}
+
+impl Wallet {
+    /// Create PSBT with the given `params` and `rng`.
+    pub fn create_psbt(
+        &self,
+        params: psbt_params::Params,
+        rng: &mut impl RngCore,
+    ) -> Result<(Psbt, Finalizer), CreatePsbtError> {
+        // Get input candidates
+        let assets = self.assets();
+        // TODO: We need to handle the case where we are unable to plan
+        // a must-spend input.
+        let (must_spend, mut may_spend): (Vec<Input>, Vec<Input>) = self
+            .list_unspent()
+            .flat_map(|output| self.plan_input(&output, &assets))
+            .partition(|input| params.utxos.contains(&input.prev_outpoint()));
+
+        if let SelectionStrategy::SingleRandomDraw = params.coin_selection {
+            utils::shuffle_slice(&mut may_spend, rng);
+        }
+
+        let input_candidates = InputCandidates::new(must_spend, may_spend);
+
+        // Parse params
+        let outputs: Vec<Output> = params.recipients.into_iter().map(Output::from).collect();
+        let feerate = params.feerate;
+        let longterm_feerate = params.longterm_feerate;
+        let definite_change_desc = params.change_descriptor.unwrap_or_else(|| {
+            let change_keychain = KeychainKind::Internal;
+            let desc = self.public_descriptor(change_keychain);
+            let next_index = self.next_derivation_index(change_keychain);
+            desc.at_derivation_index(next_index)
+                .expect("should be valid derivation index")
+        });
+
+        // Select coins
+        let mut selector = Selector::new(
+            &input_candidates,
+            SelectorParams::new(
+                feerate,
+                outputs,
+                definite_change_desc,
+                ChangePolicyType::NoDustAndLeastWaste { longterm_feerate },
+            ),
+        )
+        .map_err(CreatePsbtError::Selector)?;
+
+        match params.coin_selection {
+            SelectionStrategy::SingleRandomDraw => {
+                // We should have already shuffled candidates earlier, so just select
+                // until the target is met.
+                selector
+                    .select_until_target_met()
+                    .map_err(CreatePsbtError::NSF)?;
+            }
+            SelectionStrategy::LowestFee => {
+                selector
+                    .select_with_algorithm(selection_algorithm_lowest_fee_bnb(
+                        longterm_feerate,
+                        10_000,
+                    ))
+                    .map_err(CreatePsbtError::Bnb)?;
+            }
+        };
+        let selection = selector.try_finalize().ok_or({
+            let e = bdk_tx::CannotMeetTarget;
+            CreatePsbtError::Selector(bdk_tx::SelectorError::CannotMeetTarget(e))
+        })?;
+
+        let chain_tip = self.chain.tip().block_id();
+        let fallback_locktime = absolute::LockTime::from_consensus(chain_tip.height);
+
+        // Create psbt
+        let psbt = selection
+            .create_psbt(PsbtParams {
+                fallback_locktime,
+                fallback_sequence: Sequence::ENABLE_LOCKTIME_NO_RBF,
+                ..Default::default()
+            })
+            .map_err(CreatePsbtError::Psbt)?;
+
+        let finalizer = selection.into_finalizer();
+
+        Ok((psbt, finalizer))
+    }
+
+    /// Return the "keys" assets, i.e. the ones we can trivially infer by scanning
+    /// the pubkeys of the wallet's descriptors.
+    fn assets(&self) -> Assets {
+        let mut pks = vec![];
+        for (_, desc) in self.keychains() {
+            desc.for_each_key(|k| {
+                pks.push(k.clone());
+                true
+            });
+        }
+
+        Assets::new().add(pks)
+    }
+
+    /// Attempt to create a spending plan for the UTXO of the given `outpoint`
+    /// with the provided `assets`.
+    ///
+    /// Return `None` if `outpoint` doesn't correspond to an indexed txout, or
+    /// if the assets are not sufficient to create a plan.
+    fn try_plan(&self, outpoint: OutPoint, assets: &Assets) -> Option<Plan> {
+        let indexer = &self.indexed_graph.index;
+        let ((keychain, index), _) = indexer.txout(outpoint)?;
+        let desc = indexer
+            .get_descriptor(keychain)?
+            .at_derivation_index(index)
+            .expect("must be valid derivation index");
+        desc.plan(assets).ok()
+    }
+
+    /// Plan the output with the available assets and return a new [`Input`].
+    fn plan_input(&self, output: &LocalOutput, assets: &Assets) -> Option<Input> {
+        let op = output.outpoint;
+        let txid = op.txid;
+        if let Some(plan) = self.try_plan(op, assets) {
+            let tx = self.indexed_graph.graph().get_tx(txid).unwrap();
+            return Some(
+                Input::from_prev_tx(
+                    plan,
+                    tx,
+                    op.vout as usize,
+                    status_from_position(output.chain_position),
+                )
+                .expect("invalid outpoint"),
+            );
+        }
+
+        None
+    }
+}
+
+/// Error when creating a PSBT.
+#[derive(Debug)]
+pub enum CreatePsbtError {
+    /// No Bnb solution.
+    Bnb(bdk_coin_select::NoBnbSolution),
+    /// Non-sufficient funds
+    NSF(bdk_coin_select::InsufficientFunds),
+    /// Failed to create PSBT
+    Psbt(bdk_tx::CreatePsbtError),
+    /// Selector error
+    Selector(bdk_tx::SelectorError),
+}
+
+impl fmt::Display for CreatePsbtError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Bnb(e) => write!(f, "{e}"),
+            Self::NSF(e) => write!(f, "{e}"),
+            Self::Psbt(e) => write!(f, "{e}"),
+            Self::Selector(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for CreatePsbtError {}
 
 impl AsRef<bdk_chain::tx_graph::TxGraph<ConfirmationBlockTime>> for Wallet {
     fn as_ref(&self) -> &bdk_chain::tx_graph::TxGraph<ConfirmationBlockTime> {
