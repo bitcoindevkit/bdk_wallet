@@ -47,7 +47,6 @@ pub use self::error::Error as DescriptorError;
 pub use self::policy::Policy;
 use self::template::DescriptorTemplateOut;
 use crate::keys::{IntoDescriptorKey, KeyError};
-use crate::wallet::signer::SignersContainer;
 use crate::wallet::utils::SecpCtx;
 
 /// Alias for a [`Descriptor`] that can contain extended keys using [`DescriptorPublicKey`]
@@ -348,7 +347,6 @@ pub trait ExtractPolicy {
     /// Extract the spending [`policy`]
     fn extract_policy(
         &self,
-        signers: &SignersContainer,
         psbt: BuildSatisfaction,
         secp: &SecpCtx,
     ) -> Result<Option<Policy>, DescriptorError>;

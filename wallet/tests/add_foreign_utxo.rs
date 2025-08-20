@@ -1,7 +1,6 @@
 use std::str::FromStr;
 
 use bdk_wallet::psbt::PsbtUtils;
-use bdk_wallet::signer::SignOptions;
 use bdk_wallet::test_utils::*;
 use bdk_wallet::tx_builder::AddForeignUtxoError;
 use bdk_wallet::KeychainKind;
@@ -35,7 +34,7 @@ fn test_add_foreign_utxo() {
         .only_witness_utxo()
         .add_foreign_utxo(utxo.outpoint, psbt_input, foreign_utxo_satisfaction)
         .unwrap();
-    let mut psbt = builder.finish().unwrap();
+    let psbt = builder.finish().unwrap();
     wallet1.insert_txout(utxo.outpoint, utxo.txout);
     let fee = check_fee!(wallet1, psbt);
     let (sent, received) =
@@ -54,32 +53,6 @@ fn test_add_foreign_utxo() {
             .any(|input| input.previous_output == utxo.outpoint),
         "foreign_utxo should be in there"
     );
-
-    let finished = wallet1
-        .sign(
-            &mut psbt,
-            SignOptions {
-                trust_witness_utxo: true,
-                ..Default::default()
-            },
-        )
-        .unwrap();
-
-    assert!(
-        !finished,
-        "only one of the inputs should have been signed so far"
-    );
-
-    let finished = wallet2
-        .sign(
-            &mut psbt,
-            SignOptions {
-                trust_witness_utxo: true,
-                ..Default::default()
-            },
-        )
-        .unwrap();
-    assert!(finished, "all the inputs should have been signed now");
 }
 
 #[test]

@@ -7,7 +7,6 @@ use bdk_wallet::coin_selection;
 use bdk_wallet::descriptor::{calc_checksum, DescriptorError};
 use bdk_wallet::error::CreateTxError;
 use bdk_wallet::psbt::PsbtUtils;
-use bdk_wallet::signer::{SignOptions, SignerError};
 use bdk_wallet::test_utils::*;
 use bdk_wallet::KeychainKind;
 use bdk_wallet::{AddressInfo, Balance, PersistedWallet, Update, Wallet, WalletTx};
@@ -282,13 +281,9 @@ fn test_create_tx_locktime_cltv_timestamp() {
     let addr = wallet.next_unused_address(KeychainKind::External);
     let mut builder = wallet.build_tx();
     builder.add_recipient(addr.script_pubkey(), Amount::from_sat(25_000));
-    let mut psbt = builder.finish().unwrap();
+    let psbt = builder.finish().unwrap();
 
     assert_eq!(psbt.unsigned_tx.lock_time.to_consensus_u32(), 1_734_230_218);
-
-    let finalized = wallet.sign(&mut psbt, SignOptions::default()).unwrap();
-
-    assert!(finalized);
 }
 
 #[test]
@@ -1360,82 +1355,88 @@ fn test_fee_amount_negative_drain_val() {
 }
 
 #[test]
+#[ignore = "signers were removed"]
 fn test_sign_single_xprv() {
     let (mut wallet, _) = get_funded_wallet_single("wpkh(tprv8ZgxMBicQKsPd3EupYiPRhaMooHKUHJxNsTfYuScep13go8QFfHdtkG9nRkFGb7busX4isf6X9dURGCoKgitaApQ6MupRhZMcELAxTBRJgS/*)");
     let addr = wallet.next_unused_address(KeychainKind::External);
     let mut builder = wallet.build_tx();
     builder.drain_to(addr.script_pubkey()).drain_wallet();
-    let mut psbt = builder.finish().unwrap();
+    let psbt = builder.finish().unwrap();
 
-    let finalized = wallet.sign(&mut psbt, Default::default()).unwrap();
-    assert!(finalized);
+    // let finalized = wallet.sign(&mut psbt, Default::default()).unwrap();
+    // assert!(finalized);
 
     let extracted = psbt.extract_tx().expect("failed to extract tx");
     assert_eq!(extracted.input[0].witness.len(), 2);
 }
 
 #[test]
+#[ignore = "signers were removed"]
 fn test_sign_single_xprv_with_master_fingerprint_and_path() {
     let (mut wallet, _) = get_funded_wallet_single("wpkh([d34db33f/84h/1h/0h]tprv8ZgxMBicQKsPd3EupYiPRhaMooHKUHJxNsTfYuScep13go8QFfHdtkG9nRkFGb7busX4isf6X9dURGCoKgitaApQ6MupRhZMcELAxTBRJgS/*)");
     let addr = wallet.next_unused_address(KeychainKind::External);
     let mut builder = wallet.build_tx();
     builder.drain_to(addr.script_pubkey()).drain_wallet();
-    let mut psbt = builder.finish().unwrap();
+    let psbt = builder.finish().unwrap();
 
-    let finalized = wallet.sign(&mut psbt, Default::default()).unwrap();
-    assert!(finalized);
+    // let finalized = wallet.sign(&mut psbt, Default::default()).unwrap();
+    // assert!(finalized);
 
     let extracted = psbt.extract_tx().expect("failed to extract tx");
     assert_eq!(extracted.input[0].witness.len(), 2);
 }
 
 #[test]
+#[ignore = "signers were removed"]
 fn test_sign_single_xprv_bip44_path() {
     let (mut wallet, _) = get_funded_wallet_single("wpkh(tprv8ZgxMBicQKsPd3EupYiPRhaMooHKUHJxNsTfYuScep13go8QFfHdtkG9nRkFGb7busX4isf6X9dURGCoKgitaApQ6MupRhZMcELAxTBRJgS/44'/0'/0'/0/*)");
     let addr = wallet.next_unused_address(KeychainKind::External);
     let mut builder = wallet.build_tx();
     builder.drain_to(addr.script_pubkey()).drain_wallet();
-    let mut psbt = builder.finish().unwrap();
+    let psbt = builder.finish().unwrap();
 
-    let finalized = wallet.sign(&mut psbt, Default::default()).unwrap();
-    assert!(finalized);
+    // let finalized = wallet.sign(&mut psbt, Default::default()).unwrap();
+    // assert!(finalized);
 
     let extracted = psbt.extract_tx().expect("failed to extract tx");
     assert_eq!(extracted.input[0].witness.len(), 2);
 }
 
 #[test]
+#[ignore = "signers were removed"]
 fn test_sign_single_xprv_sh_wpkh() {
     let (mut wallet, _) = get_funded_wallet_single("sh(wpkh(tprv8ZgxMBicQKsPd3EupYiPRhaMooHKUHJxNsTfYuScep13go8QFfHdtkG9nRkFGb7busX4isf6X9dURGCoKgitaApQ6MupRhZMcELAxTBRJgS/*))");
     let addr = wallet.next_unused_address(KeychainKind::External);
     let mut builder = wallet.build_tx();
     builder.drain_to(addr.script_pubkey()).drain_wallet();
-    let mut psbt = builder.finish().unwrap();
+    let psbt = builder.finish().unwrap();
 
-    let finalized = wallet.sign(&mut psbt, Default::default()).unwrap();
-    assert!(finalized);
+    // let finalized = wallet.sign(&mut psbt, Default::default()).unwrap();
+    // assert!(finalized);
 
     let extracted = psbt.extract_tx().expect("failed to extract tx");
     assert_eq!(extracted.input[0].witness.len(), 2);
 }
 
 #[test]
+#[ignore = "signers were removed"]
 fn test_sign_single_wif() {
     let (mut wallet, _) =
         get_funded_wallet_single("wpkh(cVpPVruEDdmutPzisEsYvtST1usBR3ntr8pXSyt6D2YYqXRyPcFW)");
     let addr = wallet.next_unused_address(KeychainKind::External);
     let mut builder = wallet.build_tx();
     builder.drain_to(addr.script_pubkey()).drain_wallet();
-    let mut psbt = builder.finish().unwrap();
+    let psbt = builder.finish().unwrap();
 
-    let finalized = wallet.sign(&mut psbt, Default::default()).unwrap();
-    assert!(finalized);
+    // let finalized = wallet.sign(&mut psbt, Default::default()).unwrap();
+    // assert!(finalized);
 
     let extracted = psbt.extract_tx().expect("failed to extract tx");
     assert_eq!(extracted.input[0].witness.len(), 2);
 }
 
 #[test]
+#[ignore = "signers were removed"]
 fn test_sign_single_xprv_no_hd_keypaths() {
     let (mut wallet, _) = get_funded_wallet_single("wpkh(tprv8ZgxMBicQKsPd3EupYiPRhaMooHKUHJxNsTfYuScep13go8QFfHdtkG9nRkFGb7busX4isf6X9dURGCoKgitaApQ6MupRhZMcELAxTBRJgS/*)");
     let addr = wallet.next_unused_address(KeychainKind::External);
@@ -1446,14 +1447,15 @@ fn test_sign_single_xprv_no_hd_keypaths() {
     psbt.inputs[0].bip32_derivation.clear();
     assert_eq!(psbt.inputs[0].bip32_derivation.len(), 0);
 
-    let finalized = wallet.sign(&mut psbt, Default::default()).unwrap();
-    assert!(finalized);
+    // let finalized = wallet.sign(&mut psbt, Default::default()).unwrap();
+    // assert!(finalized);
 
     let extracted = psbt.extract_tx().expect("failed to extract tx");
     assert_eq!(extracted.input[0].witness.len(), 2);
 }
 
 #[test]
+#[ignore = "signers were removed"]
 fn test_include_output_redeem_witness_script() {
     let desc = get_test_wpkh();
     let change_desc = "sh(wsh(multi(1,cVpPVruEDdmutPzisEsYvtST1usBR3ntr8pXSyt6D2YYqXRyPcFW,cRjo6jqfVNP33HhSS76UhXETZsGTZYx8FMFvR9kpbtCSV1PmdZdu)))";
@@ -1475,6 +1477,7 @@ fn test_include_output_redeem_witness_script() {
 }
 
 #[test]
+#[ignore = "signers were removed"]
 fn test_signing_only_one_of_multiple_inputs() {
     let (mut wallet, _) = get_funded_wallet_wpkh();
     let addr = Address::from_str("2N1Ffz3WaNzbeLFBb51xyFMHYSEUXcbiSoX")
@@ -1501,19 +1504,19 @@ fn test_signing_only_one_of_multiple_inputs() {
 
     psbt.inputs.push(dud_input);
     psbt.unsigned_tx.input.push(bitcoin::TxIn::default());
-    let is_final = wallet
-        .sign(
-            &mut psbt,
-            SignOptions {
-                trust_witness_utxo: true,
-                ..Default::default()
-            },
-        )
-        .unwrap();
-    assert!(
-        !is_final,
-        "shouldn't be final since we can't sign one of the inputs"
-    );
+    // let is_final = wallet
+    //     .sign(
+    //         &mut psbt,
+    //         SignOptions {
+    //             trust_witness_utxo: true,
+    //             ..Default::default()
+    //         },
+    //     )
+    //     .unwrap();
+    // assert!(
+    //     !is_final,
+    //     "shouldn't be final since we can't sign one of the inputs"
+    // );
     assert!(
         psbt.inputs[0].final_script_witness.is_some(),
         "should finalized input it signed"
@@ -1521,89 +1524,92 @@ fn test_signing_only_one_of_multiple_inputs() {
 }
 
 #[test]
+#[ignore = "signers were removed"]
 fn test_try_finalize_sign_option() {
     let (mut wallet, _) = get_funded_wallet_single("wpkh(tprv8ZgxMBicQKsPd3EupYiPRhaMooHKUHJxNsTfYuScep13go8QFfHdtkG9nRkFGb7busX4isf6X9dURGCoKgitaApQ6MupRhZMcELAxTBRJgS/*)");
 
-    for try_finalize in &[true, false] {
+    for _try_finalize in &[true, false] {
         let addr = wallet.next_unused_address(KeychainKind::External);
         let mut builder = wallet.build_tx();
         builder.drain_to(addr.script_pubkey()).drain_wallet();
-        let mut psbt = builder.finish().unwrap();
+        let _psbt = builder.finish().unwrap();
 
-        let finalized = wallet
-            .sign(
-                &mut psbt,
-                SignOptions {
-                    try_finalize: *try_finalize,
-                    ..Default::default()
-                },
-            )
-            .unwrap();
+        // let finalized = wallet
+        //     .sign(
+        //         &mut psbt,
+        //         SignOptions {
+        //             try_finalize: *try_finalize,
+        //             ..Default::default()
+        //         },
+        //     )
+        //     .unwrap();
 
-        psbt.inputs.iter().for_each(|input| {
-            if *try_finalize {
-                assert!(finalized);
-                assert!(input.final_script_sig.is_none());
-                assert!(input.final_script_witness.is_some());
-            } else {
-                assert!(!finalized);
-                assert!(input.final_script_sig.is_none());
-                assert!(input.final_script_witness.is_none());
-            }
-        });
+        // psbt.inputs.iter().for_each(|input| {
+        //     if *try_finalize {
+        //         assert!(finalized);
+        //         assert!(input.final_script_sig.is_none());
+        //         assert!(input.final_script_witness.is_some());
+        //     } else {
+        //         assert!(!finalized);
+        //         assert!(input.final_script_sig.is_none());
+        //         assert!(input.final_script_witness.is_none());
+        //     }
+        // });
     }
 }
 
 #[test]
+#[ignore = "signers were removed"]
 fn test_taproot_try_finalize_sign_option() {
     let (mut wallet, _) = get_funded_wallet_single(get_test_tr_with_taptree());
 
-    for try_finalize in &[true, false] {
+    for _try_finalize in &[true, false] {
         let addr = wallet.next_unused_address(KeychainKind::External);
         let mut builder = wallet.build_tx();
         builder.drain_to(addr.script_pubkey()).drain_wallet();
-        let mut psbt = builder.finish().unwrap();
+        let _psbt = builder.finish().unwrap();
 
-        let finalized = wallet
-            .sign(
-                &mut psbt,
-                SignOptions {
-                    try_finalize: *try_finalize,
-                    ..Default::default()
-                },
-            )
-            .unwrap();
+        // let finalized = wallet
+        //     .sign(
+        //         &mut psbt,
+        //         SignOptions {
+        //             try_finalize: *try_finalize,
+        //             ..Default::default()
+        //         },
+        //     )
+        //     .unwrap();
 
-        psbt.inputs.iter().for_each(|input| {
-            if *try_finalize {
-                assert!(finalized);
-                assert!(input.final_script_sig.is_none());
-                assert!(input.final_script_witness.is_some());
-                assert!(input.tap_key_sig.is_none());
-                assert!(input.tap_script_sigs.is_empty());
-                assert!(input.tap_scripts.is_empty());
-                assert!(input.tap_key_origins.is_empty());
-                assert!(input.tap_internal_key.is_none());
-                assert!(input.tap_merkle_root.is_none());
-            } else {
-                assert!(!finalized);
-                assert!(input.final_script_sig.is_none());
-                assert!(input.final_script_witness.is_none());
-            }
-        });
-        psbt.outputs.iter().for_each(|output| {
-            if *try_finalize {
-                assert!(finalized);
-                assert!(output.tap_key_origins.is_empty());
-            } else {
-                assert!(!finalized);
-                assert!(!output.tap_key_origins.is_empty());
-            }
-        });
+        // psbt.inputs.iter().for_each(|input| {
+        //     if *try_finalize {
+        //         assert!(finalized);
+        //         assert!(input.final_script_sig.is_none());
+        //         assert!(input.final_script_witness.is_some());
+        //         assert!(input.tap_key_sig.is_none());
+        //         assert!(input.tap_script_sigs.is_empty());
+        //         assert!(input.tap_scripts.is_empty());
+        //         assert!(input.tap_key_origins.is_empty());
+        //         assert!(input.tap_internal_key.is_none());
+        //         assert!(input.tap_merkle_root.is_none());
+        //     } else {
+        //         assert!(!finalized);
+        //         assert!(input.final_script_sig.is_none());
+        //         assert!(input.final_script_witness.is_none());
+        //     }
+        // });
+        // psbt.outputs.iter().for_each(|output| {
+        //     if *try_finalize {
+        //         assert!(finalized);
+        //         assert!(output.tap_key_origins.is_empty());
+        //     } else {
+        //         assert!(!finalized);
+        //         assert!(!output.tap_key_origins.is_empty());
+        //     }
+        // });
     }
 }
 
 #[test]
+#[ignore = "signers were removed"]
 fn test_sign_nonstandard_sighash() {
     let sighash = EcdsaSighashType::NonePlusAnyoneCanPay;
 
@@ -1614,32 +1620,32 @@ fn test_sign_nonstandard_sighash() {
         .drain_to(addr.script_pubkey())
         .sighash(sighash.into())
         .drain_wallet();
-    let mut psbt = builder.finish().unwrap();
+    let psbt = builder.finish().unwrap();
 
-    let result = wallet.sign(&mut psbt, Default::default());
-    assert!(
-        result.is_err(),
-        "Signing should have failed because the TX uses non-standard sighashes"
-    );
-    assert_matches!(
-        result,
-        Err(SignerError::NonStandardSighash),
-        "Signing failed with the wrong error type"
-    );
+    // let result = wallet.sign(&mut psbt, Default::default());
+    // assert!(
+    //     result.is_err(),
+    //     "Signing should have failed because the TX uses non-standard sighashes"
+    // );
+    // assert_matches!(
+    //     result,
+    //     Err(SignerError::NonStandardSighash),
+    //     "Signing failed with the wrong error type"
+    // );
 
     // try again after opting-in
-    let result = wallet.sign(
-        &mut psbt,
-        SignOptions {
-            allow_all_sighashes: true,
-            ..Default::default()
-        },
-    );
-    assert!(result.is_ok(), "Signing should have worked");
-    assert!(
-        result.unwrap(),
-        "Should finalize the input since we can produce signatures"
-    );
+    // let result = wallet.sign(
+    //     &mut psbt,
+    //     SignOptions {
+    //         allow_all_sighashes: true,
+    //         ..Default::default()
+    //     },
+    // );
+    // assert!(result.is_ok(), "Signing should have worked");
+    // assert!(
+    //     result.unwrap(),
+    //     "Should finalize the input since we can produce signatures"
+    // );
 
     let extracted = psbt.extract_tx().expect("failed to extract tx");
     assert_eq!(
@@ -1982,10 +1988,10 @@ fn test_taproot_psbt_populate_tap_key_origins() {
 
 #[test]
 fn test_taproot_psbt_populate_tap_key_origins_repeated_key() {
-    let (mut wallet, _) = get_funded_wallet(get_test_tr_repeated_key(), get_test_tr_single_sig());
+    let (mut wallet, _) = get_funded_wallet_single(get_test_tr_repeated_key());
     let addr = wallet.reveal_next_address(KeychainKind::External);
 
-    let path = vec![("rn4nre9c".to_string(), vec![0])]
+    let path = vec![("7dxhryms".to_string(), vec![0])]
         .into_iter()
         .collect();
 
@@ -2091,6 +2097,7 @@ fn test_taproot_psbt_input_tap_tree() {
 }
 
 #[test]
+#[ignore = "signers were removed"]
 fn test_taproot_sign_missing_witness_utxo() {
     let (mut wallet, _) = get_funded_wallet_single(get_test_tr_single_sig());
     let addr = wallet.next_unused_address(KeychainKind::External);
@@ -2099,38 +2106,39 @@ fn test_taproot_sign_missing_witness_utxo() {
     let mut psbt = builder.finish().unwrap();
     let witness_utxo = psbt.inputs[0].witness_utxo.take();
 
-    let result = wallet.sign(
-        &mut psbt,
-        SignOptions {
-            allow_all_sighashes: true,
-            ..Default::default()
-        },
-    );
-    assert_matches!(
-        result,
-        Err(SignerError::MissingWitnessUtxo),
-        "Signing should have failed with the correct error because the witness_utxo is missing"
-    );
+    // let result = wallet.sign(
+    //     &mut psbt,
+    //     SignOptions {
+    //         allow_all_sighashes: true,
+    //         ..Default::default()
+    //     },
+    // );
+    // assert_matches!(
+    //     result,
+    //     Err(SignerError::MissingWitnessUtxo),
+    //     "Signing should have failed with the correct error because the witness_utxo is missing"
+    // );
 
     // restore the witness_utxo
     psbt.inputs[0].witness_utxo = witness_utxo;
 
-    let result = wallet.sign(
-        &mut psbt,
-        SignOptions {
-            allow_all_sighashes: true,
-            ..Default::default()
-        },
-    );
+    // let result = wallet.sign(
+    //     &mut psbt,
+    //     SignOptions {
+    //         allow_all_sighashes: true,
+    //         ..Default::default()
+    //     },
+    // );
 
-    assert_matches!(
-        result,
-        Ok(true),
-        "Should finalize the input since we can produce signatures"
-    );
+    // assert_matches!(
+    //     result,
+    //     Ok(true),
+    //     "Should finalize the input since we can produce signatures"
+    // );
 }
 
 #[test]
+#[ignore = "signers were removed"]
 fn test_taproot_sign_using_non_witness_utxo() {
     let (mut wallet, prev_txid) = get_funded_wallet_single(get_test_tr_single_sig());
     let addr = wallet.next_unused_address(KeychainKind::External);
@@ -2146,12 +2154,12 @@ fn test_taproot_sign_using_non_witness_utxo() {
         "Previous tx should be present in the database"
     );
 
-    let result = wallet.sign(&mut psbt, Default::default());
-    assert!(result.is_ok(), "Signing should have worked");
-    assert!(
-        result.unwrap(),
-        "Should finalize the input since we can produce signatures"
-    );
+    // let result = wallet.sign(&mut psbt, Default::default());
+    // assert!(result.is_ok(), "Signing should have worked");
+    // assert!(
+    //     result.unwrap(),
+    //     "Should finalize the input since we can produce signatures"
+    // );
 }
 
 fn test_spend_from_wallet(mut wallet: Wallet) {
@@ -2159,45 +2167,33 @@ fn test_spend_from_wallet(mut wallet: Wallet) {
 
     let mut builder = wallet.build_tx();
     builder.add_recipient(addr.script_pubkey(), Amount::from_sat(25_000));
-    let mut psbt = builder.finish().unwrap();
+    let psbt = builder.finish().unwrap();
 
     assert_eq!(psbt.unsigned_tx.version.0, 2);
-    assert!(
-        wallet.sign(&mut psbt, Default::default()).unwrap(),
-        "Unable to finalize tx"
-    );
 }
 
-//     #[test]
-//     fn test_taproot_key_spend() {
-//         let (mut wallet, _) = get_funded_wallet_single(get_test_tr_single_sig());
-//         test_spend_from_wallet(wallet);
-
-//         let (mut wallet, _) = get_funded_wallet_single(get_test_tr_single_sig_xprv());
-//         test_spend_from_wallet(wallet);
-//     }
-
 #[test]
+#[ignore = "signers were removed"]
 fn test_taproot_no_key_spend() {
     let (mut wallet, _) = get_funded_wallet_single(get_test_tr_with_taptree_both_priv());
     let addr = wallet.next_unused_address(KeychainKind::External);
 
     let mut builder = wallet.build_tx();
     builder.add_recipient(addr.script_pubkey(), Amount::from_sat(25_000));
-    let mut psbt = builder.finish().unwrap();
+    let psbt = builder.finish().unwrap();
 
-    assert!(
-        wallet
-            .sign(
-                &mut psbt,
-                SignOptions {
-                    sign_with_tap_internal_key: false,
-                    ..Default::default()
-                },
-            )
-            .unwrap(),
-        "Unable to finalize tx"
-    );
+    // assert!(
+    //     wallet
+    //         .sign(
+    //             &mut psbt,
+    //             SignOptions {
+    //                 sign_with_tap_internal_key: false,
+    //                 ..Default::default()
+    //             },
+    //         )
+    //         .unwrap(),
+    //     "Unable to finalize tx"
+    // );
 
     assert!(psbt.inputs.iter().all(|i| i.tap_key_sig.is_none()));
 }
@@ -2212,37 +2208,37 @@ fn test_taproot_script_spend() {
 }
 
 #[test]
+#[ignore = "signers were removed"]
 fn test_taproot_script_spend_sign_all_leaves() {
-    use bdk_wallet::signer::TapLeavesOptions;
     let (mut wallet, _) = get_funded_wallet_single(get_test_tr_with_taptree_both_priv());
     let addr = wallet.next_unused_address(KeychainKind::External);
 
     let mut builder = wallet.build_tx();
     builder.add_recipient(addr.script_pubkey(), Amount::from_sat(25_000));
-    let mut psbt = builder.finish().unwrap();
+    let _psbt = builder.finish().unwrap();
 
-    assert!(
-        wallet
-            .sign(
-                &mut psbt,
-                SignOptions {
-                    tap_leaves_options: TapLeavesOptions::All,
-                    ..Default::default()
-                },
-            )
-            .unwrap(),
-        "Unable to finalize tx"
-    );
+    // assert!(
+    //     wallet
+    //         .sign(
+    //             &mut psbt,
+    //             SignOptions {
+    //                 tap_leaves_options: TapLeavesOptions::All,
+    //                 ..Default::default()
+    //             },
+    //         )
+    //         .unwrap(),
+    //     "Unable to finalize tx"
+    // );
 
-    assert!(psbt
-        .inputs
-        .iter()
-        .all(|i| i.tap_script_sigs.len() == i.tap_scripts.len()));
+    // assert!(psbt
+    //     .inputs
+    //     .iter()
+    //     .all(|i| i.tap_script_sigs.len() == i.tap_scripts.len()));
 }
 
 #[test]
+#[ignore = "signers were removed"]
 fn test_taproot_script_spend_sign_include_some_leaves() {
-    use bdk_wallet::signer::TapLeavesOptions;
     use bitcoin::taproot::TapLeafHash;
 
     let (mut wallet, _) = get_funded_wallet_single(get_test_tr_with_taptree_both_priv());
@@ -2250,47 +2246,7 @@ fn test_taproot_script_spend_sign_include_some_leaves() {
 
     let mut builder = wallet.build_tx();
     builder.add_recipient(addr.script_pubkey(), Amount::from_sat(25_000));
-    let mut psbt = builder.finish().unwrap();
-    let mut script_leaves: Vec<_> = psbt.inputs[0]
-        .tap_scripts
-        .clone()
-        .values()
-        .map(|(script, version)| TapLeafHash::from_script(script, *version))
-        .collect();
-    let included_script_leaves = vec![script_leaves.pop().unwrap()];
-    let excluded_script_leaves = script_leaves;
-
-    assert!(
-        wallet
-            .sign(
-                &mut psbt,
-                SignOptions {
-                    tap_leaves_options: TapLeavesOptions::Include(included_script_leaves.clone()),
-                    ..Default::default()
-                },
-            )
-            .unwrap(),
-        "Unable to finalize tx"
-    );
-
-    assert!(psbt.inputs[0]
-        .tap_script_sigs
-        .iter()
-        .all(|s| included_script_leaves.contains(&s.0 .1)
-            && !excluded_script_leaves.contains(&s.0 .1)));
-}
-
-#[test]
-fn test_taproot_script_spend_sign_exclude_some_leaves() {
-    use bdk_wallet::signer::TapLeavesOptions;
-    use bitcoin::taproot::TapLeafHash;
-
-    let (mut wallet, _) = get_funded_wallet_single(get_test_tr_with_taptree_both_priv());
-    let addr = wallet.next_unused_address(KeychainKind::External);
-
-    let mut builder = wallet.build_tx();
-    builder.add_recipient(addr.script_pubkey(), Amount::from_sat(25_000));
-    let mut psbt = builder.finish().unwrap();
+    let psbt = builder.finish().unwrap();
     let mut script_leaves: Vec<_> = psbt.inputs[0]
         .tap_scripts
         .clone()
@@ -2300,18 +2256,18 @@ fn test_taproot_script_spend_sign_exclude_some_leaves() {
     let included_script_leaves = [script_leaves.pop().unwrap()];
     let excluded_script_leaves = script_leaves;
 
-    assert!(
-        wallet
-            .sign(
-                &mut psbt,
-                SignOptions {
-                    tap_leaves_options: TapLeavesOptions::Exclude(excluded_script_leaves.clone()),
-                    ..Default::default()
-                },
-            )
-            .unwrap(),
-        "Unable to finalize tx"
-    );
+    // assert!(
+    //     wallet
+    //         .sign(
+    //             &mut psbt,
+    //             SignOptions {
+    //                 tap_leaves_options:
+    // TapLeavesOptions::Include(included_script_leaves.clone()),
+    // ..Default::default()             },
+    //         )
+    //         .unwrap(),
+    //     "Unable to finalize tx"
+    // );
 
     assert!(psbt.inputs[0]
         .tap_script_sigs
@@ -2321,29 +2277,70 @@ fn test_taproot_script_spend_sign_exclude_some_leaves() {
 }
 
 #[test]
-fn test_taproot_script_spend_sign_no_leaves() {
-    use bdk_wallet::signer::TapLeavesOptions;
+#[ignore = "signers were removed"]
+fn test_taproot_script_spend_sign_exclude_some_leaves() {
+    use bitcoin::taproot::TapLeafHash;
+
     let (mut wallet, _) = get_funded_wallet_single(get_test_tr_with_taptree_both_priv());
     let addr = wallet.next_unused_address(KeychainKind::External);
 
     let mut builder = wallet.build_tx();
     builder.add_recipient(addr.script_pubkey(), Amount::from_sat(25_000));
-    let mut psbt = builder.finish().unwrap();
+    let psbt = builder.finish().unwrap();
+    let mut script_leaves: Vec<_> = psbt.inputs[0]
+        .tap_scripts
+        .clone()
+        .values()
+        .map(|(script, version)| TapLeafHash::from_script(script, *version))
+        .collect();
+    let included_script_leaves = [script_leaves.pop().unwrap()];
+    let excluded_script_leaves = script_leaves;
 
-    wallet
-        .sign(
-            &mut psbt,
-            SignOptions {
-                tap_leaves_options: TapLeavesOptions::None,
-                ..Default::default()
-            },
-        )
-        .unwrap();
+    // assert!(
+    //     wallet
+    //         .sign(
+    //             &mut psbt,
+    //             SignOptions {
+    //                 tap_leaves_options:
+    // TapLeavesOptions::Exclude(excluded_script_leaves.clone()),
+    // ..Default::default()             },
+    //         )
+    //         .unwrap(),
+    //     "Unable to finalize tx"
+    // );
+
+    assert!(psbt.inputs[0]
+        .tap_script_sigs
+        .iter()
+        .all(|s| included_script_leaves.contains(&s.0 .1)
+            && !excluded_script_leaves.contains(&s.0 .1)));
+}
+
+#[test]
+#[ignore = "signers were removed"]
+fn test_taproot_script_spend_sign_no_leaves() {
+    let (mut wallet, _) = get_funded_wallet_single(get_test_tr_with_taptree_both_priv());
+    let addr = wallet.next_unused_address(KeychainKind::External);
+
+    let mut builder = wallet.build_tx();
+    builder.add_recipient(addr.script_pubkey(), Amount::from_sat(25_000));
+    let psbt = builder.finish().unwrap();
+
+    // wallet
+    //     .sign(
+    //         &mut psbt,
+    //         SignOptions {
+    //             tap_leaves_options: TapLeavesOptions::None,
+    //             ..Default::default()
+    //         },
+    //     )
+    //     .unwrap();
 
     assert!(psbt.inputs.iter().all(|i| i.tap_script_sigs.is_empty()));
 }
 
 #[test]
+#[ignore = "signers were removed"]
 fn test_taproot_sign_derive_index_from_psbt() {
     let (mut wallet, _) = get_funded_wallet_single(get_test_tr_single_sig_xprv());
 
@@ -2351,23 +2348,24 @@ fn test_taproot_sign_derive_index_from_psbt() {
 
     let mut builder = wallet.build_tx();
     builder.add_recipient(addr.script_pubkey(), Amount::from_sat(25_000));
-    let mut psbt = builder.finish().unwrap();
+    let _psbt = builder.finish().unwrap();
 
     // re-create the wallet with an empty db
-    let wallet_empty = Wallet::create(get_test_tr_single_sig_xprv(), get_test_tr_single_sig())
-        .network(Network::Regtest)
-        .create_wallet_no_persist()
-        .unwrap();
+    // let wallet_empty = Wallet::create(get_test_tr_single_sig_xprv(), get_test_tr_single_sig())
+    //     .network(Network::Regtest)
+    //     .create_wallet_no_persist()
+    //     .unwrap();
 
     // signing with an empty db means that we will only look at the psbt to infer the
     // derivation index
-    assert!(
-        wallet_empty.sign(&mut psbt, Default::default()).unwrap(),
-        "Unable to finalize tx"
-    );
+    // assert!(
+    //     wallet_empty.sign(&mut psbt, Default::default()).unwrap(),
+    //     "Unable to finalize tx"
+    // );
 }
 
 #[test]
+#[ignore = "signers were removed"]
 fn test_taproot_sign_explicit_sighash_all() {
     let (mut wallet, _) = get_funded_wallet_single(get_test_tr_single_sig());
     let addr = wallet.next_unused_address(KeychainKind::External);
@@ -2376,16 +2374,17 @@ fn test_taproot_sign_explicit_sighash_all() {
         .drain_to(addr.script_pubkey())
         .sighash(TapSighashType::All.into())
         .drain_wallet();
-    let mut psbt = builder.finish().unwrap();
+    let _psbt = builder.finish().unwrap();
 
-    let result = wallet.sign(&mut psbt, Default::default());
-    assert!(
-        result.is_ok(),
-        "Signing should work because SIGHASH_ALL is safe"
-    )
+    // let result = wallet.sign(&mut psbt, Default::default());
+    // assert!(
+    //     result.is_ok(),
+    //     "Signing should work because SIGHASH_ALL is safe"
+    // )
 }
 
 #[test]
+#[ignore = "signers were removed"]
 fn test_taproot_sign_non_default_sighash() {
     let sighash = TapSighashType::NonePlusAnyoneCanPay;
 
@@ -2396,55 +2395,55 @@ fn test_taproot_sign_non_default_sighash() {
         .drain_to(addr.script_pubkey())
         .sighash(sighash.into())
         .drain_wallet();
-    let mut psbt = builder.finish().unwrap();
+    let psbt = builder.finish().unwrap();
 
-    let witness_utxo = psbt.inputs[0].witness_utxo.take();
+    // let witness_utxo = psbt.inputs[0].witness_utxo.take();
 
-    let result = wallet.sign(&mut psbt, Default::default());
-    assert!(
-        result.is_err(),
-        "Signing should have failed because the TX uses non-standard sighashes"
-    );
-    assert_matches!(
-        result,
-        Err(SignerError::NonStandardSighash),
-        "Signing failed with the wrong error type"
-    );
+    // let result = wallet.sign(&mut psbt, Default::default());
+    // assert!(
+    //     result.is_err(),
+    //     "Signing should have failed because the TX uses non-standard sighashes"
+    // );
+    // assert_matches!(
+    //     result,
+    //     Err(SignerError::NonStandardSighash),
+    //     "Signing failed with the wrong error type"
+    // );
 
-    // try again after opting-in
-    let result = wallet.sign(
-        &mut psbt,
-        SignOptions {
-            allow_all_sighashes: true,
-            ..Default::default()
-        },
-    );
-    assert!(
-        result.is_err(),
-        "Signing should have failed because the witness_utxo is missing"
-    );
-    assert_matches!(
-        result,
-        Err(SignerError::MissingWitnessUtxo),
-        "Signing failed with the wrong error type"
-    );
+    // // try again after opting-in
+    // let result = wallet.sign(
+    //     &mut psbt,
+    //     SignOptions {
+    //         allow_all_sighashes: true,
+    //         ..Default::default()
+    //     },
+    // );
+    // assert!(
+    //     result.is_err(),
+    //     "Signing should have failed because the witness_utxo is missing"
+    // );
+    // assert_matches!(
+    //     result,
+    //     Err(SignerError::MissingWitnessUtxo),
+    //     "Signing failed with the wrong error type"
+    // );
 
-    // restore the witness_utxo
-    psbt.inputs[0].witness_utxo = witness_utxo;
+    // // restore the witness_utxo
+    // psbt.inputs[0].witness_utxo = witness_utxo;
 
-    let result = wallet.sign(
-        &mut psbt,
-        SignOptions {
-            allow_all_sighashes: true,
-            ..Default::default()
-        },
-    );
+    // let result = wallet.sign(
+    //     &mut psbt,
+    //     SignOptions {
+    //         allow_all_sighashes: true,
+    //         ..Default::default()
+    //     },
+    // );
 
-    assert!(result.is_ok(), "Signing should have worked");
-    assert!(
-        result.unwrap(),
-        "Should finalize the input since we can produce signatures"
-    );
+    // assert!(result.is_ok(), "Signing should have worked");
+    // assert!(
+    //     result.unwrap(),
+    //     "Should finalize the input since we can produce signatures"
+    // );
 
     let extracted = psbt.extract_tx().expect("failed to extract tx");
     assert_eq!(
@@ -2606,6 +2605,7 @@ fn test_allow_dust_limit() {
 }
 
 #[test]
+#[ignore = "signers were removed"]
 fn test_fee_rate_sign_no_grinding_high_r() {
     // Our goal is to obtain a transaction with a signature with high-R (71 bytes
     // instead of 70). We then check that our fee rate and fee calculation is
@@ -2640,16 +2640,16 @@ fn test_fee_rate_sign_no_grinding_high_r() {
         // Clearing the previous signature
         psbt.inputs[0].partial_sigs.clear();
         // Signing
-        wallet
-            .sign(
-                &mut psbt,
-                SignOptions {
-                    try_finalize: false,
-                    allow_grinding: false,
-                    ..Default::default()
-                },
-            )
-            .unwrap();
+        // wallet
+        //     .sign(
+        //         &mut psbt,
+        //         SignOptions {
+        //             try_finalize: false,
+        //             allow_grinding: false,
+        //             ..Default::default()
+        //         },
+        //     )
+        //     .unwrap();
         // We only have one key in the partial_sigs map, this is a trick to retrieve it
         let key = psbt.inputs[0].partial_sigs.keys().next().unwrap();
         sig_len = psbt.inputs[0].partial_sigs[key]
@@ -2658,20 +2658,21 @@ fn test_fee_rate_sign_no_grinding_high_r() {
             .len();
     }
     // Actually finalizing the transaction...
-    wallet
-        .sign(
-            &mut psbt,
-            SignOptions {
-                allow_grinding: false,
-                ..Default::default()
-            },
-        )
-        .unwrap();
+    // wallet
+    //     .sign(
+    //         &mut psbt,
+    //         SignOptions {
+    //             allow_grinding: false,
+    //             ..Default::default()
+    //         },
+    //     )
+    //     .unwrap();
     // ...and checking that everything is fine
     assert_fee_rate!(psbt, fee, fee_rate);
 }
 
 #[test]
+#[ignore = "signers were removed"]
 fn test_fee_rate_sign_grinding_low_r() {
     // Our goal is to obtain a transaction with a signature with low-R (70 bytes)
     // by setting the `allow_grinding` signing option as true.
@@ -2685,19 +2686,19 @@ fn test_fee_rate_sign_grinding_low_r() {
         .drain_to(addr.script_pubkey())
         .drain_wallet()
         .fee_rate(fee_rate);
-    let mut psbt = builder.finish().unwrap();
+    let psbt = builder.finish().unwrap();
     let fee = check_fee!(wallet, psbt);
 
-    wallet
-        .sign(
-            &mut psbt,
-            SignOptions {
-                try_finalize: false,
-                allow_grinding: true,
-                ..Default::default()
-            },
-        )
-        .unwrap();
+    // wallet
+    //     .sign(
+    //         &mut psbt,
+    //         SignOptions {
+    //             try_finalize: false,
+    //             allow_grinding: true,
+    //             ..Default::default()
+    //         },
+    //     )
+    //     .unwrap();
 
     let key = psbt.inputs[0].partial_sigs.keys().next().unwrap();
     let sig_len = psbt.inputs[0].partial_sigs[key]
@@ -2856,8 +2857,7 @@ fn single_descriptor_wallet_can_create_tx_and_receive_change() {
         .assume_checked();
     let mut builder = wallet.build_tx();
     builder.add_recipient(addr.script_pubkey(), amount);
-    let mut psbt = builder.finish().unwrap();
-    assert!(wallet.sign(&mut psbt, SignOptions::default()).unwrap());
+    let psbt = builder.finish().unwrap();
     let tx = psbt.extract_tx().unwrap();
     let _txid = tx.compute_txid();
     insert_tx(&mut wallet, tx);
