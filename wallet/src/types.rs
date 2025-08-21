@@ -144,3 +144,32 @@ impl Utxo {
         }
     }
 }
+
+/// Index out of bounds error.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IndexOutOfBoundsError {
+    /// The index that is out of range.
+    pub index: usize,
+    /// The length of the container.
+    pub len: usize,
+}
+
+impl IndexOutOfBoundsError {
+    /// Create a new `IndexOutOfBoundsError`.
+    pub fn new(index: usize, len: usize) -> Self {
+        Self { index, len }
+    }
+}
+
+impl fmt::Display for IndexOutOfBoundsError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "Index out of bounds: index {} is greater than or equal to length {}",
+            self.index, self.len
+        )
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for IndexOutOfBoundsError {}
