@@ -4,6 +4,6 @@ version = "0.2.0"
 edition = "2021"
 
 [dependencies]
-bdk_wallet = { path = "../../wallet", features = ["rusqlite"] }
+bdk_wallet = { version = "2.1.0", features = ["rusqlite"] }
 bdk_electrum = { version = "0.23.1" }
 anyhow = "1"

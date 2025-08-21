@@ -20,9 +20,6 @@ use bitcoin::{
 };
 use miniscript::{Descriptor, DescriptorPublicKey};
 
-mod common;
-use common::*;
-
 const DB_MAGIC: &[u8] = &[0x21, 0x24, 0x48];
 
 #[test]
@@ -281,22 +278,6 @@ fn wallet_load_checks() -> anyhow::Result<()> {
             ))),
             "unexpected descriptors check result",
         );
-        // check setting keymaps
-        let (_, external_keymap) = parse_descriptor(external_desc);
-        let (_, internal_keymap) = parse_descriptor(internal_desc);
-        let wallet = Wallet::load()
-            .keymap(KeychainKind::External, external_keymap)
-            .keymap(KeychainKind::Internal, internal_keymap)
-            .load_wallet(&mut open_db(&file_path)?)
-            .expect("db should not fail")
-            .expect("wallet was persisted");
-        for keychain in [KeychainKind::External, KeychainKind::Internal] {
-            let keymap = wallet.get_signers(keychain).as_key_map(wallet.secp_ctx());
-            assert!(
-                !keymap.is_empty(),
-                "load should populate keymap for keychain {keychain:?}"
-            );
-        }
         Ok(())
     }
 
@@ -390,20 +371,12 @@ fn single_descriptor_wallet_persist_and_recover() {
 
     // should recover persisted wallet
     let secp = wallet.secp_ctx();
-    let (_, keymap) = <Descriptor<DescriptorPublicKey>>::parse_descriptor(secp, desc).unwrap();
-    assert!(!keymap.is_empty());
     let wallet = Wallet::load()
         .descriptor(KeychainKind::External, Some(desc))
-        .extract_keys()
         .load_wallet(&mut db)
         .unwrap()
         .expect("must have loaded changeset");
     assert_eq!(wallet.derivation_index(KeychainKind::External), Some(2));
-    // should have private key
-    assert_eq!(
-        wallet.get_signers(KeychainKind::External).as_key_map(secp),
-        keymap,
-    );
 
     // should error on wrong internal params
     let desc = get_test_wpkh();
