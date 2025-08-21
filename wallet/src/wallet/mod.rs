@@ -1997,7 +1997,7 @@ impl Wallet {
             let psbt_input = &psbt
                 .inputs
                 .get(n)
-                .ok_or(SignerError::InputIndexOutOfRange)?;
+                .ok_or(IndexOutOfBoundsError::new(n, psbt.inputs.len()))?;
             if psbt_input.final_script_sig.is_some() || psbt_input.final_script_witness.is_some() {
                 continue;
             }
@@ -2035,12 +2035,13 @@ impl Wallet {
                         ),
                     ) {
                         Ok(_) => {
+                            let length = psbt.inputs.len();
                             // Set the UTXO fields, final script_sig and witness
                             // and clear everything else.
                             let psbt_input = psbt
                                 .inputs
                                 .get_mut(n)
-                                .ok_or(SignerError::InputIndexOutOfRange)?;
+                                .ok_or(IndexOutOfBoundsError::new(n, length))?;
                             let original = mem::take(psbt_input);
                             psbt_input.non_witness_utxo = original.non_witness_utxo;
                             psbt_input.witness_utxo = original.witness_utxo;

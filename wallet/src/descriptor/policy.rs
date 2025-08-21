@@ -61,6 +61,7 @@ use miniscript::{
 
 use crate::descriptor::ExtractPolicy;
 use crate::keys::ExtScriptContext;
+use crate::types::IndexOutOfBoundsError;
 use crate::wallet::signer::{SignerId, SignersContainer};
 use crate::wallet::utils::{After, Older, SecpCtx};
 
@@ -324,7 +325,7 @@ impl Satisfaction {
                 ..
             } => {
                 if inner_index >= *n || items.contains(&inner_index) {
-                    return Err(PolicyError::IndexOutOfRange(inner_index));
+                    return Err(IndexOutOfBoundsError::new(inner_index, *n))?;
                 }
 
                 match inner {
@@ -514,7 +515,7 @@ pub enum PolicyError {
     NotEnoughItemsSelected(String),
     /// Index out of range for an item to satisfy a [`SatisfiableItem::Thresh`] or a
     /// [`SatisfiableItem::Multisig`]
-    IndexOutOfRange(usize),
+    IndexOutOfRange(IndexOutOfBoundsError),
     /// Can not add to an item that is [`Satisfaction::None`] or [`Satisfaction::Complete`]
     AddOnLeaf,
     /// Can not add to an item that is [`Satisfaction::PartialComplete`]
@@ -530,12 +531,18 @@ impl fmt::Display for PolicyError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::NotEnoughItemsSelected(err) => write!(f, "Not enough items selected: {err}"),
-            Self::IndexOutOfRange(index) => write!(f, "Index out of range: {index}"),
+            Self::IndexOutOfRange(err) => write!(f, "{err}"),
             Self::AddOnLeaf => write!(f, "Add on leaf"),
             Self::AddOnPartialComplete => write!(f, "Add on partial complete"),
             Self::MixedTimelockUnits => write!(f, "Mixed timelock units"),
             Self::IncompatibleConditions => write!(f, "Incompatible conditions"),
         }
+    }
+}
+
+impl From<IndexOutOfBoundsError> for PolicyError {
+    fn from(err: IndexOutOfBoundsError) -> Self {
+        Self::IndexOutOfRange(err)
     }
 }
 
@@ -695,7 +702,7 @@ impl Policy {
                 // make sure all the indexes in the `selected` list are within range
                 for index in &selected {
                     if *index >= items.len() {
-                        return Err(PolicyError::IndexOutOfRange(*index));
+                        return Err(IndexOutOfBoundsError::new(*index, items.len()))?;
                     }
                 }
 
@@ -718,7 +725,7 @@ impl Policy {
                     return Err(PolicyError::NotEnoughItemsSelected(self.id.clone()));
                 }
                 if let Some(item) = selected.into_iter().find(|&i| i >= keys.len()) {
-                    return Err(PolicyError::IndexOutOfRange(item));
+                    return Err(IndexOutOfBoundsError::new(item, keys.len()))?;
                 }
 
                 Ok(Condition::default())
@@ -1570,7 +1577,12 @@ mod test {
         // index out of range
         let out_of_range =
             policy.get_condition(&vec![(policy.id.clone(), vec![5])].into_iter().collect());
-        assert_eq!(out_of_range, Err(PolicyError::IndexOutOfRange(5)));
+        assert_eq!(
+            out_of_range,
+            Err(PolicyError::IndexOutOfRange(IndexOutOfBoundsError::new(
+                5, 2
+            )))
+        );
     }
 
     const ALICE_TPRV_STR:&str = "tprv8ZgxMBicQKsPf6T5X327efHnvJDr45Xnb8W4JifNWtEoqXu9MRYS4v1oYe6DFcMVETxy5w3bqpubYRqvcVTqovG1LifFcVUuJcbwJwrhYzP";
