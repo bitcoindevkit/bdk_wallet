@@ -2642,6 +2642,8 @@ use bdk_tx::{
 use miniscript::plan::{Assets, Plan};
 use psbt_params::SelectionStrategy;
 
+use crate::wallet::psbt_params::AssetsExt;
+
 /// Maps a chain position to tx confirmation status, if `pos` is the confirmed
 /// variant.
 ///
@@ -2671,20 +2673,59 @@ fn status_from_position(pos: ChainPosition<ConfirmationBlockTime>) -> Option<TxS
 }
 
 impl Wallet {
+    /// Return the "keys" assets, i.e. the ones we can trivially infer by scanning
+    /// the pubkeys of the wallet's descriptors.
+    fn assets(&self) -> Assets {
+        let mut pks = vec![];
+        for (_, desc) in self.keychains() {
+            desc.for_each_key(|k| {
+                pks.extend(k.clone().into_single_keys());
+                true
+            });
+        }
+
+        Assets::new().add(pks)
+    }
+
     /// Create PSBT with the given `params` and `rng`.
     pub fn create_psbt(
         &self,
         params: psbt_params::Params,
         rng: &mut impl RngCore,
     ) -> Result<(Psbt, Finalizer), CreatePsbtError> {
+        // Get spend assets
+        let assets = match params.assets {
+            Some(ref params_assets) => {
+                let mut assets = Assets::new();
+                assets.extend(params_assets);
+                // Fill in the "keys" assets if none are provided.
+                if assets.keys.is_empty() {
+                    assets.extend(&self.assets());
+                }
+                assets
+            }
+            None => self.assets(),
+        };
+
         // Get input candidates
-        let assets = self.assets();
-        // TODO: We need to handle the case where we are unable to plan
-        // a must-spend input.
+        let manually_selected: HashSet<OutPoint> = params.utxos.clone().into_iter().collect();
         let (must_spend, mut may_spend): (Vec<Input>, Vec<Input>) = self
             .list_unspent()
             .flat_map(|output| self.plan_input(&output, &assets))
-            .partition(|input| params.utxos.contains(&input.prev_outpoint()));
+            .partition(|input| manually_selected.contains(&input.prev_outpoint()));
+
+        if must_spend
+            .iter()
+            .map(|input| input.prev_outpoint())
+            .any(|op| !manually_selected.contains(&op))
+        {
+            // Try plans again, this time propagating the error.
+            for op in manually_selected {
+                if self.try_plan(op, &assets).is_none() {
+                    return Err(CreatePsbtError::Plan(op));
+                }
+            }
+        }
 
         if let SelectionStrategy::SingleRandomDraw = params.coin_selection {
             utils::shuffle_slice(&mut may_spend, rng);
@@ -2755,35 +2796,6 @@ impl Wallet {
         Ok((psbt, finalizer))
     }
 
-    /// Return the "keys" assets, i.e. the ones we can trivially infer by scanning
-    /// the pubkeys of the wallet's descriptors.
-    fn assets(&self) -> Assets {
-        let mut pks = vec![];
-        for (_, desc) in self.keychains() {
-            desc.for_each_key(|k| {
-                pks.push(k.clone());
-                true
-            });
-        }
-
-        Assets::new().add(pks)
-    }
-
-    /// Attempt to create a spending plan for the UTXO of the given `outpoint`
-    /// with the provided `assets`.
-    ///
-    /// Return `None` if `outpoint` doesn't correspond to an indexed txout, or
-    /// if the assets are not sufficient to create a plan.
-    fn try_plan(&self, outpoint: OutPoint, assets: &Assets) -> Option<Plan> {
-        let indexer = &self.indexed_graph.index;
-        let ((keychain, index), _) = indexer.txout(outpoint)?;
-        let desc = indexer
-            .get_descriptor(keychain)?
-            .at_derivation_index(index)
-            .expect("must be valid derivation index");
-        desc.plan(assets).ok()
-    }
-
     /// Plan the output with the available assets and return a new [`Input`].
     fn plan_input(&self, output: &LocalOutput, assets: &Assets) -> Option<Input> {
         let op = output.outpoint;
@@ -2803,6 +2815,24 @@ impl Wallet {
 
         None
     }
+
+    /// Attempt to create a spending plan for the UTXO of the given `outpoint`
+    /// with the provided `assets`.
+    ///
+    /// Return `None` if `outpoint` doesn't correspond to an indexed txout, or
+    /// if the assets are not sufficient to create a plan.
+    //
+    // TODO: This should internally set the after/older for `outpoint`
+    // based on the current height and age of the coin respectively.
+    fn try_plan(&self, outpoint: OutPoint, assets: &Assets) -> Option<Plan> {
+        let indexer = &self.indexed_graph.index;
+        let ((keychain, index), _) = indexer.txout(outpoint)?;
+        let desc = indexer
+            .get_descriptor(keychain)?
+            .at_derivation_index(index)
+            .expect("must be valid derivation index");
+        desc.plan(assets).ok()
+    }
 }
 
 /// Error when creating a PSBT.
@@ -2812,6 +2842,8 @@ pub enum CreatePsbtError {
     Bnb(bdk_coin_select::NoBnbSolution),
     /// Non-sufficient funds
     NSF(bdk_coin_select::InsufficientFunds),
+    /// Failed to create a spend [`Plan`] for a manually selected output
+    Plan(OutPoint),
     /// Failed to create PSBT
     Psbt(bdk_tx::CreatePsbtError),
     /// Selector error
@@ -2823,6 +2855,7 @@ impl fmt::Display for CreatePsbtError {
         match self {
             Self::Bnb(e) => write!(f, "{e}"),
             Self::NSF(e) => write!(f, "{e}"),
+            Self::Plan(op) => write!(f, "failed to create a plan for txout with outpoint {op}"),
             Self::Psbt(e) => write!(f, "{e}"),
             Self::Selector(e) => write!(f, "{e}"),
         }
