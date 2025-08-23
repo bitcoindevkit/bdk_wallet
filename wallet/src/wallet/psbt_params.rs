@@ -4,14 +4,14 @@ use alloc::vec::Vec;
 
 use bdk_tx::DefiniteDescriptor;
 use bitcoin::{absolute, transaction::Version, Amount, FeeRate, OutPoint, ScriptBuf, Sequence};
+use miniscript::plan::Assets;
 
 /// Parameters to create a PSBT.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Params {
     // Inputs
     pub(crate) utxos: Vec<OutPoint>,
-    // TODO: miniscript plan Assets?
-    // pub(crate) assets: Assets,
+    pub(crate) assets: Option<Assets>,
 
     // Outputs
     pub(crate) recipients: Vec<(ScriptBuf, Amount)>,
@@ -33,6 +33,7 @@ impl Default for Params {
     fn default() -> Self {
         Self {
             utxos: Default::default(),
+            assets: Default::default(),
             recipients: Default::default(),
             change_descriptor: Default::default(),
             feerate: bitcoin::FeeRate::BROADCAST_MIN,
@@ -48,6 +49,28 @@ impl Default for Params {
 
 // TODO: more setters for Params
 impl Params {
+    /// Add the spend [`Assets`].
+    ///
+    /// Assets are required to create a spending plan for an output controlled by the wallet's
+    /// descriptors. If none are provided here, then we assume all of the keys are equally likely
+    /// to sign.
+    ///
+    /// This may be called multiple times to add additional assets, however only the last
+    /// absolute or relative timelock is retained. See also `AssetsExt`.
+    pub fn add_assets<I, S>(&mut self, assets: Assets) -> &mut Self {
+        let mut new = match self.assets {
+            Some(ref existing) => {
+                let mut new = Assets::new();
+                new.extend(existing);
+                new
+            }
+            None => Assets::new(),
+        };
+        new.extend(&assets);
+        self.assets = Some(new);
+        self
+    }
+
     /// Add recipients.
     ///
     /// - `recipients`: An iterator of `(S, Amount)` tuples where `S` can be a bitcoin [`Address`],
@@ -85,4 +108,28 @@ pub enum SelectionStrategy {
     /// while minimizing transaction fees. Refer to
     /// [`LowestFee`](bdk_coin_select::metrics::LowestFee) metric for more.
     LowestFee,
+}
+
+/// Trait to extend the functionality of [`Assets`].
+pub(crate) trait AssetsExt {
+    /// Extend `self` with the contents of `other`.
+    fn extend(&mut self, other: &Self);
+}
+
+impl AssetsExt for Assets {
+    /// Extend `self` with the contents of `other`. Note that if present this preferentially
+    /// uses the absolute and relative timelocks of `other`.
+    fn extend(&mut self, other: &Self) {
+        self.keys.extend(other.keys.clone());
+        self.sha256_preimages.extend(other.sha256_preimages.clone());
+        self.hash256_preimages
+            .extend(other.hash256_preimages.clone());
+        self.ripemd160_preimages
+            .extend(other.ripemd160_preimages.clone());
+        self.hash160_preimages
+            .extend(other.hash160_preimages.clone());
+
+        self.absolute_timelock = other.absolute_timelock.or(self.absolute_timelock);
+        self.relative_timelock = other.relative_timelock.or(self.relative_timelock);
+    }
 }
