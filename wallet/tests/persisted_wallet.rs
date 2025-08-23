@@ -20,6 +20,10 @@ use bitcoin::{
 };
 use miniscript::{Descriptor, DescriptorPublicKey};
 
+use bdk_wallet::persist_test_utils::{
+    persist_keychains, persist_network, persist_single_keychain, persist_wallet_changeset,
+};
+
 mod common;
 use common::*;
 
@@ -418,4 +422,44 @@ fn single_descriptor_wallet_persist_and_recover() {
         if keychain == KeychainKind::Internal && loaded.is_none() && expected == Some(exp_desc),
         "single descriptor wallet should refuse change descriptor param"
     );
+}
+
+#[test]
+fn wallet_changeset_is_persisted() {
+    persist_wallet_changeset("store.db", |path| {
+        Ok(bdk_file_store::Store::create(DB_MAGIC, path)?)
+    });
+    persist_wallet_changeset::<bdk_chain::rusqlite::Connection, _>("store.sqlite", |path| {
+        Ok(bdk_chain::rusqlite::Connection::open(path)?)
+    });
+}
+
+#[test]
+fn keychains_are_persisted() {
+    persist_keychains("store.db", |path| {
+        Ok(bdk_file_store::Store::create(DB_MAGIC, path)?)
+    });
+    persist_keychains::<bdk_chain::rusqlite::Connection, _>("store.sqlite", |path| {
+        Ok(bdk_chain::rusqlite::Connection::open(path)?)
+    });
+}
+
+#[test]
+fn single_keychain_is_persisted() {
+    persist_single_keychain("store.db", |path| {
+        Ok(bdk_file_store::Store::create(DB_MAGIC, path)?)
+    });
+    persist_single_keychain::<bdk_chain::rusqlite::Connection, _>("store.sqlite", |path| {
+        Ok(bdk_chain::rusqlite::Connection::open(path)?)
+    });
+}
+
+#[test]
+fn network_is_persisted() {
+    persist_network("store.db", |path| {
+        Ok(bdk_file_store::Store::create(DB_MAGIC, path)?)
+    });
+    persist_network::<bdk_chain::rusqlite::Connection, _>("store.sqlite", |path| {
+        Ok(bdk_chain::rusqlite::Connection::open(path)?)
+    });
 }
