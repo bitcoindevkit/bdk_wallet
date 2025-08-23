@@ -2582,6 +2582,102 @@ fn test_spend_coinbase() {
 }
 
 #[test]
+fn test_balance_with_confirmation_depth() {
+    let (desc, change_desc) = get_test_wpkh_and_change_desc();
+    let mut wallet = Wallet::create(desc, change_desc)
+        .network(Network::Regtest)
+        .create_wallet_no_persist()
+        .unwrap();
+
+    let spk = wallet
+        .next_unused_address(KeychainKind::External)
+        .script_pubkey();
+
+    let confirmation_height = 10;
+    let confirmation_block_id = BlockId {
+        height: confirmation_height,
+        hash: BlockHash::all_zeros(),
+    };
+    insert_checkpoint(&mut wallet, confirmation_block_id);
+
+    let coinbase_tx = Transaction {
+        version: transaction::Version::ONE,
+        lock_time: absolute::LockTime::ZERO,
+        input: vec![TxIn {
+            previous_output: OutPoint::null(),
+            ..Default::default()
+        }],
+        output: vec![TxOut {
+            script_pubkey: spk.clone(),
+            value: Amount::from_sat(70_000),
+        }],
+    };
+    let coinbase_txid = coinbase_tx.compute_txid();
+
+    let tx = Transaction {
+        version: transaction::Version::ONE,
+        lock_time: absolute::LockTime::ZERO,
+        input: vec![TxIn {
+            previous_output: OutPoint::new(coinbase_txid, 0),
+            ..Default::default()
+        }],
+        output: vec![TxOut {
+            script_pubkey: spk.clone(),
+            value: Amount::from_sat(42_000),
+        }],
+    };
+    let txid = tx.compute_txid();
+
+    let anchor = ConfirmationBlockTime {
+        block_id: confirmation_block_id,
+        confirmation_time: 123456,
+    };
+
+    let mut tx_update = bdk_chain::TxUpdate::default();
+    tx_update.txs = vec![Arc::new(coinbase_tx), Arc::new(tx)];
+    tx_update.anchors = [(anchor, txid)].into();
+    wallet
+        .apply_update(Update {
+            tx_update,
+            ..Default::default()
+        })
+        .unwrap();
+
+    // Insert tip checkpoint at height 15, so the confirmed `tx` has six confirmations.
+    insert_checkpoint(
+        &mut wallet,
+        BlockId {
+            height: 15,
+            hash: BlockHash::all_zeros(),
+        },
+    );
+
+    // With a `confirmation_depth` of 6, the balance should be `confirmed`.
+    let balance = wallet.balance_with_confirmation_depth(6);
+    assert_eq!(
+        balance,
+        Balance {
+            immature: Amount::ZERO,
+            trusted_pending: Amount::ZERO,
+            untrusted_pending: Amount::ZERO,
+            confirmed: Amount::from_sat(42_000)
+        }
+    );
+
+    // With a `confirmation_depth` of 7, the balance should be `untrusted_pending`.
+    let balance = wallet.balance_with_confirmation_depth(7);
+    assert_eq!(
+        balance,
+        Balance {
+            immature: Amount::ZERO,
+            trusted_pending: Amount::ZERO,
+            untrusted_pending: Amount::from_sat(42_000),
+            confirmed: Amount::ZERO
+        }
+    );
+}
+
+#[test]
 fn test_allow_dust_limit() {
     let (mut wallet, _) = get_funded_wallet_single(get_test_single_sig_cltv());
 
