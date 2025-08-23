@@ -3,6 +3,7 @@ alias c := check
 alias f := fmt
 alias t := test
 alias p := pre-push
+alias m := mutants
 
 # Build the project
 build:
@@ -27,3 +28,7 @@ test:
 
 # Run pre-push suite: format, check, and test
 pre-push: fmt check test
+
+# Run `cargo-mutants` for mutation testing
+mutants:
+   cargo mutants --in-place --no-shuffle
