@@ -13,7 +13,7 @@ use bdk_wallet::test_utils::*;
 use bdk_wallet::{KeychainKind::*, Update, Wallet};
 use bitcoin::FeeRate;
 use bitcoin::{
-    consensus,
+    bip32, consensus,
     secp256k1::{self, rand},
     Address, Amount, OutPoint, TxIn, TxOut,
 };
@@ -33,12 +33,8 @@ fn main() -> anyhow::Result<()> {
     let secp = secp256k1::Secp256k1::new();
     let mut rng = rand::thread_rng();
 
-    // Assuming these are private descriptors, parse the KeyMap now which will come
-    // in handy when it comes to signing the PSBT.
-    let keymap: KeyMap = [desc.to_string(), change_desc.to_string()]
-        .iter()
-        .flat_map(|s| Descriptor::parse_descriptor(&secp, s).unwrap().1)
-        .collect();
+    // Xpriv to be used for signing the PSBT
+    let xprv = bip32::Xpriv::from_str("tprv8ZgxMBicQKsPdy6LMhUtFHAgpocR8GC6QmwMSFpZs7h6Eziw3SpThFfczTDh5rW2krkqffa11UpX3XkeTTB2FvzZKWXqPY54Y6Rq4AQ5R8L")?;
 
     // Create wallet and fund it.
     let mut wallet = Wallet::create(desc, change_desc)
@@ -64,7 +60,7 @@ fn main() -> anyhow::Result<()> {
     // Create PSBT (which also returns the Finalizer).
     let (mut psbt, finalizer) = wallet.create_psbt(params, &mut rng)?;
 
-    // dbg!(&psbt);
+    dbg!(&psbt);
 
     let tx = &psbt.unsigned_tx;
     for txin in &tx.input {
@@ -76,8 +72,7 @@ fn main() -> anyhow::Result<()> {
         println!("TxOut: {}", txout.value);
     }
 
-    let signer = bdk_tx::Signer(keymap);
-    let sign_res = psbt.sign(&signer, &secp);
+    let sign_res = psbt.sign(&xprv, &secp);
     println!("Signed: {}", sign_res.is_ok());
 
     let finalize_res = finalizer.finalize(&mut psbt);
@@ -88,7 +83,7 @@ fn main() -> anyhow::Result<()> {
     let feerate = wallet.calculate_fee_rate(&tx)?;
     println!("Feerate: {} sat/vb", bdk_wallet::floating_rate!(feerate));
 
-    // println!("{}", consensus::encode::serialize_hex(&tx));
+    println!("{}", consensus::encode::serialize_hex(&tx));
 
     Ok(())
 }
