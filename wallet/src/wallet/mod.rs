@@ -37,7 +37,7 @@ use bitcoin::{
     absolute,
     consensus::encode::serialize,
     constants::genesis_block,
-    psbt,
+    psbt, relative,
     secp256k1::Secp256k1,
     sighash::{EcdsaSighashType, TapSighashType},
     transaction, Address, Amount, Block, BlockHash, FeeRate, Network, OutPoint, Psbt, ScriptBuf,
@@ -2793,24 +2793,41 @@ impl Wallet {
         Ok((psbt, finalizer))
     }
 
-    /// Plan the output with the available assets and return a new [`Input`].
-    fn plan_input(&self, output: &LocalOutput, assets: &Assets) -> Option<Input> {
+    /// Plan the output with the available assets and return a new [`Input`] if possible. See also
+    /// [`Self::try_plan`].
+    fn plan_input(&self, output: &LocalOutput, spend_assets: &Assets) -> Option<Input> {
         let op = output.outpoint;
         let txid = op.txid;
-        if let Some(plan) = self.try_plan(op, assets) {
-            let tx = self.indexed_graph.graph().get_tx(txid).unwrap();
-            return Some(
-                Input::from_prev_tx(
-                    plan,
-                    tx,
-                    op.vout as usize,
-                    status_from_position(output.chain_position),
-                )
-                .expect("invalid outpoint"),
-            );
-        }
 
-        None
+        // We want to afford the output with as many assets as we can. The plan
+        // will use only the ones needed to produce the minimum satisfaction.
+        let cur_height = self.latest_checkpoint().height();
+        let abs_locktime = spend_assets
+            .absolute_timelock
+            .unwrap_or(absolute::LockTime::from_consensus(cur_height));
+
+        let rel_locktime = spend_assets.relative_timelock.unwrap_or_else(|| {
+            let age = match output.chain_position.confirmation_height_upper_bound() {
+                Some(conf_height) => cur_height
+                    .saturating_add(1)
+                    .saturating_sub(conf_height)
+                    .try_into()
+                    .unwrap_or(u16::MAX),
+                None => 0,
+            };
+            relative::LockTime::from_height(age)
+        });
+
+        let mut assets = Assets::new();
+        assets.extend(spend_assets);
+        assets = assets.after(abs_locktime);
+        assets = assets.older(rel_locktime);
+
+        let plan = self.try_plan(op, &assets)?;
+        let tx = self.indexed_graph.graph().get_tx(txid)?;
+        let tx_status = status_from_position(output.chain_position);
+
+        Input::from_prev_tx(plan, tx, op.vout as usize, tx_status).ok()
     }
 
     /// Attempt to create a spending plan for the UTXO of the given `outpoint`
@@ -2818,17 +2835,14 @@ impl Wallet {
     ///
     /// Return `None` if `outpoint` doesn't correspond to an indexed txout, or
     /// if the assets are not sufficient to create a plan.
-    //
-    // TODO: This should internally set the after/older for `outpoint`
-    // based on the current height and age of the coin respectively.
     fn try_plan(&self, outpoint: OutPoint, assets: &Assets) -> Option<Plan> {
         let indexer = &self.indexed_graph.index;
         let ((keychain, index), _) = indexer.txout(outpoint)?;
-        let desc = indexer
+        let def_desc = indexer
             .get_descriptor(keychain)?
             .at_derivation_index(index)
             .expect("must be valid derivation index");
-        desc.plan(assets).ok()
+        def_desc.plan(assets).ok()
     }
 }
 
