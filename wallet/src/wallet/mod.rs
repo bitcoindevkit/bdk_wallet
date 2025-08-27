@@ -56,8 +56,6 @@ pub mod error;
 pub mod export;
 mod params;
 mod persisted;
-#[allow(unused)]
-pub mod psbt_params;
 pub mod signer;
 pub mod tx_builder;
 pub(crate) mod utils;
@@ -2640,9 +2638,8 @@ use bdk_tx::{
     Output, PsbtParams, Selector, SelectorParams, TxStatus,
 };
 use miniscript::plan::{Assets, Plan};
-use psbt_params::SelectionStrategy;
 
-use crate::wallet::psbt_params::AssetsExt;
+use crate::psbt::params::{self as psbt_params, AssetsExt, SelectionStrategy};
 
 /// Maps a chain position to tx confirmation status, if `pos` is the confirmed
 /// variant.

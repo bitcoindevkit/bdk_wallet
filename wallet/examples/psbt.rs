@@ -8,7 +8,7 @@ use std::sync::Arc;
 use bdk_chain::BlockId;
 use bdk_chain::ConfirmationBlockTime;
 use bdk_chain::TxUpdate;
-use bdk_wallet::psbt_params::{Params, SelectionStrategy::*};
+use bdk_wallet::psbt::params::{Params, SelectionStrategy::*};
 use bdk_wallet::test_utils::*;
 use bdk_wallet::{KeychainKind::*, Update, Wallet};
 use bitcoin::FeeRate;

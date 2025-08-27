@@ -11,13 +11,13 @@ use miniscript::plan::Assets;
 pub struct Params {
     // Inputs
     pub(crate) utxos: Vec<OutPoint>,
-    pub(crate) assets: Option<Assets>,
 
     // Outputs
     pub(crate) recipients: Vec<(ScriptBuf, Amount)>,
     pub(crate) change_descriptor: Option<DefiniteDescriptor>,
 
     // Coin Selection
+    pub(crate) assets: Option<Assets>,
     pub(crate) feerate: FeeRate,
     pub(crate) longterm_feerate: FeeRate,
     pub(crate) drain_wallet: bool,
@@ -94,6 +94,12 @@ impl Params {
     /// Set the strategy to be used when selecting coins.
     pub fn coin_selection(&mut self, strategy: SelectionStrategy) -> &mut Self {
         self.coin_selection = strategy;
+        self
+    }
+
+    /// Set the definite descriptor used for generating the change output.
+    pub fn change_descriptor(&mut self, desc: DefiniteDescriptor) -> &mut Self {
+        self.change_descriptor = Some(desc);
         self
     }
 }
