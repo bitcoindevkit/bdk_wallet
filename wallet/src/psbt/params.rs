@@ -106,6 +106,7 @@ impl Params {
 
 /// Coin select strategy.
 #[derive(Debug, Clone, Copy, Default)]
+#[non_exhaustive]
 pub enum SelectionStrategy {
     /// Single random draw.
     #[default]
