@@ -2738,7 +2738,7 @@ impl Wallet {
         let feerate = params.feerate;
         let longterm_feerate = params.longterm_feerate;
         let definite_change_desc = params.change_descriptor.unwrap_or_else(|| {
-            let change_keychain = KeychainKind::Internal;
+            let change_keychain = self.map_keychain(KeychainKind::Internal);
             let desc = self.public_descriptor(change_keychain);
             let next_index = self.next_derivation_index(change_keychain);
             desc.at_derivation_index(next_index)
