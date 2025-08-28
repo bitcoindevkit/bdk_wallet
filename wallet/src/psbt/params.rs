@@ -8,7 +8,8 @@ use miniscript::plan::Assets;
 
 /// Parameters to create a PSBT.
 #[derive(Debug)]
-pub struct Params {
+#[allow(unused)]
+pub struct PsbtParams {
     // Inputs
     pub(crate) utxos: Vec<OutPoint>,
 
@@ -29,7 +30,7 @@ pub struct Params {
     pub(crate) fallback_sequence: Option<Sequence>,
 }
 
-impl Default for Params {
+impl Default for PsbtParams {
     fn default() -> Self {
         Self {
             utxos: Default::default(),
@@ -47,8 +48,8 @@ impl Default for Params {
     }
 }
 
-// TODO: more setters for Params
-impl Params {
+// TODO: more setters for PsbtParams
+impl PsbtParams {
     /// Add the spend [`Assets`].
     ///
     /// Assets are required to create a spending plan for an output controlled by the wallet's

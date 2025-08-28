@@ -8,7 +8,7 @@ use std::sync::Arc;
 use bdk_chain::BlockId;
 use bdk_chain::ConfirmationBlockTime;
 use bdk_chain::TxUpdate;
-use bdk_wallet::psbt::params::{Params, SelectionStrategy::*};
+use bdk_wallet::psbt::{PsbtParams, SelectionStrategy::*};
 use bdk_wallet::test_utils::*;
 use bdk_wallet::{KeychainKind::*, Update, Wallet};
 use bitcoin::FeeRate;
@@ -49,7 +49,7 @@ fn main() -> anyhow::Result<()> {
         .collect::<HashMap<_, _>>();
 
     // Build params.
-    let mut params = Params::default();
+    let mut params = PsbtParams::default();
     let addr = Address::from_str(SEND_TO)?.require_network(NETWORK)?;
     let feerate = feerate_unchecked(FEERATE);
     params

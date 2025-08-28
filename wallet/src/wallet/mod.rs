@@ -2639,7 +2639,7 @@ use bdk_tx::{
 };
 use miniscript::plan::{Assets, Plan};
 
-use crate::psbt::params::{self as psbt_params, AssetsExt, SelectionStrategy};
+use crate::psbt::{AssetsExt, SelectionStrategy};
 
 /// Maps a chain position to tx confirmation status, if `pos` is the confirmed
 /// variant.
@@ -2687,7 +2687,7 @@ impl Wallet {
     /// Create PSBT with the given `params` and `rng`.
     pub fn create_psbt(
         &self,
-        params: psbt_params::Params,
+        params: crate::psbt::PsbtParams,
         rng: &mut impl RngCore,
     ) -> Result<(Psbt, Finalizer), CreatePsbtError> {
         // Get spend assets

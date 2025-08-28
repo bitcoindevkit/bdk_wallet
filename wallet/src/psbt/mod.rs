@@ -17,8 +17,9 @@ use bitcoin::FeeRate;
 use bitcoin::Psbt;
 use bitcoin::TxOut;
 
-#[allow(unused)]
-pub mod params;
+mod params;
+
+pub use params::*;
 
 // TODO upstream the functions here to `rust-bitcoin`?
 
