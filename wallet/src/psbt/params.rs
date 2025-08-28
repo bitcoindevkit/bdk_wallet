@@ -57,7 +57,7 @@ impl Params {
     ///
     /// This may be called multiple times to add additional assets, however only the last
     /// absolute or relative timelock is retained. See also `AssetsExt`.
-    pub fn add_assets<I, S>(&mut self, assets: Assets) -> &mut Self {
+    pub fn add_assets(&mut self, assets: Assets) -> &mut Self {
         let mut new = match self.assets {
             Some(ref existing) => {
                 let mut new = Assets::new();
