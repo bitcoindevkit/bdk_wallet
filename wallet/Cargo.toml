@@ -22,6 +22,8 @@ bitcoin = { version = "0.32.6", features = [ "serde", "base64" ], default-featur
 serde = { version = "^1.0", features = ["derive"] }
 serde_json = { version = "^1.0" }
 bdk_chain = { version = "0.23.1", features = [ "miniscript", "serde" ], default-features = false }
+bdk_tx = { version = "0.1.0" }
+bdk_coin_select = { version = "0.4.0" }
 
 # Optional dependencies
 bip39 = { version = "2.0", optional = true }
@@ -58,3 +60,7 @@ required-features = ["all-keys"]
 name = "miniscriptc"
 path = "examples/compiler.rs"
 required-features = ["compiler"]
+
+[[example]]
+name = "psbt"
+required-features = ["test-utils"]
