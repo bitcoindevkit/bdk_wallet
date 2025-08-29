@@ -1236,6 +1236,29 @@ impl Wallet {
         )
     }
 
+    /// Return the balance, separated into available, trusted-pending, untrusted-pending and
+    /// immature values, considering only transactions with at least `confirmation_threshold`
+    /// confirmations.
+    pub fn balance_with_confirmation_depth(&self, confirmation_threshold: u32) -> Balance {
+        let target_height = self
+            .chain
+            .tip()
+            .height()
+            .saturating_sub(confirmation_threshold.saturating_sub(1));
+        let target_tip = self
+            .chain
+            .range(..=target_height)
+            .next()
+            .expect("local chain must contain genesis");
+        self.indexed_graph.graph().balance(
+            &self.chain,
+            target_tip.block_id(),
+            CanonicalizationParams::default(),
+            self.indexed_graph.index.outpoints().iter().cloned(),
+            |&(k, _), _| k == KeychainKind::Internal,
+        )
+    }
+
     /// Add an external signer
     ///
     /// See [the `signer` module](signer) for an example.
