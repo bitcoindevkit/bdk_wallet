@@ -1,3 +1,5 @@
+use bdk_chain::BlockId;
+use bdk_chain::ConfirmationBlockTime;
 use bdk_wallet::bitcoin::hashes::Hash;
 use bdk_wallet::bitcoin::secp256k1;
 use bdk_wallet::bitcoin::{Amount, FeeRate, Network, Psbt, TxIn};
@@ -17,8 +19,6 @@ fn test_create_psbt() {
         .unwrap();
 
     // Receive coins
-    use bdk_chain::BlockId;
-    use bdk_chain::ConfirmationBlockTime;
     let anchor = ConfirmationBlockTime {
         block_id: BlockId {
             height: 100,
@@ -65,6 +65,76 @@ fn test_create_psbt() {
         .tap_key_origins
         .values()
         .any(|(_, (fp, _))| fp.to_string() == "f6a5cb8b")));
+}
+
+#[test]
+fn test_create_psbt_cltv() {
+    use bdk_wallet::CreatePsbtError;
+    use bitcoin::absolute::LockTime;
+    use miniscript::plan::Assets;
+
+    let desc = get_test_single_sig_cltv();
+    let mut wallet = Wallet::create_single(desc)
+        .network(Network::Regtest)
+        .create_wallet_no_persist()
+        .unwrap();
+
+    // Receive coins
+    let anchor = ConfirmationBlockTime {
+        block_id: BlockId {
+            height: 99_999,
+            hash: Hash::hash(b"abc"),
+        },
+        confirmation_time: 1234567000,
+    };
+    insert_checkpoint(&mut wallet, anchor.block_id);
+    let op = receive_output(&mut wallet, Amount::ONE_BTC, ReceiveTo::Block(anchor));
+
+    let mut rng = rand::thread_rng();
+
+    let addr = wallet.reveal_next_address(KeychainKind::External);
+
+    // No assets fail
+    {
+        let mut params = psbt::PsbtParams::default();
+        params
+            .add_utxos(&[op])
+            .add_recipients([(addr.script_pubkey(), Amount::from_btc(0.42).unwrap())]);
+        let res = wallet.create_psbt(params, &mut rng);
+        assert!(
+            matches!(res, Err(CreatePsbtError::Plan(err)) if err == op),
+            "UTXO requires CLTV but the assets are insufficient",
+        );
+    }
+
+    // Add assets ok
+    {
+        let mut params = psbt::PsbtParams::default();
+        params
+            .add_utxos(&[op])
+            .add_assets(Assets::new().after(LockTime::from_consensus(100_000)))
+            .add_recipients([(addr.script_pubkey(), Amount::from_btc(0.42).unwrap())]);
+        let _ = wallet
+            .create_psbt(params, &mut rng)
+            .expect("Create psbt should succeed");
+    }
+
+    // New chain tip (no assets) ok
+    {
+        let block_id = BlockId {
+            height: 100_000,
+            hash: Hash::hash(b"123"),
+        };
+        insert_checkpoint(&mut wallet, block_id);
+
+        let mut params = psbt::PsbtParams::default();
+        params
+            .add_utxos(&[op])
+            .add_recipients([(addr.script_pubkey(), Amount::from_btc(0.42).unwrap())]);
+        let _ = wallet
+            .create_psbt(params, &mut rng)
+            .expect("Create psbt should succeed");
+    }
 }
 
 #[test]

@@ -2705,19 +2705,14 @@ impl Wallet {
         };
 
         // Get input candidates
-        let manually_selected: HashSet<OutPoint> = params.utxos.clone().into_iter().collect();
         let (must_spend, mut may_spend): (Vec<Input>, Vec<Input>) = self
             .list_unspent()
             .flat_map(|output| self.plan_input(&output, &assets))
-            .partition(|input| manually_selected.contains(&input.prev_outpoint()));
+            .partition(|input| params.utxos.contains(&input.prev_outpoint()));
 
-        if must_spend
-            .iter()
-            .map(|input| input.prev_outpoint())
-            .any(|op| !manually_selected.contains(&op))
-        {
+        if must_spend.len() < params.utxos.len() {
             // Try plans again, this time propagating the error.
-            for op in manually_selected {
+            for op in params.utxos.iter().copied() {
                 if self.try_plan(op, &assets).is_none() {
                     return Err(CreatePsbtError::Plan(op));
                 }

@@ -6,12 +6,14 @@ use bdk_tx::DefiniteDescriptor;
 use bitcoin::{absolute, transaction::Version, Amount, FeeRate, OutPoint, ScriptBuf, Sequence};
 use miniscript::plan::Assets;
 
+use crate::collections::HashSet;
+
 /// Parameters to create a PSBT.
 #[derive(Debug)]
 #[allow(unused)]
 pub struct PsbtParams {
     // Inputs
-    pub(crate) utxos: Vec<OutPoint>,
+    pub(crate) utxos: HashSet<OutPoint>,
 
     // Outputs
     pub(crate) recipients: Vec<(ScriptBuf, Amount)>,
@@ -50,6 +52,12 @@ impl Default for PsbtParams {
 
 // TODO: more setters for PsbtParams
 impl PsbtParams {
+    /// Add UTXOs by outpoint to fund the transaction.
+    pub fn add_utxos(&mut self, outpoints: &[OutPoint]) -> &mut Self {
+        self.utxos.extend(outpoints);
+        self
+    }
+
     /// Add the spend [`Assets`].
     ///
     /// Assets are required to create a spending plan for an output controlled by the wallet's
