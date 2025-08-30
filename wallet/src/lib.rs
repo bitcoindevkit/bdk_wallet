@@ -31,6 +31,10 @@ pub mod keys;
 pub mod psbt;
 #[cfg(feature = "test-utils")]
 pub mod test_utils;
+
+#[cfg(feature = "test-utils")]
+pub mod persist_test_utils;
+
 mod types;
 mod wallet;
 
