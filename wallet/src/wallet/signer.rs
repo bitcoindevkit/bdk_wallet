@@ -106,6 +106,7 @@ use miniscript::{SigType, ToPublicKey};
 use super::utils::SecpCtx;
 use crate::descriptor::{DescriptorMeta, XKeyUtils};
 use crate::psbt::PsbtUtils;
+use crate::types::IndexOutOfBoundsError;
 use crate::wallet::error::MiniscriptPsbtError;
 
 /// Identifier of a signer in the `SignersContainers`. Used as a key to find the right signer among
@@ -142,7 +143,7 @@ pub enum SignerError {
     /// The user canceled the operation
     UserCanceled,
     /// Input index is out of range
-    InputIndexOutOfRange,
+    InputIndexOutOfRange(IndexOutOfBoundsError),
     /// The `non_witness_utxo` field of the transaction is required to sign this input
     MissingNonWitnessUtxo,
     /// The `non_witness_utxo` specified is invalid
@@ -179,7 +180,7 @@ impl fmt::Display for SignerError {
             Self::MissingKey => write!(f, "Missing private key"),
             Self::InvalidKey => write!(f, "The private key in use has the right fingerprint but derives differently than expected"),
             Self::UserCanceled => write!(f, "The user canceled the operation"),
-            Self::InputIndexOutOfRange => write!(f, "Input index out of range"),
+            Self::InputIndexOutOfRange(err) => write!(f, "{err}"),
             Self::MissingNonWitnessUtxo => write!(f, "Missing non-witness UTXO"),
             Self::InvalidNonWitnessUtxo => write!(f, "Invalid non-witness UTXO"),
             Self::MissingWitnessUtxo => write!(f, "Missing witness UTXO"),
@@ -192,6 +193,12 @@ impl fmt::Display for SignerError {
             Self::MiniscriptPsbt(err) => write!(f, "Miniscript PSBT error: {err}"),
             Self::External(err) => write!(f, "{err}"),
         }
+    }
+}
+
+impl From<IndexOutOfBoundsError> for SignerError {
+    fn from(err: IndexOutOfBoundsError) -> Self {
+        Self::InputIndexOutOfRange(err)
     }
 }
 
@@ -318,7 +325,7 @@ impl InputSigner for SignerWrapper<DescriptorXKey<Xpriv>> {
         secp: &SecpCtx,
     ) -> Result<(), SignerError> {
         if input_index >= psbt.inputs.len() {
-            return Err(SignerError::InputIndexOutOfRange);
+            return Err(IndexOutOfBoundsError::new(input_index, psbt.inputs.len()))?;
         }
 
         if psbt.inputs[input_index].final_script_sig.is_some()
@@ -442,8 +449,14 @@ impl InputSigner for SignerWrapper<PrivateKey> {
         sign_options: &SignOptions,
         secp: &SecpCtx,
     ) -> Result<(), SignerError> {
-        if input_index >= psbt.inputs.len() || input_index >= psbt.unsigned_tx.input.len() {
-            return Err(SignerError::InputIndexOutOfRange);
+        if input_index >= psbt.inputs.len() {
+            return Err(IndexOutOfBoundsError::new(input_index, psbt.inputs.len()))?;
+        }
+        if input_index >= psbt.unsigned_tx.input.len() {
+            return Err(IndexOutOfBoundsError::new(
+                input_index,
+                psbt.unsigned_tx.input.len(),
+            ))?;
         }
 
         if psbt.inputs[input_index].final_script_sig.is_some()
@@ -834,8 +847,14 @@ fn compute_tap_sighash(
     input_index: usize,
     extra: Option<taproot::TapLeafHash>,
 ) -> Result<(sighash::TapSighash, TapSighashType), SignerError> {
-    if input_index >= psbt.inputs.len() || input_index >= psbt.unsigned_tx.input.len() {
-        return Err(SignerError::InputIndexOutOfRange);
+    if input_index >= psbt.inputs.len() {
+        Err(IndexOutOfBoundsError::new(input_index, psbt.inputs.len()))?;
+    }
+    if input_index >= psbt.unsigned_tx.input.len() {
+        Err(IndexOutOfBoundsError::new(
+            input_index,
+            psbt.unsigned_tx.input.len(),
+        ))?;
     }
 
     let psbt_input = &psbt.inputs[input_index];
