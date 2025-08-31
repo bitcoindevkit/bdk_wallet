@@ -29,8 +29,6 @@ fn test_create_psbt() {
     insert_checkpoint(&mut wallet, anchor.block_id);
     receive_output(&mut wallet, Amount::ONE_BTC, ReceiveTo::Block(anchor));
 
-    let mut rng = rand::thread_rng();
-
     let change_desc =
         miniscript::Descriptor::parse_descriptor(&secp256k1::Secp256k1::new(), change_desc)
             .unwrap()
@@ -45,7 +43,7 @@ fn test_create_psbt() {
         .change_descriptor(change_desc)
         .feerate(FeeRate::from_sat_per_vb_unchecked(4));
 
-    let (psbt, _) = wallet.create_psbt(params, &mut rng).unwrap();
+    let (psbt, _) = wallet.create_psbt(params).unwrap();
     assert!(psbt.fee().is_ok());
     let psbt_input = &psbt.inputs[0];
     assert_eq!(
@@ -69,7 +67,7 @@ fn test_create_psbt() {
 
 #[test]
 fn test_create_psbt_cltv() {
-    use bdk_wallet::CreatePsbtError;
+    use bdk_wallet::error::CreatePsbtError;
     use bitcoin::absolute::LockTime;
     use miniscript::plan::Assets;
 
@@ -90,8 +88,6 @@ fn test_create_psbt_cltv() {
     insert_checkpoint(&mut wallet, anchor.block_id);
     let op = receive_output(&mut wallet, Amount::ONE_BTC, ReceiveTo::Block(anchor));
 
-    let mut rng = rand::thread_rng();
-
     let addr = wallet.reveal_next_address(KeychainKind::External);
 
     // No assets fail
@@ -100,7 +96,7 @@ fn test_create_psbt_cltv() {
         params
             .add_utxos(&[op])
             .add_recipients([(addr.script_pubkey(), Amount::from_btc(0.42).unwrap())]);
-        let res = wallet.create_psbt(params, &mut rng);
+        let res = wallet.create_psbt(params);
         assert!(
             matches!(res, Err(CreatePsbtError::Plan(err)) if err == op),
             "UTXO requires CLTV but the assets are insufficient",
@@ -115,7 +111,7 @@ fn test_create_psbt_cltv() {
             .add_assets(Assets::new().after(LockTime::from_consensus(100_000)))
             .add_recipients([(addr.script_pubkey(), Amount::from_btc(0.42).unwrap())]);
         let _ = wallet
-            .create_psbt(params, &mut rng)
+            .create_psbt(params)
             .expect("Create psbt should succeed");
     }
 
@@ -132,7 +128,7 @@ fn test_create_psbt_cltv() {
             .add_utxos(&[op])
             .add_recipients([(addr.script_pubkey(), Amount::from_btc(0.42).unwrap())]);
         let _ = wallet
-            .create_psbt(params, &mut rng)
+            .create_psbt(params)
             .expect("Create psbt should succeed");
     }
 }

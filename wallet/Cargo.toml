@@ -64,3 +64,7 @@ required-features = ["compiler"]
 [[example]]
 name = "psbt"
 required-features = ["test-utils"]
+
+[[example]]
+name = "replace_by_fee"
+required-features = ["test-utils"]

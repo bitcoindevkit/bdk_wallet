@@ -1,4 +1,3 @@
-#![allow(unused_imports)]
 #![allow(clippy::print_stdout)]
 
 use std::collections::HashMap;
@@ -11,14 +10,11 @@ use bdk_chain::TxUpdate;
 use bdk_wallet::psbt::{PsbtParams, SelectionStrategy::*};
 use bdk_wallet::test_utils::*;
 use bdk_wallet::{KeychainKind::*, Update, Wallet};
-use bitcoin::FeeRate;
 use bitcoin::{
     bip32, consensus,
     secp256k1::{self, rand},
     Address, Amount, OutPoint, TxIn, TxOut,
 };
-use miniscript::descriptor::Descriptor;
-use miniscript::descriptor::KeyMap;
 use rand::Rng;
 
 // This example shows how to create a PSBT using BDK Wallet.
@@ -31,7 +27,6 @@ const FEERATE: f64 = 2.0; // sat/vb
 fn main() -> anyhow::Result<()> {
     let (desc, change_desc) = get_test_wpkh_and_change_desc();
     let secp = secp256k1::Secp256k1::new();
-    let mut rng = rand::thread_rng();
 
     // Xpriv to be used for signing the PSBT
     let xprv = bip32::Xpriv::from_str("tprv8ZgxMBicQKsPdy6LMhUtFHAgpocR8GC6QmwMSFpZs7h6Eziw3SpThFfczTDh5rW2krkqffa11UpX3XkeTTB2FvzZKWXqPY54Y6Rq4AQ5R8L")?;
@@ -41,7 +36,7 @@ fn main() -> anyhow::Result<()> {
         .network(NETWORK)
         .create_wallet_no_persist()?;
 
-    fund_wallet(&mut wallet, &mut rng)?;
+    fund_wallet(&mut wallet)?;
 
     let utxos = wallet
         .list_unspent()
@@ -58,7 +53,7 @@ fn main() -> anyhow::Result<()> {
         .coin_selection(SingleRandomDraw);
 
     // Create PSBT (which also returns the Finalizer).
-    let (mut psbt, finalizer) = wallet.create_psbt(params, &mut rng)?;
+    let (mut psbt, finalizer) = wallet.create_psbt(params)?;
 
     dbg!(&psbt);
 
@@ -72,23 +67,21 @@ fn main() -> anyhow::Result<()> {
         println!("TxOut: {}", txout.value);
     }
 
-    let sign_res = psbt.sign(&xprv, &secp);
-    println!("Signed: {}", sign_res.is_ok());
-
+    let _ = psbt.sign(&xprv, &secp);
+    println!("Signed: {}", !psbt.inputs[0].partial_sigs.is_empty());
     let finalize_res = finalizer.finalize(&mut psbt);
     println!("Finalized: {}", finalize_res.is_finalized());
 
     let tx = psbt.extract_tx()?;
-
     let feerate = wallet.calculate_fee_rate(&tx)?;
-    println!("Feerate: {} sat/vb", bdk_wallet::floating_rate!(feerate));
+    println!("Fee rate: {} sat/vb", bdk_wallet::floating_rate!(feerate));
 
     println!("{}", consensus::encode::serialize_hex(&tx));
 
     Ok(())
 }
 
-fn fund_wallet(wallet: &mut Wallet, rng: &mut impl Rng) -> anyhow::Result<()> {
+fn fund_wallet(wallet: &mut Wallet) -> anyhow::Result<()> {
     let anchor = ConfirmationBlockTime {
         block_id: BlockId {
             height: 260071,
@@ -97,6 +90,8 @@ fn fund_wallet(wallet: &mut Wallet, rng: &mut impl Rng) -> anyhow::Result<()> {
         confirmation_time: 1752184658,
     };
     insert_checkpoint(wallet, anchor.block_id);
+
+    let mut rng = rand::thread_rng();
 
     // Fund wallet with several random utxos
     for i in 0..21 {
@@ -109,6 +104,12 @@ fn fund_wallet(wallet: &mut Wallet, rng: &mut impl Rng) -> anyhow::Result<()> {
             ReceiveTo::Block(anchor),
         );
     }
+
+    let tip = BlockId {
+        height: 260171,
+        hash: "0000000b9efb77450e753ae9fd7be9f69219511c27b6e95c28f4126f3e1591c3".parse()?,
+    };
+    insert_checkpoint(wallet, tip);
 
     Ok(())
 }

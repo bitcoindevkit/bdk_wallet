@@ -1,16 +1,20 @@
 //! Parameters for PSBT building.
 
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 
+use bdk_chain::{BlockId, CanonicalizationParams, TxGraph};
 use bdk_tx::DefiniteDescriptor;
-use bitcoin::{absolute, transaction::Version, Amount, FeeRate, OutPoint, ScriptBuf, Sequence};
+use bitcoin::{
+    absolute, transaction::Version, Amount, FeeRate, OutPoint, ScriptBuf, Sequence, Transaction,
+    Txid,
+};
 use miniscript::plan::Assets;
 
 use crate::collections::HashSet;
 
 /// Parameters to create a PSBT.
 #[derive(Debug)]
-#[allow(unused)]
 pub struct PsbtParams {
     // Inputs
     pub(crate) utxos: HashSet<OutPoint>,
@@ -25,6 +29,7 @@ pub struct PsbtParams {
     pub(crate) longterm_feerate: FeeRate,
     pub(crate) drain_wallet: bool,
     pub(crate) coin_selection: SelectionStrategy,
+    pub(crate) canonical_params: CanonicalizationParams,
 
     // PSBT
     pub(crate) version: Option<Version>,
@@ -43,6 +48,7 @@ impl Default for PsbtParams {
             longterm_feerate: bitcoin::FeeRate::from_sat_per_vb_unchecked(10),
             drain_wallet: Default::default(),
             coin_selection: Default::default(),
+            canonical_params: Default::default(),
             version: Default::default(),
             locktime: Default::default(),
             fallback_sequence: Default::default(),
@@ -50,7 +56,6 @@ impl Default for PsbtParams {
     }
 }
 
-// TODO: more setters for PsbtParams
 impl PsbtParams {
     /// Add UTXOs by outpoint to fund the transaction.
     pub fn add_utxos(&mut self, outpoints: &[OutPoint]) -> &mut Self {
@@ -58,15 +63,15 @@ impl PsbtParams {
         self
     }
 
+    /// Get the currently selected spends.
+    pub fn utxos(&self) -> &HashSet<OutPoint> {
+        &self.utxos
+    }
+
     /// Remove a UTXO from the currently selected inputs.
     pub fn remove_utxo(&mut self, outpoint: OutPoint) -> &mut Self {
         self.utxos.remove(&outpoint);
         self
-    }
-
-    /// Get the current input selection.
-    pub fn utxos(&mut self) -> &HashSet<OutPoint> {
-        &self.utxos
     }
 
     /// Add the spend [`Assets`].
@@ -122,6 +127,107 @@ impl PsbtParams {
         self.change_descriptor = Some(desc);
         self
     }
+
+    /// Replace spends of the given `txs` and return a [`ReplaceParams`] populated with the
+    /// the inputs to spend.
+    ///
+    /// This merges all of the spends into a single transaction while retaining the parameters
+    /// of `self`. Note however that any previously added UTXOs are removed. Call
+    /// [`replace_by_fee_with_aux_rand`](crate::Wallet::replace_by_fee_with_aux_rand) to finish
+    /// building the PSBT.
+    ///
+    /// ## Note
+    ///
+    /// There should be no ancestry linking the elements of `txs`, since replacing an
+    /// ancestor necessarily invalidates the descendant.
+    pub fn replace(self, txs: &[Arc<Transaction>]) -> ReplaceParams {
+        ReplaceParams::new(txs, self)
+    }
+}
+
+/// `ReplaceParams` provides a thin wrapper around [`PsbtParams`] and is intended for
+/// crafting Replace-By-Fee transactions (RBF).
+#[derive(Debug, Default)]
+pub struct ReplaceParams {
+    /// Txids of txs to replace.
+    pub(crate) replace: HashSet<Txid>,
+    /// The inner PSBT parameters.
+    pub(crate) inner: PsbtParams,
+}
+
+impl ReplaceParams {
+    /// Construct from PSBT `params` and an iterator of `txs` to replace.
+    pub(crate) fn new(txs: &[Arc<Transaction>], params: PsbtParams) -> Self {
+        Self {
+            inner: params,
+            ..Default::default()
+        }
+        .replace(txs)
+    }
+
+    /// Replace spends of the provided `txs`. This will internally set the inner
+    /// params UTXOs to be spent.
+    pub fn replace(self, txs: &[Arc<Transaction>]) -> Self {
+        let txs: Vec<Arc<Transaction>> = txs.to_vec();
+        let mut txids: HashSet<Txid> = txs.iter().map(|tx| tx.compute_txid()).collect();
+        let mut tx_graph = TxGraph::<BlockId>::default();
+        let mut utxos: HashSet<OutPoint> = HashSet::new();
+
+        for tx in txs {
+            let _ = tx_graph.insert_tx(tx);
+        }
+
+        // Sanitize the RBF set by removing elements of `txs` which have ancestors
+        // in the same set. This is to avoid spending outputs of txs that are bound
+        // for replacement.
+        for tx_node in tx_graph.full_txs() {
+            let tx = &tx_node.tx;
+            if tx.is_coinbase()
+                || tx_graph
+                    .walk_ancestors(Arc::clone(tx), |_, tx| Some(tx.compute_txid()))
+                    .any(|ancestor_txid| txids.contains(&ancestor_txid))
+            {
+                txids.remove(&tx_node.txid);
+            } else {
+                utxos.extend(tx.input.iter().map(|txin| txin.previous_output));
+            }
+        }
+
+        Self {
+            inner: PsbtParams {
+                utxos,
+                ..self.inner
+            },
+            replace: txids,
+        }
+    }
+
+    /// Add recipients.
+    pub fn add_recipients<I, S>(&mut self, recipients: I) -> &mut Self
+    where
+        I: IntoIterator<Item = (S, Amount)>,
+        S: Into<ScriptBuf>,
+    {
+        self.inner.add_recipients(recipients);
+        self
+    }
+
+    /// Set the target fee rate.
+    pub fn feerate(&mut self, feerate: FeeRate) -> &mut Self {
+        self.inner.feerate(feerate);
+        self
+    }
+
+    /// Get the currently selected spends.
+    pub fn utxos(&self) -> &HashSet<OutPoint> {
+        self.inner.utxos()
+    }
+
+    /// Remove a UTXO from the currently selected inputs.
+    pub fn remove_utxo(&mut self, outpoint: OutPoint) -> &mut Self {
+        self.inner.remove_utxo(outpoint);
+        self
+    }
 }
 
 /// Coin select strategy.
@@ -158,5 +264,64 @@ impl AssetsExt for Assets {
 
         self.absolute_timelock = other.absolute_timelock.or(self.absolute_timelock);
         self.relative_timelock = other.relative_timelock.or(self.relative_timelock);
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::test_utils::new_tx;
+
+    use bitcoin::hashes::Hash;
+    use bitcoin::{TxIn, TxOut};
+
+    #[test]
+    fn test_sanitize_rbf_set() {
+        // To replace: { [A, B], [C] } (where B spends from A)
+        // We can't replace the inputs of B, since we're already replacing A
+        // therefore the inputs should only include the spends of [A, C].
+
+        // A is an ancestor
+        let tx_a = Transaction {
+            input: vec![TxIn {
+                previous_output: OutPoint::new(Hash::hash(b"parent_a"), 0),
+                ..Default::default()
+            }],
+            output: vec![TxOut::NULL],
+            ..new_tx(0)
+        };
+        let txid_a = tx_a.compute_txid();
+        // B spends A
+        let tx_b = Transaction {
+            input: vec![TxIn {
+                previous_output: OutPoint::new(txid_a, 0),
+                ..Default::default()
+            }],
+            output: vec![TxOut::NULL],
+            ..new_tx(1)
+        };
+        // C is an ancestor
+        let tx_c = Transaction {
+            input: vec![TxIn {
+                previous_output: OutPoint::new(Hash::hash(b"parent_c"), 0),
+                ..Default::default()
+            }],
+            output: vec![TxOut::NULL],
+            ..new_tx(2)
+        };
+        // D is unrelated coinbase tx
+        let tx_d = Transaction {
+            input: vec![TxIn::default()],
+            output: vec![TxOut::NULL],
+            ..new_tx(3)
+        };
+
+        let expect_spends: HashSet<OutPoint> =
+            [tx_a.input[0].previous_output, tx_c.input[0].previous_output].into();
+
+        let txs: Vec<Arc<Transaction>> =
+            [tx_a, tx_b, tx_c, tx_d].into_iter().map(Arc::new).collect();
+        let params = ReplaceParams::new(&txs, PsbtParams::default());
+        assert_eq!(params.utxos(), &expect_spends);
     }
 }
