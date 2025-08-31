@@ -58,6 +58,17 @@ impl PsbtParams {
         self
     }
 
+    /// Remove a UTXO from the currently selected inputs.
+    pub fn remove_utxo(&mut self, outpoint: OutPoint) -> &mut Self {
+        self.utxos.remove(&outpoint);
+        self
+    }
+
+    /// Get the current input selection.
+    pub fn utxos(&mut self) -> &HashSet<OutPoint> {
+        &self.utxos
+    }
+
     /// Add the spend [`Assets`].
     ///
     /// Assets are required to create a spending plan for an output controlled by the wallet's
