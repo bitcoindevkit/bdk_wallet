@@ -1,10 +1,137 @@
-use bdk_wallet::bitcoin::{Amount, FeeRate, Psbt, TxIn};
+use bdk_chain::BlockId;
+use bdk_chain::ConfirmationBlockTime;
+use bdk_wallet::bitcoin::hashes::Hash;
+use bdk_wallet::bitcoin::secp256k1;
+use bdk_wallet::bitcoin::{Amount, FeeRate, Network, Psbt, TxIn};
 use bdk_wallet::test_utils::*;
-use bdk_wallet::{psbt, KeychainKind, SignOptions};
+use bdk_wallet::{psbt, KeychainKind, SignOptions, Wallet};
 use core::str::FromStr;
 
 // from bip 174
 const PSBT_STR: &str = "cHNidP8BAKACAAAAAqsJSaCMWvfEm4IS9Bfi8Vqz9cM9zxU4IagTn4d6W3vkAAAAAAD+////qwlJoIxa98SbghL0F+LxWrP1wz3PFTghqBOfh3pbe+QBAAAAAP7///8CYDvqCwAAAAAZdqkUdopAu9dAy+gdmI5x3ipNXHE5ax2IrI4kAAAAAAAAGXapFG9GILVT+glechue4O/p+gOcykWXiKwAAAAAAAEHakcwRAIgR1lmF5fAGwNrJZKJSGhiGDR9iYZLcZ4ff89X0eURZYcCIFMJ6r9Wqk2Ikf/REf3xM286KdqGbX+EhtdVRs7tr5MZASEDXNxh/HupccC1AaZGoqg7ECy0OIEhfKaC3Ibi1z+ogpIAAQEgAOH1BQAAAAAXqRQ1RebjO4MsRwUPJNPuuTycA5SLx4cBBBYAFIXRNTfy4mVAWjTbr6nj3aAfuCMIAAAA";
+
+#[test]
+fn test_create_psbt() {
+    let (desc, change_desc) = get_test_tr_single_sig_xprv_and_change_desc();
+    let mut wallet = Wallet::create(desc, change_desc)
+        .network(Network::Regtest)
+        .create_wallet_no_persist()
+        .unwrap();
+
+    // Receive coins
+    let anchor = ConfirmationBlockTime {
+        block_id: BlockId {
+            height: 100,
+            hash: Hash::hash(b"100"),
+        },
+        confirmation_time: 1234567000,
+    };
+    insert_checkpoint(&mut wallet, anchor.block_id);
+    receive_output(&mut wallet, Amount::ONE_BTC, ReceiveTo::Block(anchor));
+
+    let change_desc =
+        miniscript::Descriptor::parse_descriptor(&secp256k1::Secp256k1::new(), change_desc)
+            .unwrap()
+            .0
+            .at_derivation_index(0)
+            .unwrap();
+
+    let addr = wallet.reveal_next_address(KeychainKind::External);
+    let mut params = psbt::PsbtParams::default();
+    params
+        .add_recipients([(addr.script_pubkey(), Amount::from_btc(0.42).unwrap())])
+        .change_descriptor(change_desc)
+        .feerate(FeeRate::from_sat_per_vb_unchecked(4));
+
+    let (psbt, _) = wallet.create_psbt(params).unwrap();
+    assert!(psbt.fee().is_ok());
+    let psbt_input = &psbt.inputs[0];
+    assert_eq!(
+        psbt_input.witness_utxo.as_ref().map(|txo| txo.value),
+        Some(Amount::ONE_BTC),
+    );
+    assert!(psbt_input.tap_internal_key.is_some());
+    assert!(psbt_input
+        .tap_key_origins
+        .values()
+        .any(|(_, (fp, _))| fp.to_string() == "f6a5cb8b"));
+    assert!(psbt
+        .outputs
+        .iter()
+        .any(|output| output.tap_internal_key.is_some()));
+    assert!(psbt.outputs.iter().any(|output| output
+        .tap_key_origins
+        .values()
+        .any(|(_, (fp, _))| fp.to_string() == "f6a5cb8b")));
+}
+
+#[test]
+fn test_create_psbt_cltv() {
+    use bdk_wallet::error::CreatePsbtError;
+    use bitcoin::absolute::LockTime;
+    use miniscript::plan::Assets;
+
+    let desc = get_test_single_sig_cltv();
+    let mut wallet = Wallet::create_single(desc)
+        .network(Network::Regtest)
+        .create_wallet_no_persist()
+        .unwrap();
+
+    // Receive coins
+    let anchor = ConfirmationBlockTime {
+        block_id: BlockId {
+            height: 99_999,
+            hash: Hash::hash(b"abc"),
+        },
+        confirmation_time: 1234567000,
+    };
+    insert_checkpoint(&mut wallet, anchor.block_id);
+    let op = receive_output(&mut wallet, Amount::ONE_BTC, ReceiveTo::Block(anchor));
+
+    let addr = wallet.reveal_next_address(KeychainKind::External);
+
+    // No assets fail
+    {
+        let mut params = psbt::PsbtParams::default();
+        params
+            .add_utxos(&[op])
+            .add_recipients([(addr.script_pubkey(), Amount::from_btc(0.42).unwrap())]);
+        let res = wallet.create_psbt(params);
+        assert!(
+            matches!(res, Err(CreatePsbtError::Plan(err)) if err == op),
+            "UTXO requires CLTV but the assets are insufficient",
+        );
+    }
+
+    // Add assets ok
+    {
+        let mut params = psbt::PsbtParams::default();
+        params
+            .add_utxos(&[op])
+            .add_assets(Assets::new().after(LockTime::from_consensus(100_000)))
+            .add_recipients([(addr.script_pubkey(), Amount::from_btc(0.42).unwrap())]);
+        let _ = wallet
+            .create_psbt(params)
+            .expect("Create psbt should succeed");
+    }
+
+    // New chain tip (no assets) ok
+    {
+        let block_id = BlockId {
+            height: 100_000,
+            hash: Hash::hash(b"123"),
+        };
+        insert_checkpoint(&mut wallet, block_id);
+
+        let mut params = psbt::PsbtParams::default();
+        params
+            .add_utxos(&[op])
+            .add_recipients([(addr.script_pubkey(), Amount::from_btc(0.42).unwrap())]);
+        let _ = wallet
+            .create_psbt(params)
+            .expect("Create psbt should succeed");
+    }
+}
 
 #[test]
 #[should_panic(expected = "InputIndexOutOfRange")]
