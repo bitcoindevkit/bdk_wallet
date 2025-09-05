@@ -399,7 +399,8 @@ impl Wallet {
     /// Build a new [`Wallet`] from a two-path descriptor.
     ///
     /// This function parses a multipath descriptor with exactly 2 paths and creates a wallet
-    /// using the existing receive and change wallet creation logic.
+    /// using the existing receive and change wallet creation logic. Note that you can only use this
+    /// method with public extended keys (`xpub` prefix) to create watch-only wallets.
     ///
     /// Multipath descriptors follow [BIP 389] and allow defining both receive and change
     /// derivation paths in a single descriptor using the `<0;1>` syntax.
@@ -407,7 +408,8 @@ impl Wallet {
     /// If you have previously created a wallet, use [`load`](Self::load) instead.
     ///
     /// # Errors
-    /// Returns an error if the descriptor is invalid or not a 2-path multipath descriptor.
+    /// Returns an error if the descriptor is invalid, not a 2-path multipath descriptor, or if
+    /// the descriptor provided contains an extended private key (`xprv` prefix).
     ///
     /// # Synopsis
     ///
@@ -1224,7 +1226,7 @@ impl Wallet {
         txs
     }
 
-    /// Return the balance, separated into available, trusted-pending, untrusted-pending and
+    /// Return the balance, separated into available, trusted-pending, untrusted-pending, and
     /// immature values.
     pub fn balance(&self) -> Balance {
         self.indexed_graph.graph().balance(
@@ -2794,6 +2796,7 @@ macro_rules! doctest_wallet {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::miniscript::Error::Unexpected;
     use crate::test_utils::get_test_tr_single_sig_xprv_and_change_desc;
     use crate::test_utils::insert_tx;
 
@@ -2893,6 +2896,17 @@ mod test {
         let params = Wallet::create_from_two_path_descriptor(single_path_descriptor);
         let wallet = params.network(Network::Testnet).create_wallet_no_persist();
         assert!(matches!(wallet, Err(DescriptorError::MultiPath)));
+
+        // Test with a private descriptor
+        // You get a Miniscript(Unexpected("Can't make an extended private key with multiple paths
+        // into a public key.")) error.
+        let private_multipath_descriptor = "wpkh(tprv8ZgxMBicQKsPdWAHbugK2tjtVtRjKGixYVZUdL7xLHMgXZS6BFbFi1UDb1CHT25Z5PU1F9j7wGxwUiRhqz9E3nZRztikGUV6HoRDYcqPhM4/84'/1'/0'/<0;1>/*)";
+        let params = Wallet::create_from_two_path_descriptor(private_multipath_descriptor);
+        let wallet = params.network(Network::Testnet).create_wallet_no_persist();
+        assert!(matches!(
+            wallet,
+            Err(DescriptorError::Miniscript(Unexpected(..)))
+        ));
 
         // Test with invalid 3-path multipath descriptor
         let three_path_descriptor = "wpkh([9a6a2580/84'/1'/0']tpubDDnGNapGEY6AZAdQbfRJgMg9fvz8pUBrLwvyvUqEgcUfgzM6zc2eVK4vY9x9L5FJWdX8WumXuLEDV5zDZnTfbn87vLe9XceCFwTu9so9Kks/<0;1;2>/*)";
