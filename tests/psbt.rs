@@ -136,6 +136,8 @@ fn test_create_psbt_cltv() {
     }
 }
 
+// Test that replacing two unconfirmed txs A, B results in a transaction
+// that spends the inputs of both A and B.
 #[test]
 fn test_replace_by_fee() {
     use KeychainKind::*;
@@ -219,7 +221,7 @@ fn test_replace_by_fee() {
         .unwrap()
         .0;
 
-    // Expect re-select inputs of A, B
+    // Expect replace inputs of A, B
     assert_eq!(
         psbt.unsigned_tx.input.len(),
         2,

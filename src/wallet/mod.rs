@@ -1210,7 +1210,13 @@ impl Wallet {
         self.transactions_with_params(CanonicalizationParams::default())
     }
 
-    /// Transactions with params.
+    /// Iterate over relevant and canonical transactions in this wallet.
+    ///
+    /// - `params`: [`CanonicalizationParams`], modifies the wallet's internal logic for determining
+    ///   which transaction is canonical. This can be used to resolve conflicts, or to assert that a
+    ///   particular transaction should be treated as canonical.
+    ///
+    /// See [`Wallet::transactions`] for more.
     pub fn transactions_with_params<'a>(
         &'a self,
         params: CanonicalizationParams,
@@ -2487,19 +2493,20 @@ impl Wallet {
         Ok(())
     }
 
-    /// Inserts a transaction into the inner transaction graph with no additional metadata.
+    /// Inserts a transaction into the inner transaction graph, scanning for relevant txouts.
     ///
     /// This is used to inform the wallet of newly created txs before they are known to exist
-    /// on chain (or in mempool), which is useful for discovering wallet-owned outputs of
-    /// not-yet-canonical transactions.
+    /// on chain or in mempool, which is useful for discovering wallet-owned outputs of
+    /// not-yet-canonical transactions. The inserted transaction carries no additional metadata,
+    /// like the time it was seen or the confirmation height. To later retrieve it, refer to
+    /// [`Wallet::transactions_with_params`].
     ///
     /// The effect of insertion depends on the [relevance] of `tx` as determined by the indexer.
     /// If the transaction was newly inserted and a txout matches a derived SPK, then the index
-    /// is updated with the relevant outpoint. This means the output may be selected in
-    /// subsequent transactions (if selected manually), enabling chains of dependent spends to
-    /// occur prior to broadcast time. If none of the outputs are relevant, the transaction is
-    /// kept but the index remains unchanged. If the transaction was already present in-graph,
-    /// the effect is a no-op.
+    /// is updated with the relevant outpoint(s). If no outputs are relevant, the transaction is
+    /// kept but the index remains unchanged. There should be no change to the wallet balance until
+    /// the transaction is accepted by the network and the wallet is synced. If `tx` was already
+    /// present in-graph, then the effect is a no-op.
     ///
     /// **You must persist the change set staged as a result of this call.**
     ///

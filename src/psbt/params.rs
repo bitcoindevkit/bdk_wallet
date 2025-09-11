@@ -58,6 +58,10 @@ impl Default for PsbtParams {
 
 impl PsbtParams {
     /// Add UTXOs by outpoint to fund the transaction.
+    ///
+    /// A single outpoint may appear at most once in the list of UTXOs to spend. The caller is
+    /// responsible for ensuring that elements of `outpoints` correspond to outputs of previous
+    /// transactions and are currently unspent.
     pub fn add_utxos(&mut self, outpoints: &[OutPoint]) -> &mut Self {
         self.utxos.extend(outpoints);
         self
@@ -145,6 +149,8 @@ impl PsbtParams {
     }
 }
 
+// TODO: Bring back `TxOrdering`
+
 /// `ReplaceParams` provides a thin wrapper around [`PsbtParams`] and is intended for
 /// crafting Replace-By-Fee transactions (RBF).
 #[derive(Debug, Default)]
@@ -165,8 +171,8 @@ impl ReplaceParams {
         .replace(txs)
     }
 
-    /// Replace spends of the provided `txs`. This will internally set the inner
-    /// params UTXOs to be spent.
+    /// Replace spends of the provided `txs`. This will internally set the internal list
+    /// of UTXOs to be spent.
     pub fn replace(self, txs: &[Arc<Transaction>]) -> Self {
         let txs: Vec<Arc<Transaction>> = txs.to_vec();
         let mut txids: HashSet<Txid> = txs.iter().map(|tx| tx.compute_txid()).collect();
@@ -277,9 +283,9 @@ mod test {
 
     #[test]
     fn test_sanitize_rbf_set() {
-        // To replace: { [A, B], [C] } (where B spends from A)
-        // We can't replace the inputs of B, since we're already replacing A
-        // therefore the inputs should only include the spends of [A, C].
+        // To replace the set { [A, B], [C] }, where B is a descendant of A:
+        // We shouldn't try to replace the inputs of B, because replacing A will render A's outputs
+        // unspendable. Therefore the RBF inputs should only contain the inputs of A and C.
 
         // A is an ancestor
         let tx_a = Transaction {

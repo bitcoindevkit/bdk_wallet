@@ -317,7 +317,7 @@ pub fn insert_checkpoint(wallet: &mut Wallet, block: BlockId) {
         .unwrap();
 }
 
-/// Inserts a transaction with anchor (no last seen). This is useful for adding
+/// Inserts a transaction to be anchored by `block_id` (no last seen). This can be used to add
 /// a coinbase tx to the wallet for testing.
 ///
 /// This will also insert the anchor `block_id`. See [`insert_anchor`] for more.
