@@ -52,6 +52,7 @@ use rand_core::RngCore;
 mod changeset;
 pub mod coin_selection;
 pub mod error;
+pub mod event;
 pub mod export;
 pub mod locked_outpoints;
 mod params;
@@ -77,6 +78,7 @@ use crate::wallet::{
 };
 
 // re-exports
+use crate::event::{wallet_events, WalletEvent};
 pub use bdk_chain::Balance;
 pub use changeset::ChangeSet;
 pub use params::*;
@@ -2376,6 +2378,54 @@ impl Wallet {
         changeset.merge(self.indexed_graph.apply_update(update.tx_update).into());
         self.stage.merge(changeset);
         Ok(())
+    }
+
+    /// Applies an update to the wallet, stages the changes, and returns events.
+    ///
+    /// Usually you create an `update` by interacting with some blockchain data source and inserting
+    /// transactions related to your wallet into it. Staged changes are NOT persisted.
+    ///
+    /// After applying updates you should process the events in your app before persisting the
+    /// staged wallet changes. For an example of how to persist staged wallet changes see
+    /// [`Wallet::reveal_next_address`].
+    pub fn apply_update_events(
+        &mut self,
+        update: impl Into<Update>,
+    ) -> Result<Vec<WalletEvent>, CannotConnectError> {
+        // snapshot of chain tip and transactions before update
+        let chain_tip1 = self.chain.tip().block_id();
+        let wallet_txs1 = self
+            .transactions()
+            .map(|wtx| {
+                (
+                    wtx.tx_node.txid,
+                    (wtx.tx_node.tx.clone(), wtx.chain_position),
+                )
+            })
+            .collect::<BTreeMap<Txid, (Arc<Transaction>, ChainPosition<ConfirmationBlockTime>)>>();
+
+        // apply update
+        self.apply_update(update)?;
+
+        // chain tip and transactions after update
+        let chain_tip2 = self.chain.tip().block_id();
+        let wallet_txs2 = self
+            .transactions()
+            .map(|wtx| {
+                (
+                    wtx.tx_node.txid,
+                    (wtx.tx_node.tx.clone(), wtx.chain_position),
+                )
+            })
+            .collect::<BTreeMap<Txid, (Arc<Transaction>, ChainPosition<ConfirmationBlockTime>)>>();
+
+        Ok(wallet_events(
+            self,
+            chain_tip1,
+            chain_tip2,
+            wallet_txs1,
+            wallet_txs2,
+        ))
     }
 
     /// Get a reference of the staged [`ChangeSet`] that is yet to be committed (if any).
