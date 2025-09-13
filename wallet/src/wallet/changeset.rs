@@ -11,7 +11,7 @@ type IndexedTxGraphChangeSet =
 ///
 /// ## Definition
 ///
-/// The change set is responsible for transmiting data between the persistent storage layer and the
+/// The change set is responsible for transmitting data between the persistent storage layer and the
 /// core library components. Specifically, it serves two primary functions:
 ///
 /// 1) Recording incremental changes to the in-memory representation that need to be persisted to
@@ -46,7 +46,7 @@ type IndexedTxGraphChangeSet =
 /// at any point thereafter.
 ///
 /// Other fields of the change set are not required to be non-empty, that is they may be empty even
-/// in the aggregate. However in practice they should contain the data needed to recover a wallet
+/// in the aggregate. However, in practice they should contain the data needed to recover a wallet
 /// state between sessions. These include:
 /// * [`tx_graph`](Self::tx_graph)
 /// * [`indexer`](Self::indexer)
