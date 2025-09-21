@@ -2372,6 +2372,78 @@ impl Wallet {
     /// After applying updates you should process the events in your app before persisting the
     /// staged wallet changes. For an example of how to persist staged wallet changes see
     /// [`Wallet::reveal_next_address`].
+    ///
+    /// ```rust,no_run
+    /// # use bitcoin::*;
+    /// # use bdk_wallet::*;
+    /// use bdk_wallet::event::WalletEvent;
+    /// # let wallet_update = Update::default();
+    /// # let mut wallet = doctest_wallet!();
+    /// let events = wallet.apply_update_events(wallet_update)?;
+    /// // Handle wallet relevant events from this update.
+    /// events.iter().for_each(|event| {
+    ///     match event {
+    ///         // The chain tip changed.
+    ///         WalletEvent::ChainTipChanged { old_tip, new_tip } => {
+    ///             todo!() // handle event
+    ///         }
+    ///         // An unconfirmed tx is now confirmed in a block.
+    ///         WalletEvent::TxConfirmed {
+    ///             txid,
+    ///             tx,
+    ///             block_time,
+    ///             old_block_time: None,
+    ///         } => {
+    ///             todo!() // handle event
+    ///         }
+    ///         // A confirmed tx is now confirmed in a new block (reorg).
+    ///         WalletEvent::TxConfirmed {
+    ///             txid,
+    ///             tx,
+    ///             block_time,
+    ///             old_block_time: Some(old_block_time),
+    ///         } => {
+    ///             todo!() // handle event
+    ///         }
+    ///         // A new unconfirmed tx was seen in the mempool.
+    ///         WalletEvent::TxUnconfirmed {
+    ///             txid,
+    ///             tx,
+    ///             old_block_time: None,
+    ///         } => {
+    ///             todo!() // handle event
+    ///         }
+    ///         // A previously confirmed tx in now unconfirmed in the mempool (reorg).
+    ///         WalletEvent::TxUnconfirmed {
+    ///             txid,
+    ///             tx,
+    ///             old_block_time: Some(old_block_time),
+    ///         } => {
+    ///             todo!() // handle event
+    ///         }
+    ///         // An unconfirmed tx was replaced in the mempool (RBF or double spent input).
+    ///         WalletEvent::TxReplaced {
+    ///             txid,
+    ///             tx,
+    ///             conflicts,
+    ///         } => {
+    ///             todo!() // handle event
+    ///         }
+    ///         // An unconfirmed tx was dropped from the mempool (fee too low).
+    ///         WalletEvent::TxDropped { txid, tx } => {
+    ///             todo!() // handle event
+    ///         }
+    ///         _ => {
+    ///             // unexpected event, do nothing
+    ///         }
+    ///     }
+    ///     // take staged wallet changes
+    ///     let staged = wallet.take_staged();
+    ///     // persist staged changes
+    /// });
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
+    /// [`TxBuilder`]: crate::TxBuilder
     pub fn apply_update_events(
         &mut self,
         update: impl Into<Update>,
