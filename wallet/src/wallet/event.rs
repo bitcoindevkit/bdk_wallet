@@ -10,7 +10,8 @@ use chain::{BlockId, ChainPosition, ConfirmationBlockTime};
 
 /// Events representing changes to wallet transactions.
 ///
-/// Returned after calling [`Wallet::apply_update`](crate::wallet::Wallet::apply_update).
+/// Returned after calling
+/// [`Wallet::apply_update_events`](crate::wallet::Wallet::apply_update_events).
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum WalletEvent {
