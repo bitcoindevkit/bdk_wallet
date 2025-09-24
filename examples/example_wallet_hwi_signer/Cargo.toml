@@ -1,0 +1,15 @@
+[package]
+name = "example_wallet_hwi_signer"
+version = "0.1.0"
+edition = "2021"
+authors.workspace = true
+
+[features]
+simulator = []
+
+[dependencies]
+bdk_wallet = { path = "../../wallet", features = ["file_store", "test-utils"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros"] }
+# Once the next release happens on crates.io we can update here
+async-hwi = { git = "https://github.com/wizardsardine/async-hwi", branch = "master"}
+anyhow = "1"
