@@ -38,6 +38,8 @@ pub mod persist_test_utils;
 mod types;
 mod wallet;
 
+pub mod multi_keychain;
+
 pub(crate) use bdk_chain::collections;
 #[cfg(feature = "rusqlite")]
 pub use bdk_chain::rusqlite;
