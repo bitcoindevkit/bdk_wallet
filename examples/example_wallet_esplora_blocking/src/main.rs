@@ -1,4 +1,5 @@
 use bdk_esplora::{esplora_client, EsploraExt};
+use bdk_wallet::miniscript::Descriptor;
 use bdk_wallet::rusqlite::Connection;
 use bdk_wallet::{
     bitcoin::{Amount, FeeRate, Network},
@@ -80,7 +81,19 @@ fn main() -> Result<(), anyhow::Error> {
     tx_builder.fee_rate(target_fee_rate);
 
     let mut psbt = tx_builder.finish()?;
-    let finalized = wallet.sign(&mut psbt, SignOptions::default())?;
+
+    let secp = bdk_wallet::bitcoin::key::Secp256k1::new();
+
+    let (_, external_keymap) = Descriptor::parse_descriptor(&secp, EXTERNAL_DESC)?;
+    let (_, internal_keymap) = Descriptor::parse_descriptor(&secp, INTERNAL_DESC)?;
+    let key_map = external_keymap.into_iter().chain(internal_keymap).collect();
+
+    // It's using the signer implementation from `test_utils`, you should implement your own signing
+    // implementation for `KeyMap`.
+    let signer = bdk_wallet::test_utils::SignerWrapper::new(key_map);
+    let _ = psbt.sign(&signer, &secp);
+
+    let finalized = wallet.finalize_psbt(&mut psbt, SignOptions::default())?;
     assert!(finalized);
     let original_fee = psbt.fee_amount().unwrap();
     let tx_feerate = psbt.fee_rate().unwrap();
@@ -115,7 +128,8 @@ fn main() -> Result<(), anyhow::Error> {
     let mut builder = wallet.build_fee_bump(txid).unwrap();
     builder.fee_rate(feerate);
     let mut new_psbt = builder.finish().unwrap();
-    let finalize_tx = wallet.sign(&mut new_psbt, SignOptions::default())?;
+    let _ = new_psbt.sign(&signer, &secp);
+    let finalize_tx = wallet.finalize_psbt(&mut new_psbt, SignOptions::default())?;
     assert!(finalize_tx);
     let new_fee = new_psbt.fee_amount().unwrap();
     let bumped_tx = new_psbt.extract_tx()?;
