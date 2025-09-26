@@ -13,7 +13,8 @@
 //! of descriptors. It ensures descriptors are usable together, consistent with a given network,
 //! and will work with a BDK `Wallet`.
 
-mod changeset;
+/// Contains `Changeset` corresponding to `KeyRing`.
+pub mod changeset;
 
 use crate::descriptor::IntoWalletDescriptor;
 use crate::keyring::changeset::ChangeSet;
