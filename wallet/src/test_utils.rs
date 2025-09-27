@@ -12,127 +12,127 @@ use bitcoin::{
 
 use crate::{KeychainKind, Update, Wallet};
 
-/// Return a fake wallet that appears to be funded for testing.
-///
-/// The funded wallet contains a tx with a 76_000 sats input and two outputs, one spending 25_000
-/// to a foreign address and one returning 50_000 back to the wallet. The remaining 1000
-/// sats are the transaction fee.
-pub fn get_funded_wallet(descriptor: &str, change_descriptor: &str) -> (Wallet, Txid) {
-    new_funded_wallet(descriptor, Some(change_descriptor))
-}
+// /// Return a fake wallet that appears to be funded for testing.
+// ///
+// /// The funded wallet contains a tx with a 76_000 sats input and two outputs, one spending 25_000
+// /// to a foreign address and one returning 50_000 back to the wallet. The remaining 1000
+// /// sats are the transaction fee.
+// pub fn get_funded_wallet(descriptor: &str, change_descriptor: &str) -> (Wallet, Txid) {
+//     new_funded_wallet(descriptor, Some(change_descriptor))
+// }
 
-fn new_funded_wallet(descriptor: &str, change_descriptor: Option<&str>) -> (Wallet, Txid) {
-    let params = if let Some(change_desc) = change_descriptor {
-        Wallet::create(descriptor.to_string(), change_desc.to_string())
-    } else {
-        Wallet::create_single(descriptor.to_string())
-    };
+// fn new_funded_wallet(descriptor: &str, change_descriptor: Option<&str>) -> (Wallet, Txid) {
+//     let params = if let Some(change_desc) = change_descriptor {
+//         Wallet::create(descriptor.to_string(), change_desc.to_string())
+//     } else {
+//         Wallet::create_single(descriptor.to_string())
+//     };
 
-    let mut wallet = params
-        .network(Network::Regtest)
-        .create_wallet_no_persist()
-        .expect("descriptors must be valid");
+//     let mut wallet = params
+//         .network(Network::Regtest)
+//         .create_wallet_no_persist()
+//         .expect("descriptors must be valid");
 
-    let receive_address = wallet.peek_address(KeychainKind::External, 0).address;
-    let sendto_address = Address::from_str("bcrt1q3qtze4ys45tgdvguj66zrk4fu6hq3a3v9pfly5")
-        .expect("address")
-        .require_network(Network::Regtest)
-        .unwrap();
+//     let receive_address = wallet.peek_address(KeychainKind::External, 0).address;
+//     let sendto_address = Address::from_str("bcrt1q3qtze4ys45tgdvguj66zrk4fu6hq3a3v9pfly5")
+//         .expect("address")
+//         .require_network(Network::Regtest)
+//         .unwrap();
 
-    let tx0 = Transaction {
-        output: vec![TxOut {
-            value: Amount::from_sat(76_000),
-            script_pubkey: receive_address.script_pubkey(),
-        }],
-        ..new_tx(0)
-    };
+//     let tx0 = Transaction {
+//         output: vec![TxOut {
+//             value: Amount::from_sat(76_000),
+//             script_pubkey: receive_address.script_pubkey(),
+//         }],
+//         ..new_tx(0)
+//     };
 
-    let tx1 = Transaction {
-        input: vec![TxIn {
-            previous_output: OutPoint {
-                txid: tx0.compute_txid(),
-                vout: 0,
-            },
-            ..Default::default()
-        }],
-        output: vec![
-            TxOut {
-                value: Amount::from_sat(50_000),
-                script_pubkey: receive_address.script_pubkey(),
-            },
-            TxOut {
-                value: Amount::from_sat(25_000),
-                script_pubkey: sendto_address.script_pubkey(),
-            },
-        ],
-        ..new_tx(0)
-    };
+//     let tx1 = Transaction {
+//         input: vec![TxIn {
+//             previous_output: OutPoint {
+//                 txid: tx0.compute_txid(),
+//                 vout: 0,
+//             },
+//             ..Default::default()
+//         }],
+//         output: vec![
+//             TxOut {
+//                 value: Amount::from_sat(50_000),
+//                 script_pubkey: receive_address.script_pubkey(),
+//             },
+//             TxOut {
+//                 value: Amount::from_sat(25_000),
+//                 script_pubkey: sendto_address.script_pubkey(),
+//             },
+//         ],
+//         ..new_tx(0)
+//     };
 
-    insert_checkpoint(
-        &mut wallet,
-        BlockId {
-            height: 42,
-            hash: BlockHash::all_zeros(),
-        },
-    );
-    insert_checkpoint(
-        &mut wallet,
-        BlockId {
-            height: 1_000,
-            hash: BlockHash::all_zeros(),
-        },
-    );
-    insert_checkpoint(
-        &mut wallet,
-        BlockId {
-            height: 2_000,
-            hash: BlockHash::all_zeros(),
-        },
-    );
+//     insert_checkpoint(
+//         &mut wallet,
+//         BlockId {
+//             height: 42,
+//             hash: BlockHash::all_zeros(),
+//         },
+//     );
+//     insert_checkpoint(
+//         &mut wallet,
+//         BlockId {
+//             height: 1_000,
+//             hash: BlockHash::all_zeros(),
+//         },
+//     );
+//     insert_checkpoint(
+//         &mut wallet,
+//         BlockId {
+//             height: 2_000,
+//             hash: BlockHash::all_zeros(),
+//         },
+//     );
 
-    insert_tx(&mut wallet, tx0.clone());
-    insert_anchor(
-        &mut wallet,
-        tx0.compute_txid(),
-        ConfirmationBlockTime {
-            block_id: BlockId {
-                height: 1_000,
-                hash: BlockHash::all_zeros(),
-            },
-            confirmation_time: 100,
-        },
-    );
+//     insert_tx(&mut wallet, tx0.clone());
+//     insert_anchor(
+//         &mut wallet,
+//         tx0.compute_txid(),
+//         ConfirmationBlockTime {
+//             block_id: BlockId {
+//                 height: 1_000,
+//                 hash: BlockHash::all_zeros(),
+//             },
+//             confirmation_time: 100,
+//         },
+//     );
 
-    insert_tx(&mut wallet, tx1.clone());
-    insert_anchor(
-        &mut wallet,
-        tx1.compute_txid(),
-        ConfirmationBlockTime {
-            block_id: BlockId {
-                height: 2_000,
-                hash: BlockHash::all_zeros(),
-            },
-            confirmation_time: 200,
-        },
-    );
+//     insert_tx(&mut wallet, tx1.clone());
+//     insert_anchor(
+//         &mut wallet,
+//         tx1.compute_txid(),
+//         ConfirmationBlockTime {
+//             block_id: BlockId {
+//                 height: 2_000,
+//                 hash: BlockHash::all_zeros(),
+//             },
+//             confirmation_time: 200,
+//         },
+//     );
 
-    (wallet, tx1.compute_txid())
-}
+//     (wallet, tx1.compute_txid())
+// }
 
-/// Return a fake wallet that appears to be funded for testing.
-///
-/// The funded wallet contains a tx with a 76_000 sats input and two outputs, one spending 25_000
-/// to a foreign address and one returning 50_000 back to the wallet. The remaining 1000
-/// sats are the transaction fee.
-pub fn get_funded_wallet_single(descriptor: &str) -> (Wallet, Txid) {
-    new_funded_wallet(descriptor, None)
-}
+// /// Return a fake wallet that appears to be funded for testing.
+// ///
+// /// The funded wallet contains a tx with a 76_000 sats input and two outputs, one spending 25_000
+// /// to a foreign address and one returning 50_000 back to the wallet. The remaining 1000
+// /// sats are the transaction fee.
+// pub fn get_funded_wallet_single(descriptor: &str) -> (Wallet, Txid) {
+//     new_funded_wallet(descriptor, None)
+// }
 
-/// Get funded segwit wallet
-pub fn get_funded_wallet_wpkh() -> (Wallet, Txid) {
-    let (desc, change_desc) = get_test_wpkh_and_change_desc();
-    get_funded_wallet(desc, change_desc)
-}
+// /// Get funded segwit wallet
+// pub fn get_funded_wallet_wpkh() -> (Wallet, Txid) {
+//     let (desc, change_desc) = get_test_wpkh_and_change_desc();
+//     get_funded_wallet(desc, change_desc)
+// }
 
 /// `pkh` single key descriptor
 pub fn get_test_pkh() -> &'static str {
@@ -250,112 +250,112 @@ impl From<ConfirmationBlockTime> for ReceiveTo {
     }
 }
 
-/// Receive a tx output with the given value in the latest block
-pub fn receive_output_in_latest_block(wallet: &mut Wallet, value: Amount) -> OutPoint {
-    let latest_cp = wallet.latest_checkpoint();
-    let height = latest_cp.height();
-    assert!(height > 0, "cannot receive tx into genesis block");
-    receive_output(
-        wallet,
-        value,
-        ConfirmationBlockTime {
-            block_id: latest_cp.block_id(),
-            confirmation_time: 0,
-        },
-    )
-}
+// /// Receive a tx output with the given value in the latest block
+// pub fn receive_output_in_latest_block(wallet: &mut Wallet, value: Amount) -> OutPoint {
+//     let latest_cp = wallet.latest_checkpoint();
+//     let height = latest_cp.height();
+//     assert!(height > 0, "cannot receive tx into genesis block");
+//     receive_output(
+//         wallet,
+//         value,
+//         ConfirmationBlockTime {
+//             block_id: latest_cp.block_id(),
+//             confirmation_time: 0,
+//         },
+//     )
+// }
 
-/// Receive a tx output with the given value and chain position
-pub fn receive_output(
-    wallet: &mut Wallet,
-    value: Amount,
-    receive_to: impl Into<ReceiveTo>,
-) -> OutPoint {
-    let addr = wallet.next_unused_address(KeychainKind::External).address;
-    receive_output_to_address(wallet, addr, value, receive_to)
-}
+// /// Receive a tx output with the given value and chain position
+// pub fn receive_output(
+//     wallet: &mut Wallet,
+//     value: Amount,
+//     receive_to: impl Into<ReceiveTo>,
+// ) -> OutPoint {
+//     let addr = wallet.next_unused_address(KeychainKind::External).address;
+//     receive_output_to_address(wallet, addr, value, receive_to)
+// }
 
-/// Receive a tx output to an address with the given value and chain position
-pub fn receive_output_to_address(
-    wallet: &mut Wallet,
-    addr: Address,
-    value: Amount,
-    receive_to: impl Into<ReceiveTo>,
-) -> OutPoint {
-    let tx = Transaction {
-        version: transaction::Version::ONE,
-        lock_time: absolute::LockTime::ZERO,
-        input: vec![],
-        output: vec![TxOut {
-            script_pubkey: addr.script_pubkey(),
-            value,
-        }],
-    };
+// /// Receive a tx output to an address with the given value and chain position
+// pub fn receive_output_to_address(
+//     wallet: &mut Wallet,
+//     addr: Address,
+//     value: Amount,
+//     receive_to: impl Into<ReceiveTo>,
+// ) -> OutPoint {
+//     let tx = Transaction {
+//         version: transaction::Version::ONE,
+//         lock_time: absolute::LockTime::ZERO,
+//         input: vec![],
+//         output: vec![TxOut {
+//             script_pubkey: addr.script_pubkey(),
+//             value,
+//         }],
+//     };
 
-    let txid = tx.compute_txid();
-    insert_tx(wallet, tx);
+//     let txid = tx.compute_txid();
+//     insert_tx(wallet, tx);
 
-    match receive_to.into() {
-        ReceiveTo::Block(anchor) => insert_anchor(wallet, txid, anchor),
-        ReceiveTo::Mempool(last_seen) => insert_seen_at(wallet, txid, last_seen),
-    }
+//     match receive_to.into() {
+//         ReceiveTo::Block(anchor) => insert_anchor(wallet, txid, anchor),
+//         ReceiveTo::Mempool(last_seen) => insert_seen_at(wallet, txid, last_seen),
+//     }
 
-    OutPoint { txid, vout: 0 }
-}
+//     OutPoint { txid, vout: 0 }
+// }
 
-/// Insert a checkpoint into the wallet. This can be used to extend the wallet's local chain
-/// or to insert a block that did not exist previously. Note that if replacing a block with
-/// a different one at the same height, then all later blocks are evicted as well.
-pub fn insert_checkpoint(wallet: &mut Wallet, block: BlockId) {
-    let mut cp = wallet.latest_checkpoint();
-    cp = cp.insert(block);
-    wallet
-        .apply_update(Update {
-            chain: Some(cp),
-            ..Default::default()
-        })
-        .unwrap();
-}
+// /// Insert a checkpoint into the wallet. This can be used to extend the wallet's local chain
+// /// or to insert a block that did not exist previously. Note that if replacing a block with
+// /// a different one at the same height, then all later blocks are evicted as well.
+// pub fn insert_checkpoint(wallet: &mut Wallet, block: BlockId) {
+//     let mut cp = wallet.latest_checkpoint();
+//     cp = cp.insert(block);
+//     wallet
+//         .apply_update(Update {
+//             chain: Some(cp),
+//             ..Default::default()
+//         })
+//         .unwrap();
+// }
 
-/// Inserts a transaction into the local view, assuming it is currently present in the mempool.
-///
-/// This can be used, for example, to track a transaction immediately after it is broadcast.
-pub fn insert_tx(wallet: &mut Wallet, tx: Transaction) {
-    let txid = tx.compute_txid();
-    let seen_at = std::time::UNIX_EPOCH.elapsed().unwrap().as_secs();
-    let mut tx_update = TxUpdate::default();
-    tx_update.txs = vec![Arc::new(tx)];
-    tx_update.seen_ats = [(txid, seen_at)].into();
-    wallet
-        .apply_update(Update {
-            tx_update,
-            ..Default::default()
-        })
-        .expect("failed to apply update");
-}
+// /// Inserts a transaction into the local view, assuming it is currently present in the mempool.
+// ///
+// /// This can be used, for example, to track a transaction immediately after it is broadcast.
+// pub fn insert_tx(wallet: &mut Wallet, tx: Transaction) {
+//     let txid = tx.compute_txid();
+//     let seen_at = std::time::UNIX_EPOCH.elapsed().unwrap().as_secs();
+//     let mut tx_update = TxUpdate::default();
+//     tx_update.txs = vec![Arc::new(tx)];
+//     tx_update.seen_ats = [(txid, seen_at)].into();
+//     wallet
+//         .apply_update(Update {
+//             tx_update,
+//             ..Default::default()
+//         })
+//         .expect("failed to apply update");
+// }
 
-/// Simulates confirming a tx with `txid` by applying an update to the wallet containing
-/// the given `anchor`. Note: to be considered confirmed the anchor block must exist in
-/// the current active chain.
-pub fn insert_anchor(wallet: &mut Wallet, txid: Txid, anchor: ConfirmationBlockTime) {
-    let mut tx_update = TxUpdate::default();
-    tx_update.anchors = [(anchor, txid)].into();
-    wallet
-        .apply_update(Update {
-            tx_update,
-            ..Default::default()
-        })
-        .expect("failed to apply update");
-}
+// /// Simulates confirming a tx with `txid` by applying an update to the wallet containing
+// /// the given `anchor`. Note: to be considered confirmed the anchor block must exist in
+// /// the current active chain.
+// pub fn insert_anchor(wallet: &mut Wallet, txid: Txid, anchor: ConfirmationBlockTime) {
+//     let mut tx_update = TxUpdate::default();
+//     tx_update.anchors = [(anchor, txid)].into();
+//     wallet
+//         .apply_update(Update {
+//             tx_update,
+//             ..Default::default()
+//         })
+//         .expect("failed to apply update");
+// }
 
-/// Marks the given `txid` seen as unconfirmed at `seen_at`
-pub fn insert_seen_at(wallet: &mut Wallet, txid: Txid, seen_at: u64) {
-    let mut tx_update = TxUpdate::default();
-    tx_update.seen_ats = [(txid, seen_at)].into();
-    wallet
-        .apply_update(Update {
-            tx_update,
-            ..Default::default()
-        })
-        .expect("failed to apply update");
-}
+// /// Marks the given `txid` seen as unconfirmed at `seen_at`
+// pub fn insert_seen_at(wallet: &mut Wallet, txid: Txid, seen_at: u64) {
+//     let mut tx_update = TxUpdate::default();
+//     tx_update.seen_ats = [(txid, seen_at)].into();
+//     wallet
+//         .apply_update(Update {
+//             tx_update,
+//             ..Default::default()
+//         })
+//         .expect("failed to apply update");
+// }

@@ -101,66 +101,66 @@ fn remove_checksum(s: String) -> String {
 }
 
 impl FullyNodedExport {
-    /// Export a wallet
-    ///
-    /// This function returns an error if it determines that the `wallet`'s descriptor(s) are not
-    /// supported by Bitcoin Core or don't follow the standard derivation paths defined by BIP44
-    /// and others.
-    ///
-    /// If `include_blockheight` is `true`, this function will look into the `wallet`'s database
-    /// for the oldest transaction it knows and use that as the earliest block to rescan.
-    ///
-    /// If the database is empty or `include_blockheight` is false, the `blockheight` field
-    /// returned will be `0`.
-    pub fn export_wallet(
-        wallet: &Wallet,
-        label: &str,
-        include_blockheight: bool,
-    ) -> Result<Self, &'static str> {
-        let descriptor = wallet
-            .public_descriptor(KeychainKind::External)
-            .to_string_with_secret(
-                &wallet
-                    .get_signers(KeychainKind::External)
-                    .as_key_map(wallet.secp_ctx()),
-            );
-        let descriptor = remove_checksum(descriptor);
-        Self::is_compatible_with_core(&descriptor)?;
+    // /// Export a wallet
+    // ///
+    // /// This function returns an error if it determines that the `wallet`'s descriptor(s) are not
+    // /// supported by Bitcoin Core or don't follow the standard derivation paths defined by BIP44
+    // /// and others.
+    // ///
+    // /// If `include_blockheight` is `true`, this function will look into the `wallet`'s database
+    // /// for the oldest transaction it knows and use that as the earliest block to rescan.
+    // ///
+    // /// If the database is empty or `include_blockheight` is false, the `blockheight` field
+    // /// returned will be `0`.
+    // pub fn export_wallet(
+    //     wallet: &Wallet,
+    //     label: &str,
+    //     include_blockheight: bool,
+    // ) -> Result<Self, &'static str> {
+    //     let descriptor = wallet
+    //         .public_descriptor(KeychainKind::External)
+    //         .to_string_with_secret(
+    //             &wallet
+    //                 .get_signers(KeychainKind::External)
+    //                 .as_key_map(wallet.secp_ctx()),
+    //         );
+    //     let descriptor = remove_checksum(descriptor);
+    //     Self::is_compatible_with_core(&descriptor)?;
 
-        let blockheight = if include_blockheight {
-            wallet.transactions().next().map_or(0, |canonical_tx| {
-                canonical_tx
-                    .chain_position
-                    .confirmation_height_upper_bound()
-                    .unwrap_or(0)
-            })
-        } else {
-            0
-        };
+    //     let blockheight = if include_blockheight {
+    //         wallet.transactions().next().map_or(0, |canonical_tx| {
+    //             canonical_tx
+    //                 .chain_position
+    //                 .confirmation_height_upper_bound()
+    //                 .unwrap_or(0)
+    //         })
+    //     } else {
+    //         0
+    //     };
 
-        let export = FullyNodedExport {
-            descriptor,
-            label: label.into(),
-            blockheight,
-        };
+    //     let export = FullyNodedExport {
+    //         descriptor,
+    //         label: label.into(),
+    //         blockheight,
+    //     };
 
-        let change_descriptor = {
-            let descriptor = wallet
-                .public_descriptor(KeychainKind::Internal)
-                .to_string_with_secret(
-                    &wallet
-                        .get_signers(KeychainKind::Internal)
-                        .as_key_map(wallet.secp_ctx()),
-                );
-            Some(remove_checksum(descriptor))
-        };
+    //     let change_descriptor = {
+    //         let descriptor = wallet
+    //             .public_descriptor(KeychainKind::Internal)
+    //             .to_string_with_secret(
+    //                 &wallet
+    //                     .get_signers(KeychainKind::Internal)
+    //                     .as_key_map(wallet.secp_ctx()),
+    //             );
+    //         Some(remove_checksum(descriptor))
+    //     };
 
-        if export.change_descriptor() != change_descriptor {
-            return Err("Incompatible change descriptor");
-        }
+    //     if export.change_descriptor() != change_descriptor {
+    //         return Err("Incompatible change descriptor");
+    //     }
 
-        Ok(export)
-    }
+    //     Ok(export)
+    // }
 
     fn is_compatible_with_core(descriptor: &str) -> Result<(), &'static str> {
         fn check_ms<Ctx: ScriptContext>(
@@ -224,106 +224,136 @@ mod test {
     use crate::test_utils::*;
     use crate::Wallet;
 
-    fn get_test_wallet(descriptor: &str, change_descriptor: &str, network: Network) -> Wallet {
-        let mut wallet = Wallet::create(descriptor.to_string(), change_descriptor.to_string())
-            .network(network)
-            .create_wallet_no_persist()
-            .expect("must create wallet");
-        let block = BlockId {
-            height: 5000,
-            hash: BlockHash::all_zeros(),
-        };
-        insert_checkpoint(&mut wallet, block);
-        receive_output_in_latest_block(&mut wallet, Amount::from_sat(10_000));
+    // fn get_test_wallet(descriptor: &str, change_descriptor: &str, network: Network) -> Wallet {
+    //     let mut wallet = Wallet::create(descriptor.to_string(), change_descriptor.to_string())
+    //         .network(network)
+    //         .create_wallet_no_persist()
+    //         .expect("must create wallet");
+    //     let block = BlockId {
+    //         height: 5000,
+    //         hash: BlockHash::all_zeros(),
+    //     };
+    //     insert_checkpoint(&mut wallet, block);
+    //     receive_output_in_latest_block(&mut wallet, Amount::from_sat(10_000));
 
-        wallet
-    }
+    //     wallet
+    // }
 
-    #[test]
-    fn test_export_bip44() {
-        let descriptor = "wpkh(xprv9s21ZrQH143K4CTb63EaMxja1YiTnSEWKMbn23uoEnAzxjdUJRQkazCAtzxGm4LSoTSVTptoV9RbchnKPW9HxKtZumdyxyikZFDLhogJ5Uj/44'/0'/0'/0/*)";
-        let change_descriptor = "wpkh(xprv9s21ZrQH143K4CTb63EaMxja1YiTnSEWKMbn23uoEnAzxjdUJRQkazCAtzxGm4LSoTSVTptoV9RbchnKPW9HxKtZumdyxyikZFDLhogJ5Uj/44'/0'/0'/1/*)";
+    // #[test]
+    // fn test_export_bip44() {
+    //     let descriptor =
+    // "wpkh(xprv9s21ZrQH143K4CTb63EaMxja1YiTnSEWKMbn23uoEnAzxjdUJRQkazCAtzxGm4LSoTSVTptoV9RbchnKPW9HxKtZumdyxyikZFDLhogJ5Uj/
+    // 44'/0'/0'/0/*)";     let change_descriptor =
+    // "wpkh(xprv9s21ZrQH143K4CTb63EaMxja1YiTnSEWKMbn23uoEnAzxjdUJRQkazCAtzxGm4LSoTSVTptoV9RbchnKPW9HxKtZumdyxyikZFDLhogJ5Uj/
+    // 44'/0'/0'/1/*)";
 
-        let wallet = get_test_wallet(descriptor, change_descriptor, Network::Bitcoin);
-        let export = FullyNodedExport::export_wallet(&wallet, "Test Label", true).unwrap();
+    //     let wallet = get_test_wallet(descriptor, change_descriptor, Network::Bitcoin);
+    //     let export = FullyNodedExport::export_wallet(&wallet, "Test Label", true).unwrap();
 
-        assert_eq!(export.descriptor(), descriptor);
-        assert_eq!(export.change_descriptor(), Some(change_descriptor.into()));
-        assert_eq!(export.blockheight, 5000);
-        assert_eq!(export.label, "Test Label");
-    }
+    //     assert_eq!(export.descriptor(), descriptor);
+    //     assert_eq!(export.change_descriptor(), Some(change_descriptor.into()));
+    //     assert_eq!(export.blockheight, 5000);
+    //     assert_eq!(export.label, "Test Label");
+    // }
 
-    #[test]
-    #[should_panic(expected = "Incompatible change descriptor")]
-    fn test_export_no_change() {
-        // The wallet's change descriptor has no wildcard. It should be impossible to
-        // export, because exporting this kind of external descriptor normally implies the
-        // existence of a compatible internal descriptor
+    // #[test]
+    // #[should_panic(expected = "Incompatible change descriptor")]
+    // fn test_export_no_change() {
+    //     // The wallet's change descriptor has no wildcard. It should be impossible to
+    //     // export, because exporting this kind of external descriptor normally implies the
+    //     // existence of a compatible internal descriptor
 
-        let descriptor = "wpkh(xprv9s21ZrQH143K4CTb63EaMxja1YiTnSEWKMbn23uoEnAzxjdUJRQkazCAtzxGm4LSoTSVTptoV9RbchnKPW9HxKtZumdyxyikZFDLhogJ5Uj/44'/0'/0'/0/*)";
-        let change_descriptor = "wpkh(xprv9s21ZrQH143K4CTb63EaMxja1YiTnSEWKMbn23uoEnAzxjdUJRQkazCAtzxGm4LSoTSVTptoV9RbchnKPW9HxKtZumdyxyikZFDLhogJ5Uj/44'/0'/0'/1/0)";
+    //     let descriptor =
+    // "wpkh(xprv9s21ZrQH143K4CTb63EaMxja1YiTnSEWKMbn23uoEnAzxjdUJRQkazCAtzxGm4LSoTSVTptoV9RbchnKPW9HxKtZumdyxyikZFDLhogJ5Uj/
+    // 44'/0'/0'/0/*)";     let change_descriptor =
+    // "wpkh(xprv9s21ZrQH143K4CTb63EaMxja1YiTnSEWKMbn23uoEnAzxjdUJRQkazCAtzxGm4LSoTSVTptoV9RbchnKPW9HxKtZumdyxyikZFDLhogJ5Uj/
+    // 44'/0'/0'/1/0)";
 
-        let wallet = get_test_wallet(descriptor, change_descriptor, Network::Bitcoin);
-        FullyNodedExport::export_wallet(&wallet, "Test Label", true).unwrap();
-    }
+    //     let wallet = get_test_wallet(descriptor, change_descriptor, Network::Bitcoin);
+    //     FullyNodedExport::export_wallet(&wallet, "Test Label", true).unwrap();
+    // }
 
-    #[test]
-    #[should_panic(expected = "Incompatible change descriptor")]
-    fn test_export_incompatible_change() {
-        // This wallet has a change descriptor, but the derivation path is not in the "standard"
-        // bip44/49/etc format
+    // #[test]
+    // #[should_panic(expected = "Incompatible change descriptor")]
+    // fn test_export_incompatible_change() {
+    //     // This wallet has a change descriptor, but the derivation path is not in the "standard"
+    //     // bip44/49/etc format
 
-        let descriptor = "wpkh(xprv9s21ZrQH143K4CTb63EaMxja1YiTnSEWKMbn23uoEnAzxjdUJRQkazCAtzxGm4LSoTSVTptoV9RbchnKPW9HxKtZumdyxyikZFDLhogJ5Uj/44'/0'/0'/0/*)";
-        let change_descriptor = "wpkh(xprv9s21ZrQH143K4CTb63EaMxja1YiTnSEWKMbn23uoEnAzxjdUJRQkazCAtzxGm4LSoTSVTptoV9RbchnKPW9HxKtZumdyxyikZFDLhogJ5Uj/50'/0'/1/*)";
+    //     let descriptor =
+    // "wpkh(xprv9s21ZrQH143K4CTb63EaMxja1YiTnSEWKMbn23uoEnAzxjdUJRQkazCAtzxGm4LSoTSVTptoV9RbchnKPW9HxKtZumdyxyikZFDLhogJ5Uj/
+    // 44'/0'/0'/0/*)";     let change_descriptor =
+    // "wpkh(xprv9s21ZrQH143K4CTb63EaMxja1YiTnSEWKMbn23uoEnAzxjdUJRQkazCAtzxGm4LSoTSVTptoV9RbchnKPW9HxKtZumdyxyikZFDLhogJ5Uj/
+    // 50'/0'/1/*)";
 
-        let wallet = get_test_wallet(descriptor, change_descriptor, Network::Bitcoin);
-        FullyNodedExport::export_wallet(&wallet, "Test Label", true).unwrap();
-    }
+    //     let wallet = get_test_wallet(descriptor, change_descriptor, Network::Bitcoin);
+    //     FullyNodedExport::export_wallet(&wallet, "Test Label", true).unwrap();
+    // }
 
-    #[test]
-    fn test_export_multi() {
-        let descriptor = "wsh(multi(2,\
-                                [73756c7f/48'/0'/0'/2']tpubDCKxNyM3bLgbEX13Mcd8mYxbVg9ajDkWXMh29hMWBurKfVmBfWAM96QVP3zaUcN51HvkZ3ar4VwP82kC8JZhhux8vFQoJintSpVBwpFvyU3/0/*,\
-                                [f9f62194/48'/0'/0'/2']tpubDDp3ZSH1yCwusRppH7zgSxq2t1VEUyXSeEp8E5aFS8m43MknUjiF1bSLo3CGWAxbDyhF1XowA5ukPzyJZjznYk3kYi6oe7QxtX2euvKWsk4/0/*,\
-                                [c98b1535/48'/0'/0'/2']tpubDCDi5W4sP6zSnzJeowy8rQDVhBdRARaPhK1axABi8V1661wEPeanpEXj4ZLAUEoikVtoWcyK26TKKJSecSfeKxwHCcRrge9k1ybuiL71z4a/0/*\
-                          ))";
-        let change_descriptor = "wsh(multi(2,\
-                                       [73756c7f/48'/0'/0'/2']tpubDCKxNyM3bLgbEX13Mcd8mYxbVg9ajDkWXMh29hMWBurKfVmBfWAM96QVP3zaUcN51HvkZ3ar4VwP82kC8JZhhux8vFQoJintSpVBwpFvyU3/1/*,\
-                                       [f9f62194/48'/0'/0'/2']tpubDDp3ZSH1yCwusRppH7zgSxq2t1VEUyXSeEp8E5aFS8m43MknUjiF1bSLo3CGWAxbDyhF1XowA5ukPzyJZjznYk3kYi6oe7QxtX2euvKWsk4/1/*,\
-                                       [c98b1535/48'/0'/0'/2']tpubDCDi5W4sP6zSnzJeowy8rQDVhBdRARaPhK1axABi8V1661wEPeanpEXj4ZLAUEoikVtoWcyK26TKKJSecSfeKxwHCcRrge9k1ybuiL71z4a/1/*\
-                                 ))";
+    // #[test]
+    // fn test_export_multi() {
+    //     let descriptor = "wsh(multi(2,\
+    //                             
+    // [73756c7f/48'/0'/0'/2'
+    // ]tpubDCKxNyM3bLgbEX13Mcd8mYxbVg9ajDkWXMh29hMWBurKfVmBfWAM96QVP3zaUcN51HvkZ3ar4VwP82kC8JZhhux8vFQoJintSpVBwpFvyU3/
+    // 0/*,\                             
+    // [f9f62194/48'/0'/0'/2'
+    // ]tpubDDp3ZSH1yCwusRppH7zgSxq2t1VEUyXSeEp8E5aFS8m43MknUjiF1bSLo3CGWAxbDyhF1XowA5ukPzyJZjznYk3kYi6oe7QxtX2euvKWsk4/
+    // 0/*,\                             
+    // [c98b1535/48'/0'/0'/2'
+    // ]tpubDCDi5W4sP6zSnzJeowy8rQDVhBdRARaPhK1axABi8V1661wEPeanpEXj4ZLAUEoikVtoWcyK26TKKJSecSfeKxwHCcRrge9k1ybuiL71z4a/
+    // 0/*\                       ))";
+    //     let change_descriptor = "wsh(multi(2,\
+    //                                    
+    // [73756c7f/48'/0'/0'/2'
+    // ]tpubDCKxNyM3bLgbEX13Mcd8mYxbVg9ajDkWXMh29hMWBurKfVmBfWAM96QVP3zaUcN51HvkZ3ar4VwP82kC8JZhhux8vFQoJintSpVBwpFvyU3/
+    // 1/*,\                                    
+    // [f9f62194/48'/0'/0'/2'
+    // ]tpubDDp3ZSH1yCwusRppH7zgSxq2t1VEUyXSeEp8E5aFS8m43MknUjiF1bSLo3CGWAxbDyhF1XowA5ukPzyJZjznYk3kYi6oe7QxtX2euvKWsk4/
+    // 1/*,\                                    
+    // [c98b1535/48'/0'/0'/2'
+    // ]tpubDCDi5W4sP6zSnzJeowy8rQDVhBdRARaPhK1axABi8V1661wEPeanpEXj4ZLAUEoikVtoWcyK26TKKJSecSfeKxwHCcRrge9k1ybuiL71z4a/
+    // 1/*\                              ))";
 
-        let wallet = get_test_wallet(descriptor, change_descriptor, Network::Testnet);
-        let export = FullyNodedExport::export_wallet(&wallet, "Test Label", true).unwrap();
+    //     let wallet = get_test_wallet(descriptor, change_descriptor, Network::Testnet);
+    //     let export = FullyNodedExport::export_wallet(&wallet, "Test Label", true).unwrap();
 
-        assert_eq!(export.descriptor(), descriptor);
-        assert_eq!(export.change_descriptor(), Some(change_descriptor.into()));
-        assert_eq!(export.blockheight, 5000);
-        assert_eq!(export.label, "Test Label");
-    }
+    //     assert_eq!(export.descriptor(), descriptor);
+    //     assert_eq!(export.change_descriptor(), Some(change_descriptor.into()));
+    //     assert_eq!(export.blockheight, 5000);
+    //     assert_eq!(export.label, "Test Label");
+    // }
 
-    #[test]
-    fn test_export_tr() {
-        let descriptor = "tr([73c5da0a/86'/0'/0']tprv8fMn4hSKPRC1oaCPqxDb1JWtgkpeiQvZhsr8W2xuy3GEMkzoArcAWTfJxYb6Wj8XNNDWEjfYKK4wGQXh3ZUXhDF2NcnsALpWTeSwarJt7Vc/0/*)";
-        let change_descriptor = "tr([73c5da0a/86'/0'/0']tprv8fMn4hSKPRC1oaCPqxDb1JWtgkpeiQvZhsr8W2xuy3GEMkzoArcAWTfJxYb6Wj8XNNDWEjfYKK4wGQXh3ZUXhDF2NcnsALpWTeSwarJt7Vc/1/*)";
-        let wallet = get_test_wallet(descriptor, change_descriptor, Network::Testnet);
-        let export = FullyNodedExport::export_wallet(&wallet, "Test Label", true).unwrap();
-        assert_eq!(export.descriptor(), descriptor);
-        assert_eq!(export.change_descriptor(), Some(change_descriptor.into()));
-        assert_eq!(export.blockheight, 5000);
-        assert_eq!(export.label, "Test Label");
-    }
+    // #[test]
+    // fn test_export_tr() {
+    //     let descriptor =
+    // "tr([73c5da0a/86'/0'/0'
+    // ]tprv8fMn4hSKPRC1oaCPqxDb1JWtgkpeiQvZhsr8W2xuy3GEMkzoArcAWTfJxYb6Wj8XNNDWEjfYKK4wGQXh3ZUXhDF2NcnsALpWTeSwarJt7Vc/
+    // 0/*)";     let change_descriptor =
+    // "tr([73c5da0a/86'/0'/0'
+    // ]tprv8fMn4hSKPRC1oaCPqxDb1JWtgkpeiQvZhsr8W2xuy3GEMkzoArcAWTfJxYb6Wj8XNNDWEjfYKK4wGQXh3ZUXhDF2NcnsALpWTeSwarJt7Vc/
+    // 1/*)";     let wallet = get_test_wallet(descriptor, change_descriptor, Network::Testnet);
+    //     let export = FullyNodedExport::export_wallet(&wallet, "Test Label", true).unwrap();
+    //     assert_eq!(export.descriptor(), descriptor);
+    //     assert_eq!(export.change_descriptor(), Some(change_descriptor.into()));
+    //     assert_eq!(export.blockheight, 5000);
+    //     assert_eq!(export.label, "Test Label");
+    // }
 
-    #[test]
-    fn test_export_to_json() {
-        let descriptor = "wpkh(xprv9s21ZrQH143K4CTb63EaMxja1YiTnSEWKMbn23uoEnAzxjdUJRQkazCAtzxGm4LSoTSVTptoV9RbchnKPW9HxKtZumdyxyikZFDLhogJ5Uj/44'/0'/0'/0/*)";
-        let change_descriptor = "wpkh(xprv9s21ZrQH143K4CTb63EaMxja1YiTnSEWKMbn23uoEnAzxjdUJRQkazCAtzxGm4LSoTSVTptoV9RbchnKPW9HxKtZumdyxyikZFDLhogJ5Uj/44'/0'/0'/1/*)";
+    // #[test]
+    // fn test_export_to_json() {
+    //     let descriptor =
+    // "wpkh(xprv9s21ZrQH143K4CTb63EaMxja1YiTnSEWKMbn23uoEnAzxjdUJRQkazCAtzxGm4LSoTSVTptoV9RbchnKPW9HxKtZumdyxyikZFDLhogJ5Uj/
+    // 44'/0'/0'/0/*)";     let change_descriptor =
+    // "wpkh(xprv9s21ZrQH143K4CTb63EaMxja1YiTnSEWKMbn23uoEnAzxjdUJRQkazCAtzxGm4LSoTSVTptoV9RbchnKPW9HxKtZumdyxyikZFDLhogJ5Uj/
+    // 44'/0'/0'/1/*)";
 
-        let wallet = get_test_wallet(descriptor, change_descriptor, Network::Bitcoin);
-        let export = FullyNodedExport::export_wallet(&wallet, "Test Label", true).unwrap();
+    //     let wallet = get_test_wallet(descriptor, change_descriptor, Network::Bitcoin);
+    //     let export = FullyNodedExport::export_wallet(&wallet, "Test Label", true).unwrap();
 
-        assert_eq!(export.to_string(), "{\"descriptor\":\"wpkh(xprv9s21ZrQH143K4CTb63EaMxja1YiTnSEWKMbn23uoEnAzxjdUJRQkazCAtzxGm4LSoTSVTptoV9RbchnKPW9HxKtZumdyxyikZFDLhogJ5Uj/44\'/0\'/0\'/0/*)\",\"blockheight\":5000,\"label\":\"Test Label\"}");
-    }
+    //     assert_eq!(export.to_string(),
+    // "{\"descriptor\":\"
+    // wpkh(xprv9s21ZrQH143K4CTb63EaMxja1YiTnSEWKMbn23uoEnAzxjdUJRQkazCAtzxGm4LSoTSVTptoV9RbchnKPW9HxKtZumdyxyikZFDLhogJ5Uj/
+    // 44\'/0\'/0\'/0/*)\",\"blockheight\":5000,\"label\":\"Test Label\"}"); }
 
     #[test]
     fn test_export_from_json() {

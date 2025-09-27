@@ -1,8 +1,9 @@
 use bdk_wallet::keyring::KeyRing;
-use bitcoin::Network;
 use bdk_wallet::KeychainKind;
+use bitcoin::Network;
 
-// From the mnemonic "awesome awesome awesome awesome awesome awesome awesome awesome awesome awesome awesome awesome"
+// From the mnemonic "awesome awesome awesome awesome awesome awesome awesome awesome awesome
+// awesome awesome awesome"
 const DESC_1: &str = "tr(tprv8ZgxMBicQKsPdWAHbugK2tjtVtRjKGixYVZUdL7xLHMgXZS6BFbFi1UDb1CHT25Z5PU1F9j7wGxwUiRhqz9E3nZRztikGUV6HoRDYcqPhM4/86'/1'/0'/0/*)";
 
 #[test]
