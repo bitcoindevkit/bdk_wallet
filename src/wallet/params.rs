@@ -1,3 +1,4 @@
+#![allow(unused)]
 use alloc::boxed::Box;
 
 use bdk_chain::keychain_txout::DEFAULT_LOOKAHEAD;
@@ -7,11 +8,18 @@ use miniscript::descriptor::KeyMap;
 use crate::{
     descriptor::{DescriptorError, ExtendedDescriptor, IntoWalletDescriptor},
     utils::SecpCtx,
-    AsyncWalletPersister, CreateWithPersistError, KeychainKind, LoadWithPersistError, Wallet,
-    WalletPersister,
+    // AsyncWalletPersister, CreateWithPersistError,
+    KeychainKind,
+    LoadWithPersistError,
+    Wallet,
+    // WalletPersister,
 };
 
-use super::{ChangeSet, LoadError, PersistedWallet};
+use super::{
+    ChangeSet,
+    LoadError,
+    // PersistedWallet
+};
 
 fn make_two_path_descriptor_to_extract<D>(
     two_path_descriptor: D,
@@ -182,32 +190,32 @@ impl CreateParams {
         self
     }
 
-    /// Create [`PersistedWallet`] with the given [`WalletPersister`].
-    pub fn create_wallet<P>(
-        self,
-        persister: &mut P,
-    ) -> Result<PersistedWallet<P>, CreateWithPersistError<P::Error>>
-    where
-        P: WalletPersister,
-    {
-        PersistedWallet::create(persister, self)
-    }
+    // /// Create [`PersistedWallet`] with the given [`WalletPersister`].
+    // pub fn create_wallet<P>(
+    //     self,
+    //     persister: &mut P,
+    // ) -> Result<PersistedWallet<P>, CreateWithPersistError<P::Error>>
+    // where
+    //     P: WalletPersister,
+    // {
+    //     PersistedWallet::create(persister, self)
+    // }
 
-    /// Create [`PersistedWallet`] with the given [`AsyncWalletPersister`].
-    pub async fn create_wallet_async<P>(
-        self,
-        persister: &mut P,
-    ) -> Result<PersistedWallet<P>, CreateWithPersistError<P::Error>>
-    where
-        P: AsyncWalletPersister,
-    {
-        PersistedWallet::create_async(persister, self).await
-    }
+    // /// Create [`PersistedWallet`] with the given [`AsyncWalletPersister`].
+    // pub async fn create_wallet_async<P>(
+    //     self,
+    //     persister: &mut P,
+    // ) -> Result<PersistedWallet<P>, CreateWithPersistError<P::Error>>
+    // where
+    //     P: AsyncWalletPersister,
+    // {
+    //     PersistedWallet::create_async(persister, self).await
+    // }
 
-    /// Create [`Wallet`] without persistence.
-    pub fn create_wallet_no_persist(self) -> Result<Wallet, DescriptorError> {
-        Wallet::create_with_params(self)
-    }
+    // /// Create [`Wallet`] without persistence.
+    // pub fn create_wallet_no_persist(self) -> Result<Wallet, DescriptorError> {
+    //     Wallet::create_with_params(self)
+    // }
 }
 
 /// Parameters for [`Wallet::load`] or [`PersistedWallet::load`].
@@ -309,32 +317,32 @@ impl LoadParams {
         self
     }
 
-    /// Load [`PersistedWallet`] with the given [`WalletPersister`].
-    pub fn load_wallet<P>(
-        self,
-        persister: &mut P,
-    ) -> Result<Option<PersistedWallet<P>>, LoadWithPersistError<P::Error>>
-    where
-        P: WalletPersister,
-    {
-        PersistedWallet::load(persister, self)
-    }
+    // /// Load [`PersistedWallet`] with the given [`WalletPersister`].
+    // pub fn load_wallet<P>(
+    //     self,
+    //     persister: &mut P,
+    // ) -> Result<Option<PersistedWallet<P>>, LoadWithPersistError<P::Error>>
+    // where
+    //     P: WalletPersister,
+    // {
+    //     PersistedWallet::load(persister, self)
+    // }
 
-    /// Load [`PersistedWallet`] with the given [`AsyncWalletPersister`].
-    pub async fn load_wallet_async<P>(
-        self,
-        persister: &mut P,
-    ) -> Result<Option<PersistedWallet<P>>, LoadWithPersistError<P::Error>>
-    where
-        P: AsyncWalletPersister,
-    {
-        PersistedWallet::load_async(persister, self).await
-    }
+    // /// Load [`PersistedWallet`] with the given [`AsyncWalletPersister`].
+    // pub async fn load_wallet_async<P>(
+    //     self,
+    //     persister: &mut P,
+    // ) -> Result<Option<PersistedWallet<P>>, LoadWithPersistError<P::Error>>
+    // where
+    //     P: AsyncWalletPersister,
+    // {
+    //     PersistedWallet::load_async(persister, self).await
+    // }
 
-    /// Load [`Wallet`] without persistence.
-    pub fn load_wallet_no_persist(self, changeset: ChangeSet) -> Result<Option<Wallet>, LoadError> {
-        Wallet::load_with_params(changeset, self)
-    }
+    // /// Load [`Wallet`] without persistence.
+    // pub fn load_wallet_no_persist(self, changeset: ChangeSet) -> Result<Option<Wallet>,
+    // LoadError> {     Wallet::load_with_params(changeset, self)
+    // }
 }
 
 impl Default for LoadParams {
