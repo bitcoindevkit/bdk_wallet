@@ -82,105 +82,106 @@ pub enum WalletEvent {
     },
 }
 
-/// Generate events by comparing the chain tip and wallet transactions before and after applying
-/// `wallet::Update` to `Wallet`. Any changes are added to the list of returned `WalletEvent`s.
-pub(crate) fn wallet_events(
-    wallet: &Wallet,
-    chain_tip1: BlockId,
-    chain_tip2: BlockId,
-    wallet_txs1: BTreeMap<Txid, (Arc<Transaction>, ChainPosition<ConfirmationBlockTime>)>,
-    wallet_txs2: BTreeMap<Txid, (Arc<Transaction>, ChainPosition<ConfirmationBlockTime>)>,
-) -> Vec<WalletEvent> {
-    let mut events: Vec<WalletEvent> = Vec::new();
-
-    // find chain tip change
-    if chain_tip1 != chain_tip2 {
-        events.push(WalletEvent::ChainTipChanged {
-            old_tip: chain_tip1,
-            new_tip: chain_tip2,
-        });
-    }
-
-    // find transaction canonical status changes
-    wallet_txs2.iter().for_each(|(txid2, (tx2, pos2))| {
-        if let Some((tx1, pos1)) = wallet_txs1.get(txid2) {
-            debug_assert_eq!(tx1.compute_txid(), *txid2);
-            match (pos1, pos2) {
-                (Unconfirmed { .. }, Confirmed { anchor, .. }) => {
-                    events.push(WalletEvent::TxConfirmed {
-                        txid: *txid2,
-                        tx: tx2.clone(),
-                        block_time: *anchor,
-                        old_block_time: None,
-                    });
-                }
-                (Confirmed { anchor, .. }, Unconfirmed { .. }) => {
-                    events.push(WalletEvent::TxUnconfirmed {
-                        txid: *txid2,
-                        tx: tx2.clone(),
-                        old_block_time: Some(*anchor),
-                    });
-                }
-                (
-                    Confirmed {
-                        anchor: anchor1, ..
-                    },
-                    Confirmed {
-                        anchor: anchor2, ..
-                    },
-                ) => {
-                    if *anchor1 != *anchor2 {
-                        events.push(WalletEvent::TxConfirmed {
-                            txid: *txid2,
-                            tx: tx2.clone(),
-                            block_time: *anchor2,
-                            old_block_time: Some(*anchor1),
-                        });
-                    }
-                }
-                (Unconfirmed { .. }, Unconfirmed { .. }) => {
-                    // do nothing if still unconfirmed
-                }
-            }
-        } else {
-            match pos2 {
-                Confirmed { anchor, .. } => {
-                    events.push(WalletEvent::TxConfirmed {
-                        txid: *txid2,
-                        tx: tx2.clone(),
-                        block_time: *anchor,
-                        old_block_time: None,
-                    });
-                }
-                Unconfirmed { .. } => {
-                    events.push(WalletEvent::TxUnconfirmed {
-                        txid: *txid2,
-                        tx: tx2.clone(),
-                        old_block_time: None,
-                    });
-                }
-            }
-        }
-    });
-
-    // find tx that are no longer canonical
-    wallet_txs1.iter().for_each(|(txid1, (tx1, _))| {
-        if !wallet_txs2.contains_key(txid1) {
-            let conflicts = wallet.tx_graph().direct_conflicts(tx1).collect::<Vec<_>>();
-            if !conflicts.is_empty() {
-                events.push(WalletEvent::TxReplaced {
-                    txid: *txid1,
-                    tx: tx1.clone(),
-                    conflicts,
-                });
-            } else {
-                events.push(WalletEvent::TxDropped {
-                    txid: *txid1,
-                    tx: tx1.clone(),
-                });
-            }
-        }
-    });
-
-    events
-}
+// TODO PR #318: Bring this back.
+// /// Generate events by comparing the chain tip and wallet transactions before and after applying
+// /// `wallet::Update` to `Wallet`. Any changes are added to the list of returned `WalletEvent`s.
+// pub(crate) fn wallet_events(
+//     wallet: &Wallet,
+//     chain_tip1: BlockId,
+//     chain_tip2: BlockId,
+//     wallet_txs1: BTreeMap<Txid, (Arc<Transaction>, ChainPosition<ConfirmationBlockTime>)>,
+//     wallet_txs2: BTreeMap<Txid, (Arc<Transaction>, ChainPosition<ConfirmationBlockTime>)>,
+// ) -> Vec<WalletEvent> {
+//     let mut events: Vec<WalletEvent> = Vec::new();
+//
+//     // find chain tip change
+//     if chain_tip1 != chain_tip2 {
+//         events.push(WalletEvent::ChainTipChanged {
+//             old_tip: chain_tip1,
+//             new_tip: chain_tip2,
+//         });
+//     }
+//
+//     // find transaction canonical status changes
+//     wallet_txs2.iter().for_each(|(txid2, (tx2, pos2))| {
+//         if let Some((tx1, pos1)) = wallet_txs1.get(txid2) {
+//             debug_assert_eq!(tx1.compute_txid(), *txid2);
+//             match (pos1, pos2) {
+//                 (Unconfirmed { .. }, Confirmed { anchor, .. }) => {
+//                     events.push(WalletEvent::TxConfirmed {
+//                         txid: *txid2,
+//                         tx: tx2.clone(),
+//                         block_time: *anchor,
+//                         old_block_time: None,
+//                     });
+//                 }
+//                 (Confirmed { anchor, .. }, Unconfirmed { .. }) => {
+//                     events.push(WalletEvent::TxUnconfirmed {
+//                         txid: *txid2,
+//                         tx: tx2.clone(),
+//                         old_block_time: Some(*anchor),
+//                     });
+//                 }
+//                 (
+//                     Confirmed {
+//                         anchor: anchor1, ..
+//                     },
+//                     Confirmed {
+//                         anchor: anchor2, ..
+//                     },
+//                 ) => {
+//                     if *anchor1 != *anchor2 {
+//                         events.push(WalletEvent::TxConfirmed {
+//                             txid: *txid2,
+//                             tx: tx2.clone(),
+//                             block_time: *anchor2,
+//                             old_block_time: Some(*anchor1),
+//                         });
+//                     }
+//                 }
+//                 (Unconfirmed { .. }, Unconfirmed { .. }) => {
+//                     // do nothing if still unconfirmed
+//                 }
+//             }
+//         } else {
+//             match pos2 {
+//                 Confirmed { anchor, .. } => {
+//                     events.push(WalletEvent::TxConfirmed {
+//                         txid: *txid2,
+//                         tx: tx2.clone(),
+//                         block_time: *anchor,
+//                         old_block_time: None,
+//                     });
+//                 }
+//                 Unconfirmed { .. } => {
+//                     events.push(WalletEvent::TxUnconfirmed {
+//                         txid: *txid2,
+//                         tx: tx2.clone(),
+//                         old_block_time: None,
+//                     });
+//                 }
+//             }
+//         }
+//     });
+//
+//     // find tx that are no longer canonical
+//     wallet_txs1.iter().for_each(|(txid1, (tx1, _))| {
+//         if !wallet_txs2.contains_key(txid1) {
+//             let conflicts = wallet.tx_graph().direct_conflicts(tx1).collect::<Vec<_>>();
+//             if !conflicts.is_empty() {
+//                 events.push(WalletEvent::TxReplaced {
+//                     txid: *txid1,
+//                     tx: tx1.clone(),
+//                     conflicts,
+//                 });
+//             } else {
+//                 events.push(WalletEvent::TxDropped {
+//                     txid: *txid1,
+//                     tx: tx1.clone(),
+//                 });
+//             }
+//         }
+//     });
+//
+//     events
+// }
