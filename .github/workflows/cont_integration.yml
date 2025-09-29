@@ -46,7 +46,7 @@ jobs:
         with:
             toolchain: ${{ matrix.rust.version }}
       - name: Rust Cache
-        uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0
+        uses: Swatinem/rust-cache@f13886b937689c021905a6b90929199931d60db1
       - name: Pin dependencies for MSRV
         if: matrix.rust.version == '1.85.0'
         run: ./ci/pin-msrv.sh
@@ -72,7 +72,7 @@ jobs:
           toolchain: ${{ needs.prepare.outputs.rust_version }}
           # target: "thumbv6m-none-eabi"
       - name: Rust Cache
-        uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0
+        uses: Swatinem/rust-cache@f13886b937689c021905a6b90929199931d60db1
       - name: Check no-std
         # TODO "--target thumbv6m-none-eabi" should work but currently does not
         run: cargo check --no-default-features --features miniscript/no-std,bdk_chain/hashbrown
@@ -99,7 +99,7 @@ jobs:
             toolchain: ${{ needs.prepare.outputs.rust_version }}
             targets: "wasm32-unknown-unknown"
       - name: Rust Cache
-        uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0
+        uses: Swatinem/rust-cache@f13886b937689c021905a6b90929199931d60db1
       - name: Check WASM
         run: cargo check --target wasm32-unknown-unknown --no-default-features --features miniscript/no-std,bdk_chain/hashbrown
 
@@ -134,7 +134,7 @@ jobs:
             toolchain: ${{ needs.prepare.outputs.rust_version }}
             components: clippy
       - name: Rust Cache
-        uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0
+        uses: Swatinem/rust-cache@f13886b937689c021905a6b90929199931d60db1
       - name: Clippy
         run: cargo clippy --all-features --all-targets -- -D warnings
 
