@@ -2,8 +2,9 @@
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+use core::fmt;
 
-use bdk_chain::{BlockId, CanonicalizationParams, TxGraph};
+use bdk_chain::{BlockId, CanonicalizationParams, ConfirmationBlockTime, FullTxOut, TxGraph};
 use bdk_tx::DefiniteDescriptor;
 use bitcoin::{
     absolute, transaction::Version, Amount, FeeRate, OutPoint, ScriptBuf, Sequence, Transaction,
@@ -30,6 +31,7 @@ pub struct PsbtParams {
     pub(crate) drain_wallet: bool,
     pub(crate) coin_selection: SelectionStrategy,
     pub(crate) canonical_params: CanonicalizationParams,
+    pub(crate) utxo_filter: Option<UtxoFilter>,
 
     // PSBT
     pub(crate) version: Option<Version>,
@@ -49,6 +51,7 @@ impl Default for PsbtParams {
             drain_wallet: Default::default(),
             coin_selection: Default::default(),
             canonical_params: Default::default(),
+            utxo_filter: None,
             version: Default::default(),
             locktime: Default::default(),
             fallback_sequence: Default::default(),
@@ -147,9 +150,53 @@ impl PsbtParams {
     pub fn replace(self, txs: &[Arc<Transaction>]) -> ReplaceParams {
         ReplaceParams::new(txs, self)
     }
+
+    /// Filter [`FullTxOut`]s by the provided closure.
+    ///
+    /// This option can be used to mark specific outputs unspendable or apply any sort of custom
+    /// UTXO filter.
+    ///
+    /// Note that returning `true` from the `exclude` function will exclude the output from coin
+    /// selection, otherwise any coin in the wallet that is mature and spendable will be
+    /// eligible for selection.
+    pub fn filter_utxos<F>(&mut self, exclude: F) -> &mut Self
+    where
+        F: Fn(&FullTxOut<ConfirmationBlockTime>) -> bool + Send + Sync + 'static,
+    {
+        self.utxo_filter = Some(UtxoFilter(Arc::new(exclude)));
+        self
+    }
 }
 
 // TODO: Bring back `TxOrdering`
+
+/// Coin select strategy.
+#[derive(Debug, Clone, Copy, Default)]
+#[non_exhaustive]
+pub enum SelectionStrategy {
+    /// Single random draw.
+    #[default]
+    SingleRandomDraw,
+    /// Lowest fee, a variation of Branch 'n Bound that allows for change
+    /// while minimizing transaction fees. Refer to
+    /// [`LowestFee`](bdk_coin_select::metrics::LowestFee) metric for more.
+    LowestFee,
+}
+
+/// [`UtxoFilter`] is a user-defined `Fn` closure which decides whether to exclude a UTXO
+/// from being selected.
+// TODO: Consider having this also take a `&Wallet` in case the caller needs information
+// not given by the FullTxOut.
+#[allow(clippy::type_complexity)]
+pub(crate) struct UtxoFilter(
+    pub Arc<dyn Fn(&FullTxOut<ConfirmationBlockTime>) -> bool + Send + Sync>,
+);
+
+impl fmt::Debug for UtxoFilter {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "UtxoFilter")
+    }
+}
 
 /// `ReplaceParams` provides a thin wrapper around [`PsbtParams`] and is intended for
 /// crafting Replace-By-Fee transactions (RBF).
@@ -234,19 +281,6 @@ impl ReplaceParams {
         self.inner.remove_utxo(outpoint);
         self
     }
-}
-
-/// Coin select strategy.
-#[derive(Debug, Clone, Copy, Default)]
-#[non_exhaustive]
-pub enum SelectionStrategy {
-    /// Single random draw.
-    #[default]
-    SingleRandomDraw,
-    /// Lowest fee, a variation of Branch 'n Bound that allows for change
-    /// while minimizing transaction fees. Refer to
-    /// [`LowestFee`](bdk_coin_select::metrics::LowestFee) metric for more.
-    LowestFee,
 }
 
 /// Trait to extend the functionality of [`Assets`].
