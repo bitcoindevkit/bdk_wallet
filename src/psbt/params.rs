@@ -399,4 +399,32 @@ mod test {
         assert_eq!(params.inner.set, expect_spends);
         assert_eq!(params.replace, [txid_a, txid_c].into());
     }
+
+    #[test]
+    fn test_selected_outpoints_are_unique() {
+        let mut params = PsbtParams::default();
+        let op = OutPoint::null();
+
+        // Try adding the same outpoint repeatedly.
+        for _ in 0..3 {
+            params.add_utxos(&[op]);
+        }
+        assert_eq!(
+            params.utxos(),
+            &[op].into(),
+            "Failed to filter duplicate outpoints"
+        );
+        assert!(params.utxos.contains(&op));
+
+        params = PsbtParams::default();
+
+        // Try adding duplicates in the same set.
+        params.add_utxos(&[op, op, op]);
+        assert_eq!(
+            params.utxos(),
+            &[op].into(),
+            "Failed to filter duplicate outpoints"
+        );
+        assert!(params.utxos.contains(&op));
+    }
 }
