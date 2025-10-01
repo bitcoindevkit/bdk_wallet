@@ -187,6 +187,42 @@ impl PsbtParams {
     }
 }
 
+/// Structure containing the set of outpoints that are manually selected. This
+/// ensures that no single outpoint appears more than once in the inputs, while preserving
+/// the order in which they are added to the [`PsbtParams`].
+#[derive(Debug, Clone, Default)]
+pub(crate) struct SelectedOutpoints {
+    /// Unique set of selected outpoints.
+    set: HashSet<OutPoint>,
+    /// UTXOs added.
+    pub utxos: Vec<OutPoint>,
+}
+
+impl SelectedOutpoints {
+    /// Add an outpoint.
+    fn extend(&mut self, outpoints: impl IntoIterator<Item = OutPoint>) {
+        self.utxos
+            .extend(outpoints.into_iter().filter(|&op| self.set.insert(op)))
+    }
+
+    /// Remove an outpoint.
+    fn remove(&mut self, outpoint: &OutPoint) {
+        if self.set.remove(outpoint) {
+            self.utxos.retain(|op| op != outpoint)
+        }
+    }
+
+    /// Whether the current selection contains the given `outpoint`.
+    pub fn contains(&self, outpoint: &OutPoint) -> bool {
+        self.set.contains(outpoint)
+    }
+
+    /// Get the selected spends (UTXOs).
+    fn utxos(&self) -> &Vec<OutPoint> {
+        &self.utxos
+    }
+}
+
 /// Coin select strategy.
 #[derive(Debug, Clone, Copy, Default)]
 #[non_exhaustive]
