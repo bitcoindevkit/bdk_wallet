@@ -5,7 +5,7 @@ use alloc::vec::Vec;
 use core::fmt;
 
 use bdk_chain::{BlockId, CanonicalizationParams, ConfirmationBlockTime, FullTxOut, TxGraph};
-use bdk_tx::DefiniteDescriptor;
+use bdk_tx::{DefiniteDescriptor, Input, Output};
 use bitcoin::{
     absolute, transaction::Version, Amount, FeeRate, OutPoint, ScriptBuf, Sequence, Transaction,
     Txid,
@@ -13,6 +13,7 @@ use bitcoin::{
 use miniscript::plan::Assets;
 
 use crate::collections::HashSet;
+use crate::TxOrdering;
 
 /// Parameters to create a PSBT.
 #[derive(Debug)]
@@ -37,6 +38,7 @@ pub struct PsbtParams {
     pub(crate) version: Option<Version>,
     pub(crate) locktime: Option<absolute::LockTime>,
     pub(crate) fallback_sequence: Option<Sequence>,
+    pub(crate) ordering: TxOrdering<Input, Output>,
 }
 
 impl Default for PsbtParams {
@@ -55,6 +57,7 @@ impl Default for PsbtParams {
             version: Default::default(),
             locktime: Default::default(),
             fallback_sequence: Default::default(),
+            ordering: Default::default(),
         }
     }
 }
@@ -166,9 +169,23 @@ impl PsbtParams {
         self.utxo_filter = Some(UtxoFilter(Arc::new(exclude)));
         self
     }
-}
 
-// TODO: Bring back `TxOrdering`
+    /// Set the [`TxOrdering`] for inputs and outputs of the PSBT.
+    ///
+    /// If not set here, the default ordering is to [`Shuffle`] all inputs and outputs.
+    ///
+    /// Set to [`Untouched`] to preserve the order of UTXOs and recipients in the manner in which
+    /// they are added to the params (FIXME). If additional inputs are required that aren't manually
+    /// selected, their order will be determined by the [`SelectionStrategy`]. Refer to
+    /// [`TxOrdering`] for more.
+    ///
+    /// [`Shuffle`]: TxOrdering::Shuffle
+    /// [`Untouched`]: TxOrdering::Untouched
+    pub fn ordering(&mut self, ordering: TxOrdering<Input, Output>) -> &mut Self {
+        self.ordering = ordering;
+        self
+    }
+}
 
 /// Coin select strategy.
 #[derive(Debug, Clone, Copy, Default)]
