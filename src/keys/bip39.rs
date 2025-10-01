@@ -1,7 +1,7 @@
 // Bitcoin Dev Kit
 // Written in 2020 by Alekos Filini <alekos.filini@gmail.com>
 //
-// Copyright (c) 2020-2021 Bitcoin Dev Kit Developers
+// Copyright (c) 2020-2025 Bitcoin Dev Kit Developers
 //
 // This file is licensed under the Apache License, Version 2.0 <LICENSE-APACHE
 // or http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
@@ -15,10 +15,14 @@
 // something that should be fairly simple to re-implement.
 
 use alloc::string::String;
-use bitcoin::bip32;
-use bitcoin::Network;
 
+use bitcoin::{bip32, Network};
 use miniscript::ScriptContext;
+
+use super::{
+    any_network_kind, DerivableKey, DescriptorKey, ExtendedKey, GeneratableKey, GeneratedKey,
+    KeyError,
+};
 
 pub use bip39::{Error, Language, Mnemonic};
 
@@ -38,20 +42,16 @@ pub enum WordCount {
     Words24 = 256,
 }
 
-use super::{
-    any_network, DerivableKey, DescriptorKey, ExtendedKey, GeneratableKey, GeneratedKey, KeyError,
-};
-
-fn set_valid_on_any_network<Ctx: ScriptContext>(
+fn set_valid_on_any_network_kind<Ctx: ScriptContext>(
     descriptor_key: DescriptorKey<Ctx>,
 ) -> DescriptorKey<Ctx> {
-    // We have to pick one network to build the xprv, but since the bip39 standard doesn't
-    // encode the network, the xprv we create is actually valid everywhere. So we override the
-    // valid networks with `any_network()`.
-    descriptor_key.override_valid_networks(any_network())
+    // We have to pick one network kind to build the xprv, but since the BIP39 standard doesn't
+    // encode the network kind, the xprv we create is actually valid everywhere. So we override the
+    // valid network kinds with `any_network_kind()`.
+    descriptor_key.override_valid_network_kinds(any_network_kind())
 }
 
-/// Type for a BIP39 mnemonic with an optional passphrase
+/// Type for a BIP39 mnemonic with an optional passphrase.
 pub type MnemonicWithPassphrase = (Mnemonic, Option<String>);
 
 #[cfg_attr(docsrs, doc(cfg(feature = "keys-bip39")))]
@@ -69,7 +69,7 @@ impl<Ctx: ScriptContext> DerivableKey<Ctx> for Seed {
             .into_extended_key()?
             .into_descriptor_key(source, derivation_path)?;
 
-        Ok(set_valid_on_any_network(descriptor_key))
+        Ok(set_valid_on_any_network_kind(descriptor_key))
     }
 }
 
@@ -91,7 +91,7 @@ impl<Ctx: ScriptContext> DerivableKey<Ctx> for MnemonicWithPassphrase {
             .into_extended_key()?
             .into_descriptor_key(source, derivation_path)?;
 
-        Ok(set_valid_on_any_network(descriptor_key))
+        Ok(set_valid_on_any_network_kind(descriptor_key))
     }
 }
 
@@ -127,7 +127,7 @@ impl<Ctx: ScriptContext> DerivableKey<Ctx> for Mnemonic {
             .into_extended_key()?
             .into_descriptor_key(source, derivation_path)?;
 
-        Ok(set_valid_on_any_network(descriptor_key))
+        Ok(set_valid_on_any_network_kind(descriptor_key))
     }
 }
 
@@ -145,22 +145,21 @@ impl<Ctx: ScriptContext> GeneratableKey<Ctx> for Mnemonic {
         let entropy = &entropy[..(word_count as usize / 8)];
         let mnemonic = Mnemonic::from_entropy_in(language, entropy)?;
 
-        Ok(GeneratedKey::new(mnemonic, any_network()))
+        Ok(GeneratedKey::new(mnemonic, any_network_kind()))
     }
 }
 
 #[cfg(test)]
 mod test {
+    use super::WordCount;
+
     use alloc::string::ToString;
     use core::str::FromStr;
 
+    use bip39::{Language, Mnemonic};
     use bitcoin::bip32;
 
-    use bip39::{Language, Mnemonic};
-
-    use crate::keys::{any_network, GeneratableKey, GeneratedKey};
-
-    use super::WordCount;
+    use crate::keys::{any_network_kind, GeneratableKey, GeneratedKey};
 
     #[test]
     fn test_keys_bip39_mnemonic() {
@@ -170,10 +169,10 @@ mod test {
         let path = bip32::DerivationPath::from_str("m/44'/0'/0'/0").unwrap();
 
         let key = (mnemonic, path);
-        let (desc, keys, networks) = crate::descriptor!(wpkh(key)).unwrap();
+        let (desc, keys, network_kinds) = crate::descriptor!(wpkh(key)).unwrap();
         assert_eq!(desc.to_string(), "wpkh([be83839f/44'/0'/0']xpub6DCQ1YcqvZtSwGWMrwHELPehjWV3f2MGZ69yBADTxFEUAoLwb5Mp5GniQK6tTp3AgbngVz9zEFbBJUPVnkG7LFYt8QMTfbrNqs6FNEwAPKA/0/*)#0r8v4nkv");
         assert_eq!(keys.len(), 1);
-        assert_eq!(networks, any_network());
+        assert_eq!(network_kinds, any_network_kind());
     }
 
     #[test]
@@ -184,10 +183,10 @@ mod test {
         let path = bip32::DerivationPath::from_str("m/44'/0'/0'/0").unwrap();
 
         let key = ((mnemonic, Some("passphrase".into())), path);
-        let (desc, keys, networks) = crate::descriptor!(wpkh(key)).unwrap();
+        let (desc, keys, network_kinds) = crate::descriptor!(wpkh(key)).unwrap();
         assert_eq!(desc.to_string(), "wpkh([8f6cb80c/44'/0'/0']xpub6DWYS8bbihFevy29M4cbw4ZR3P5E12jB8R88gBDWCTCNpYiDHhYWNywrCF9VZQYagzPmsZpxXpytzSoxynyeFr4ZyzheVjnpLKuse4fiwZw/0/*)#h0j0tg5m");
         assert_eq!(keys.len(), 1);
-        assert_eq!(networks, any_network());
+        assert_eq!(network_kinds, any_network_kind());
     }
 
     #[test]
@@ -198,7 +197,7 @@ mod test {
                 crate::keys::test::TEST_ENTROPY,
             )
             .unwrap();
-        assert_eq!(generated_mnemonic.valid_networks, any_network());
+        assert_eq!(generated_mnemonic.valid_network_kinds, any_network_kind());
         assert_eq!(
             generated_mnemonic.to_string(),
             "primary fetch primary fetch primary fetch primary fetch primary fetch primary fever"
@@ -210,7 +209,7 @@ mod test {
                 crate::keys::test::TEST_ENTROPY,
             )
             .unwrap();
-        assert_eq!(generated_mnemonic.valid_networks, any_network());
+        assert_eq!(generated_mnemonic.valid_network_kinds, any_network_kind());
         assert_eq!(generated_mnemonic.to_string(), "primary fetch primary fetch primary fetch primary fetch primary fetch primary fetch primary fetch primary fetch primary fetch primary fetch primary fetch primary foster");
     }
 
@@ -218,10 +217,10 @@ mod test {
     fn test_keys_generate_bip39_random() {
         let generated_mnemonic: GeneratedKey<_, miniscript::Segwitv0> =
             Mnemonic::generate((WordCount::Words12, Language::English)).unwrap();
-        assert_eq!(generated_mnemonic.valid_networks, any_network());
+        assert_eq!(generated_mnemonic.valid_network_kinds, any_network_kind());
 
         let generated_mnemonic: GeneratedKey<_, miniscript::Segwitv0> =
             Mnemonic::generate((WordCount::Words24, Language::English)).unwrap();
-        assert_eq!(generated_mnemonic.valid_networks, any_network());
+        assert_eq!(generated_mnemonic.valid_network_kinds, any_network_kind());
     }
 }

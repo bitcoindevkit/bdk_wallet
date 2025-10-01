@@ -1,6 +1,7 @@
 use alloc::boxed::Box;
+
 use bdk_chain::keychain_txout::DEFAULT_LOOKAHEAD;
-use bitcoin::{BlockHash, Network};
+use bitcoin::{BlockHash, Network, NetworkKind};
 use miniscript::descriptor::KeyMap;
 
 use crate::{
@@ -43,7 +44,7 @@ where
 /// The better option would be to do `Box<dyn IntoWalletDescriptor>`, but we cannot due to Rust's
 /// [object safety rules](https://doc.rust-lang.org/reference/items/traits.html#object-safety).
 type DescriptorToExtract = Box<
-    dyn FnOnce(&SecpCtx, Network) -> Result<(ExtendedDescriptor, KeyMap), DescriptorError>
+    dyn FnOnce(&SecpCtx, NetworkKind) -> Result<(ExtendedDescriptor, KeyMap), DescriptorError>
         + Send
         + 'static,
 >;
@@ -52,7 +53,7 @@ fn make_descriptor_to_extract<D>(descriptor: D) -> DescriptorToExtract
 where
     D: IntoWalletDescriptor + Send + 'static,
 {
-    Box::new(|secp, network| descriptor.into_wallet_descriptor(secp, network))
+    Box::new(|secp, network_kind| descriptor.into_wallet_descriptor(secp, network_kind))
 }
 
 /// Parameters for [`Wallet::create`] or [`PersistedWallet::create`].
@@ -149,7 +150,7 @@ impl CreateParams {
         self
     }
 
-    /// Set `network`.
+    /// Set [`Self::network`].
     pub fn network(mut self, network: Network) -> Self {
         self.network = network;
         self
@@ -301,7 +302,7 @@ impl LoadParams {
 
     /// Use a persistent cache of indexed script pubkeys (SPKs).
     ///
-    /// **Note:** This should only be used if you have previously persisted a cache of script
+    /// NOTE: This should only be used if you have previously persisted a cache of script
     /// pubkeys using [`CreateParams::use_spk_cache`].
     pub fn use_spk_cache(mut self, use_spk_cache: bool) -> Self {
         self.use_spk_cache = use_spk_cache;
