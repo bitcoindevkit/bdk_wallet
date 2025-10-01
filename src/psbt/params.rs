@@ -19,7 +19,7 @@ use crate::TxOrdering;
 #[derive(Debug)]
 pub struct PsbtParams {
     // Inputs
-    pub(crate) utxos: HashSet<OutPoint>,
+    pub(crate) utxos: SelectedOutpoints,
 
     // Outputs
     pub(crate) recipients: Vec<(ScriptBuf, Amount)>,
@@ -69,18 +69,18 @@ impl PsbtParams {
     /// responsible for ensuring that elements of `outpoints` correspond to outputs of previous
     /// transactions and are currently unspent.
     pub fn add_utxos(&mut self, outpoints: &[OutPoint]) -> &mut Self {
-        self.utxos.extend(outpoints);
+        self.utxos.extend(outpoints.iter().copied());
         self
     }
 
     /// Get the currently selected spends.
-    pub fn utxos(&self) -> &HashSet<OutPoint> {
-        &self.utxos
+    pub fn utxos(&self) -> &Vec<OutPoint> {
+        self.utxos.utxos()
     }
 
     /// Remove a UTXO from the currently selected inputs.
-    pub fn remove_utxo(&mut self, outpoint: OutPoint) -> &mut Self {
-        self.utxos.remove(&outpoint);
+    pub fn remove_utxo(&mut self, outpoint: &OutPoint) -> &mut Self {
+        self.utxos.remove(outpoint);
         self
     }
 
@@ -175,7 +175,7 @@ impl PsbtParams {
     /// If not set here, the default ordering is to [`Shuffle`] all inputs and outputs.
     ///
     /// Set to [`Untouched`] to preserve the order of UTXOs and recipients in the manner in which
-    /// they are added to the params (FIXME). If additional inputs are required that aren't manually
+    /// they are added to the params. If additional inputs are required that aren't manually
     /// selected, their order will be determined by the [`SelectionStrategy`]. Refer to
     /// [`TxOrdering`] for more.
     ///
@@ -277,7 +277,7 @@ impl ReplaceParams {
         let txs: Vec<Arc<Transaction>> = txs.to_vec();
         let mut txids: HashSet<Txid> = txs.iter().map(|tx| tx.compute_txid()).collect();
         let mut tx_graph = TxGraph::<BlockId>::default();
-        let mut utxos: HashSet<OutPoint> = HashSet::new();
+        let mut utxos = SelectedOutpoints::default();
 
         for tx in txs {
             let _ = tx_graph.insert_tx(tx);
@@ -325,12 +325,12 @@ impl ReplaceParams {
     }
 
     /// Get the currently selected spends.
-    pub fn utxos(&self) -> &HashSet<OutPoint> {
+    pub fn utxos(&self) -> &Vec<OutPoint> {
         self.inner.utxos()
     }
 
     /// Remove a UTXO from the currently selected inputs.
-    pub fn remove_utxo(&mut self, outpoint: OutPoint) -> &mut Self {
+    pub fn remove_utxo(&mut self, outpoint: &OutPoint) -> &mut Self {
         self.inner.remove_utxo(outpoint);
         self
     }
@@ -416,7 +416,7 @@ mod test {
         let txs: Vec<Arc<Transaction>> =
             [tx_a, tx_b, tx_c, tx_d].into_iter().map(Arc::new).collect();
         let params = ReplaceParams::new(&txs, PsbtParams::default());
-        assert_eq!(params.utxos(), &expect_spends);
+        assert_eq!(params.inner.utxos.set, expect_spends);
         assert_eq!(params.replace, [txid_a, txid_c].into());
     }
 }
