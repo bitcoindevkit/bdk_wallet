@@ -2910,7 +2910,7 @@ impl Wallet {
         )
         .map_err(CreatePsbtError::Selector)?;
 
-        self.create_psbt_from_selector(&mut selector, &params)
+        self.create_psbt_from_selector(&mut selector, &params, rng)
     }
 
     /// Create the PSBT from [`Selector`] and `params`.
@@ -2921,6 +2921,7 @@ impl Wallet {
         &self,
         selector: &mut Selector,
         params: &PsbtParams,
+        rng: &mut impl RngCore,
     ) -> Result<(Psbt, Finalizer), CreatePsbtError> {
         // How many times to run bnb before giving up
         const BNB_MAX_ROUNDS: usize = 10_000;
@@ -2947,10 +2948,13 @@ impl Wallet {
                 }
             };
         }
-        let selection = selector.try_finalize().ok_or({
+        let mut selection = selector.try_finalize().ok_or({
             let e = bdk_tx::CannotMeetTarget;
             CreatePsbtError::Selector(bdk_tx::SelectorError::CannotMeetTarget(e))
         })?;
+
+        let tx_ordering = &params.ordering;
+        tx_ordering.sort_with_aux_rand(&mut selection.inputs, &mut selection.outputs, rng);
 
         let version = params.version.unwrap_or(transaction::Version::TWO);
         let fallback_locktime = params
@@ -3126,7 +3130,7 @@ impl Wallet {
         )
         .map_err(CreatePsbtError::Selector)?;
 
-        self.create_psbt_from_selector(&mut selector, &params)
+        self.create_psbt_from_selector(&mut selector, &params, rng)
             .map_err(ReplaceByFeeError::CreatePsbt)
     }
 
