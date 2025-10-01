@@ -19,7 +19,9 @@ use crate::TxOrdering;
 #[derive(Debug)]
 pub struct PsbtParams {
     // Inputs
-    pub(crate) utxos: HashSet<OutPoint>,
+    pub(crate) set: HashSet<OutPoint>,
+    pub(crate) utxos: Vec<OutPoint>,
+    pub(crate) inputs: Vec<Input>,
 
     // Outputs
     pub(crate) recipients: Vec<(ScriptBuf, Amount)>,
@@ -44,7 +46,9 @@ pub struct PsbtParams {
 impl Default for PsbtParams {
     fn default() -> Self {
         Self {
+            set: Default::default(),
             utxos: Default::default(),
+            inputs: Default::default(),
             assets: Default::default(),
             recipients: Default::default(),
             change_descriptor: Default::default(),
@@ -69,18 +73,21 @@ impl PsbtParams {
     /// responsible for ensuring that elements of `outpoints` correspond to outputs of previous
     /// transactions and are currently unspent.
     pub fn add_utxos(&mut self, outpoints: &[OutPoint]) -> &mut Self {
-        self.utxos.extend(outpoints);
+        self.utxos
+            .extend(outpoints.iter().copied().filter(|&op| self.set.insert(op)));
         self
     }
 
     /// Get the currently selected spends.
     pub fn utxos(&self) -> &HashSet<OutPoint> {
-        &self.utxos
+        &self.set
     }
 
     /// Remove a UTXO from the currently selected inputs.
-    pub fn remove_utxo(&mut self, outpoint: OutPoint) -> &mut Self {
-        self.utxos.remove(&outpoint);
+    pub fn remove_utxo(&mut self, outpoint: &OutPoint) -> &mut Self {
+        if self.set.remove(outpoint) {
+            self.utxos.retain(|op| op != outpoint);
+        }
         self
     }
 
@@ -175,7 +182,7 @@ impl PsbtParams {
     /// If not set here, the default ordering is to [`Shuffle`] all inputs and outputs.
     ///
     /// Set to [`Untouched`] to preserve the order of UTXOs and recipients in the manner in which
-    /// they are added to the params (FIXME). If additional inputs are required that aren't manually
+    /// they are added to the params. If additional inputs are required that aren't manually
     /// selected, their order will be determined by the [`SelectionStrategy`]. Refer to
     /// [`TxOrdering`] for more.
     ///
@@ -183,6 +190,19 @@ impl PsbtParams {
     /// [`Untouched`]: TxOrdering::Untouched
     pub fn ordering(&mut self, ordering: TxOrdering<Input, Output>) -> &mut Self {
         self.ordering = ordering;
+        self
+    }
+
+    /// Add a planned input.
+    ///
+    /// This can be used to add inputs that come with a [`Plan`] or [`psbt::Input`] provided.
+    ///
+    /// [`Plan`]: miniscript::plan::Plan
+    /// [`psbt::Input`]: bitcoin::psbt::Input
+    pub fn add_planned_input(&mut self, input: Input) -> &mut Self {
+        if self.set.insert(input.prev_outpoint()) {
+            self.inputs.push(input);
+        }
         self
     }
 }
@@ -226,26 +246,27 @@ pub struct ReplaceParams {
 }
 
 impl ReplaceParams {
-    /// Construct from PSBT `params` and an iterator of `txs` to replace.
-    pub(crate) fn new(txs: &[Arc<Transaction>], params: PsbtParams) -> Self {
-        Self {
-            inner: params,
+    /// Construct from `inner` params and the `txs` to replace.
+    pub(crate) fn new(txs: &[Arc<Transaction>], inner: PsbtParams) -> Self {
+        let mut params = Self {
+            inner,
             ..Default::default()
-        }
-        .replace(txs)
+        };
+        params.replace(txs);
+        params
     }
 
     /// Replace spends of the provided `txs`. This will internally set the internal list
     /// of UTXOs to be spent.
-    pub fn replace(self, txs: &[Arc<Transaction>]) -> Self {
-        let txs: Vec<Arc<Transaction>> = txs.to_vec();
-        let mut txids: HashSet<Txid> = txs.iter().map(|tx| tx.compute_txid()).collect();
-        let mut tx_graph = TxGraph::<BlockId>::default();
-        let mut utxos: HashSet<OutPoint> = HashSet::new();
+    pub fn replace(&mut self, txs: &[Arc<Transaction>]) {
+        self.inner.utxos.clear();
+        let mut utxos = vec![];
 
-        for tx in txs {
-            let _ = tx_graph.insert_tx(tx);
-        }
+        let (mut txids_to_replace, txs): (HashSet<Txid>, Vec<Transaction>) = txs
+            .iter()
+            .map(|tx| (tx.compute_txid(), tx.as_ref().clone()))
+            .unzip();
+        let tx_graph = TxGraph::<BlockId>::new(txs);
 
         // Sanitize the RBF set by removing elements of `txs` which have ancestors
         // in the same set. This is to avoid spending outputs of txs that are bound
@@ -255,21 +276,16 @@ impl ReplaceParams {
             if tx.is_coinbase()
                 || tx_graph
                     .walk_ancestors(Arc::clone(tx), |_, tx| Some(tx.compute_txid()))
-                    .any(|ancestor_txid| txids.contains(&ancestor_txid))
+                    .any(|ancestor_txid| txids_to_replace.contains(&ancestor_txid))
             {
-                txids.remove(&tx_node.txid);
+                txids_to_replace.remove(&tx_node.txid);
             } else {
                 utxos.extend(tx.input.iter().map(|txin| txin.previous_output));
             }
         }
 
-        Self {
-            inner: PsbtParams {
-                utxos,
-                ..self.inner
-            },
-            replace: txids,
-        }
+        self.replace = txids_to_replace;
+        self.inner.add_utxos(&utxos);
     }
 
     /// Add recipients.
@@ -290,11 +306,11 @@ impl ReplaceParams {
 
     /// Get the currently selected spends.
     pub fn utxos(&self) -> &HashSet<OutPoint> {
-        self.inner.utxos()
+        &self.inner.set
     }
 
     /// Remove a UTXO from the currently selected inputs.
-    pub fn remove_utxo(&mut self, outpoint: OutPoint) -> &mut Self {
+    pub fn remove_utxo(&mut self, outpoint: &OutPoint) -> &mut Self {
         self.inner.remove_utxo(outpoint);
         self
     }
@@ -380,7 +396,7 @@ mod test {
         let txs: Vec<Arc<Transaction>> =
             [tx_a, tx_b, tx_c, tx_d].into_iter().map(Arc::new).collect();
         let params = ReplaceParams::new(&txs, PsbtParams::default());
-        assert_eq!(params.utxos(), &expect_spends);
+        assert_eq!(params.inner.set, expect_spends);
         assert_eq!(params.replace, [txid_a, txid_c].into());
     }
 }

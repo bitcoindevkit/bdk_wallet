@@ -2889,6 +2889,7 @@ impl Wallet {
                 self.plan_input(txo, &assets)
                     .ok_or(CreatePsbtError::Plan(op))
             })
+            .chain(params.inputs.iter().cloned().map(Result::Ok))
             .collect::<Result<_, _>>()?;
 
         // Get input candidates
@@ -3089,6 +3090,7 @@ impl Wallet {
                 self.plan_input(txo, &assets)
                     .ok_or(CreatePsbtError::Plan(op))
             })
+            .chain(params.inputs.iter().cloned().map(Result::Ok))
             .collect::<Result<_, _>>()?;
 
         // Get input candidates
