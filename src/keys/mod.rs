@@ -73,7 +73,7 @@ pub fn test_networks() -> ValidNetworks {
     .collect()
 }
 /// Compute the intersection of two sets
-pub fn merge_networks(a: &ValidNetworks, b: &ValidNetworks) -> ValidNetworks {
+pub fn intersect_networks(a: &ValidNetworks, b: &ValidNetworks) -> ValidNetworks {
     a.intersection(b).cloned().collect()
 }
 
@@ -790,7 +790,7 @@ fn expand_multi_keys<Pk: IntoDescriptorKey<Ctx>, Ctx: ScriptContext>(
         (KeyMap::default(), any_network()),
         |(mut keys_acc, net_acc), (key, net)| {
             keys_acc.extend(key);
-            let net_acc = merge_networks(&net_acc, &net);
+            let net_acc = intersect_networks(&net_acc, &net);
 
             (keys_acc, net_acc)
         },
