@@ -8,77 +8,81 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  prepare:
-    runs-on: ubuntu-latest
-    outputs:
-      rust_version: ${{ steps.read_toolchain.outputs.rust_version }}
-    steps:
-      - name: "Checkout repo"
-        uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - name: "Read rust version"
-        id: read_toolchain
-        run: echo "rust_version=$(cat rust-version)" >> $GITHUB_OUTPUT
-
-  build-test:
-    needs: prepare
-    name: Build & Test
+  build-test-msrv:
+    name: Build & Test MSRV
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
         os:
           - ubuntu-latest
           - ubuntu-24.04-arm
-        rust:
-          - version: ${{ needs.prepare.outputs.rust_version }}
-          - version: 1.85.0 # MSRV
         features:
           - --no-default-features --features miniscript/no-std,bdk_chain/hashbrown
           - --all-features
     steps:
-      - name: checkout
-        uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v5
         with:
           persist-credentials: false
+      # The 'toolchain' argument on this action overrides the Rust compiler version set in rust-toolchain.toml
+      # in order to test our MSRV.
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@v1
+        uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-            toolchain: ${{ matrix.rust.version }}
-      - name: Rust Cache
-        uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0
+          toolchain: 1.85 # MSRV
+          cache: true
       - name: Pin dependencies for MSRV
-        if: matrix.rust.version == '1.85.0'
         run: ./ci/pin-msrv.sh
       - name: Build + Test
-        env:
-          MATRIX_RUST_VERSION: ${{ matrix.rust.version }}
+        run: |
+          cargo build --workspace --all-targets ${{ matrix.features }}
+          cargo test --workspace ${{ matrix.features }}
+
+  build-test-stable:
+    name: Build & Test Rust Stable
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os:
+          - ubuntu-latest
+          - ubuntu-24.04-arm
+        features:
+          - --no-default-features --features miniscript/no-std,bdk_chain/hashbrown
+          - --all-features
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      # This action will honor the Rust compiler version set in rust-toolchain.toml. We aim to keep it in sync with
+      # Rust stable.
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: true
+      - name: Build + Test
         run: |
           cargo build --workspace --all-targets ${{ matrix.features }}
           cargo test --workspace ${{ matrix.features }}
 
   check-no-std:
-    needs: prepare
     name: Check no_std
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           persist-credentials: false
+      # This action automatically reads and applies rust-toolchain.toml
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@v1
+        uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          toolchain: ${{ needs.prepare.outputs.rust_version }}
-          # target: "thumbv6m-none-eabi"
-      - name: Rust Cache
-        uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0
+          cache: true
       - name: Check no-std
         # TODO "--target thumbv6m-none-eabi" should work but currently does not
         run: cargo check --no-default-features --features miniscript/no-std,bdk_chain/hashbrown
 
   check-wasm:
-    needs: prepare
     name: Check WASM
     runs-on: ubuntu-latest
     env:
@@ -86,55 +90,55 @@ jobs:
       CFLAGS: -I/usr/include
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           persist-credentials: false
         # Install a recent version of clang that supports wasm32
       - run: wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | sudo apt-key add - || exit 1
       - run: sudo apt-get update || exit 1
       - run: sudo apt-get install -y libclang-common-14-dev clang-14 libc6-dev-i386 || exit 1
+      # This action automatically reads and applies rust-toolchain.toml
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@v1
+        uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-            toolchain: ${{ needs.prepare.outputs.rust_version }}
-            targets: "wasm32-unknown-unknown"
-      - name: Rust Cache
-        uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0
+          cache: true
+          target: wasm32-unknown-unknown
       - name: Check WASM
-        run: cargo check --target wasm32-unknown-unknown --no-default-features --features miniscript/no-std,bdk_chain/hashbrown
+        run: |
+          rustup target add wasm32-unknown-unknown
+          cargo check --target wasm32-unknown-unknown --no-default-features --features miniscript/no-std,bdk_chain/hashbrown
 
   fmt:
     name: Rust fmt
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           persist-credentials: false
+      # This action automatically reads and applies rust-toolchain.toml
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@v1
+        uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-            toolchain: nightly
-            components: rustfmt
+          cache: true
       - name: Check fmt
         run: cargo fmt --all --check
 
   clippy_check:
-    needs: prepare
     name: Rust clippy
     runs-on: ubuntu-latest
     permissions:
       checks: write
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v5
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@v1
+      # This action automatically reads and applies rust-toolchain.toml
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-            toolchain: ${{ needs.prepare.outputs.rust_version }}
-            components: clippy
-      - name: Rust Cache
-        uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0
+          cache: true
       - name: Clippy
         run: cargo clippy --all-features --all-targets -- -D warnings
 

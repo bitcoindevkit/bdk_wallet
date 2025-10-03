@@ -12,8 +12,8 @@ jobs:
     permissions:
       security-events: write
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v5
         with:
           persist-credentials: false
 

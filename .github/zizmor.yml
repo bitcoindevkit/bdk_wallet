@@ -4,4 +4,5 @@ rules:
     config:
       policies:
         # Allow pin by ref/tag
-        dtolnay/rust-toolchain: ref-pin
+        actions-rust-lang/setup-rust-toolchain: ref-pin
+        actions/*: ref-pin

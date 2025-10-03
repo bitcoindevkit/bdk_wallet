@@ -15,18 +15,17 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           persist-credentials: false
       - name: Install lcov tools
         run: sudo apt-get install lcov -y
+      # This action automatically reads and applies rust-toolchain.toml
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@v1
+        uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-            toolchain: stable
-            components: llvm-tools-preview
-      - name: Rust Cache
-        uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0
+          components: llvm-tools-preview
+          cache: true
       - name: Install grcov
         run: if [[ ! -e ~/.cargo/bin/grcov ]]; then cargo install grcov; fi
       - name: Test
@@ -34,13 +33,16 @@ jobs:
       - name: Make coverage directory
         run: mkdir coverage
       - name: Run grcov
-        run: grcov . --binary-path ./target/debug/ -s . -t lcov --branch --ignore-not-existing --keep-only '**/wallet/**' --ignore '**/tests/**' --ignore '**/examples/**' -o ./coverage/lcov.info
+        run: grcov . --binary-path ./target/debug/ -s . -t lcov --branch --ignore-not-existing --keep-only 'src/**' --ignore 'tests/**' --ignore 'examples/**' -o ./coverage/lcov.info
       - name: Generate HTML coverage report
         run: genhtml -o coverage-report.html --ignore-errors unmapped ./coverage/lcov.info
       - name: Coveralls upload
-        uses: coverallsapp/github-action@master
+        # Action pinned at tag 2.3.6
+        uses: coverallsapp/github-action@648a8eb78e6d50909eff900e4ec85cab4524a45b
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
+          file: ./coverage/lcov.info
+          format: lcov
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
