@@ -13,7 +13,7 @@
 //!
 //! This module contains generic utilities to work with descriptors, plus some re-exported types
 //! from [`miniscript`].
-
+#![allow(unused)]
 use crate::alloc::string::ToString;
 use crate::collections::BTreeMap;
 use alloc::string::String;
