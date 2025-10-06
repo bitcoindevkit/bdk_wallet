@@ -1746,9 +1746,7 @@ impl Wallet {
         let fee = self
             .calculate_fee(&tx)
             .map_err(|_| BuildFeeBumpError::FeeRateUnavailable)?;
-        let fee_rate = self
-            .calculate_fee_rate(&tx)
-            .map_err(|_| BuildFeeBumpError::FeeRateUnavailable)?;
+        let fee_rate = fee / tx.weight();
 
         // Remove the inputs from the tx and process them.
         let utxos: Vec<WeightedUtxo> = tx
