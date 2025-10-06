@@ -5,7 +5,7 @@ use bdk_wallet::signer::SignOptions;
 use bdk_wallet::test_utils::*;
 use bdk_wallet::tx_builder::AddForeignUtxoError;
 use bdk_wallet::KeychainKind;
-use bitcoin::{psbt, Address, Amount, ScriptBuf};
+use bitcoin::{hashes::Hash, psbt, Address, Amount, FeeRate, OutPoint, ScriptBuf, TxIn, TxOut};
 
 mod common;
 
@@ -294,56 +294,44 @@ fn test_taproot_foreign_utxo() {
 #[test]
 fn test_add_foreign_utxo_bump_fee() {
     // Create tx spending a p2a output
-    let (mut w, _) = get_funded_wallet_wpkh();
+    let (mut wallet, _) = get_funded_wallet_wpkh();
 
-    let drain_to = w.next_unused_address(KeychainKind::External);
-    // b
-    //     .allow_dust(true)
-    //     .add_recipient(ScriptBuf::new_p2a(), Amount::ZERO);
-    //
-    // let mut psbt = b.finish().unwrap();
-    // for txout in &psbt.unsigned_tx.output {
-    //     let spk = &txout.script_pubkey;
-    //     println!("{}", spk.to_asm_string()); // OP_PUSHNUM_1 OP_PUSHBYTES_2 4e73
-    //     println!("{}", spk.to_hex_string()); // 51024e73
-    // }
-
-    use bitcoin::hashes::Hash;
-    use bitcoin::OutPoint;
-    use bitcoin::TxIn;
-    use bitcoin::TxOut;
+    let drain_spk = wallet
+        .next_unused_address(KeychainKind::External)
+        .script_pubkey();
     let witness_utxo = TxOut {
         value: Amount::ZERO,
         script_pubkey: ScriptBuf::new_p2a(),
     };
-    let sat_wu = TxIn::default().segwit_weight();
-    let op = OutPoint::new(Hash::hash(b"prev"), 4);
+    let outpoint = OutPoint::new(Hash::hash(b"prev"), 1);
+    // Remember to include this as a "floating" txout in the wallet.
+    wallet.insert_txout(outpoint, witness_utxo.clone());
+    let satisfaction_weight = TxIn::default().segwit_weight();
     let psbt_input = psbt::Input {
-        witness_utxo: Some(witness_utxo.clone()),
+        witness_utxo: Some(witness_utxo),
         ..Default::default()
     };
-    w.insert_txout(op, witness_utxo);
 
-    let mut b = w.build_tx();
-    b.add_foreign_utxo(op, psbt_input, sat_wu)
+    let mut tx_builder = wallet.build_tx();
+    tx_builder
+        .add_foreign_utxo(outpoint, psbt_input, satisfaction_weight)
         .unwrap()
         .only_witness_utxo()
-        .drain_to(drain_to.script_pubkey());
-    let mut psbt = b.finish().unwrap();
-
-    let sign_options = SignOptions {
-        trust_witness_utxo: true,
-        ..Default::default()
-    };
-    let _finalized = w.sign(&mut psbt, sign_options).unwrap();
-    // dbg!(_finalized); // false
-    // dbg!(&psbt);
-
-    let tx = psbt.extract_tx().unwrap();
-    // dbg!(&tx);
+        .drain_to(drain_spk.clone());
+    let psbt = tx_builder.finish().unwrap();
+    let tx = psbt.unsigned_tx.clone();
+    assert!(tx.input.iter().any(|txin| txin.previous_output == outpoint));
     let txid1 = tx.compute_txid();
-    insert_tx(&mut w, tx);
+    insert_tx(&mut wallet, tx);
 
-    // Build fee bump
-    let _ = w.build_fee_bump(txid1).unwrap_err();
+    // Now build fee bump
+    let mut tx_builder = wallet.build_fee_bump(txid1).unwrap();
+    tx_builder
+        .set_recipients(vec![])
+        .drain_to(drain_spk)
+        .only_witness_utxo()
+        .fee_rate(FeeRate::from_sat_per_vb_unchecked(5));
+    let psbt = tx_builder.finish().unwrap();
+    let tx = &psbt.unsigned_tx;
+    assert!(tx.input.iter().any(|txin| txin.previous_output == outpoint));
 }
