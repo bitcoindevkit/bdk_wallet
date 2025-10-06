@@ -5,7 +5,7 @@ use bdk_wallet::signer::SignOptions;
 use bdk_wallet::test_utils::*;
 use bdk_wallet::tx_builder::AddForeignUtxoError;
 use bdk_wallet::KeychainKind;
-use bitcoin::{psbt, Address, Amount};
+use bitcoin::{psbt, Address, Amount, ScriptBuf};
 
 mod common;
 
@@ -289,4 +289,61 @@ fn test_taproot_foreign_utxo() {
             .any(|input| input.previous_output == utxo.outpoint),
         "foreign_utxo should be in there"
     );
+}
+
+#[test]
+fn test_add_foreign_utxo_bump_fee() {
+    // Create tx spending a p2a output
+    let (mut w, _) = get_funded_wallet_wpkh();
+
+    let drain_to = w.next_unused_address(KeychainKind::External);
+    // b
+    //     .allow_dust(true)
+    //     .add_recipient(ScriptBuf::new_p2a(), Amount::ZERO);
+    //
+    // let mut psbt = b.finish().unwrap();
+    // for txout in &psbt.unsigned_tx.output {
+    //     let spk = &txout.script_pubkey;
+    //     println!("{}", spk.to_asm_string()); // OP_PUSHNUM_1 OP_PUSHBYTES_2 4e73
+    //     println!("{}", spk.to_hex_string()); // 51024e73
+    // }
+
+    use bitcoin::hashes::Hash;
+    use bitcoin::OutPoint;
+    use bitcoin::TxIn;
+    use bitcoin::TxOut;
+    let witness_utxo = TxOut {
+        value: Amount::ZERO,
+        script_pubkey: ScriptBuf::new_p2a(),
+    };
+    let sat_wu = TxIn::default().segwit_weight();
+    let op = OutPoint::new(Hash::hash(b"prev"), 4);
+    let psbt_input = psbt::Input {
+        witness_utxo: Some(witness_utxo.clone()),
+        ..Default::default()
+    };
+    w.insert_txout(op, witness_utxo);
+
+    let mut b = w.build_tx();
+    b.add_foreign_utxo(op, psbt_input, sat_wu)
+        .unwrap()
+        .only_witness_utxo()
+        .drain_to(drain_to.script_pubkey());
+    let mut psbt = b.finish().unwrap();
+
+    let sign_options = SignOptions {
+        trust_witness_utxo: true,
+        ..Default::default()
+    };
+    let _finalized = w.sign(&mut psbt, sign_options).unwrap();
+    // dbg!(_finalized); // false
+    // dbg!(&psbt);
+
+    let tx = psbt.extract_tx().unwrap();
+    // dbg!(&tx);
+    let txid1 = tx.compute_txid();
+    insert_tx(&mut w, tx);
+
+    // Build fee bump
+    let _ = w.build_fee_bump(txid1).unwrap_err();
 }
