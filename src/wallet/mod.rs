@@ -31,7 +31,11 @@ use bdk_chain::{
     },
     tx_graph::{CalculateFeeError, CanonicalTx, TxGraph, TxUpdate},
     Anchor, BlockId, CanonicalizationParams, ChainPosition, ConfirmationBlockTime, DescriptorExt,
-    FullTxOut, Indexed, IndexedTxGraph, Indexer, Merge,
+    FullTxOut, Indexed, IndexedTxGraph, Indexer, KeychainIndexed, Merge,
+};
+use bdk_tx::{
+    selection_algorithm_lowest_fee_bnb, ChangePolicyType, DefiniteDescriptor, Finalizer, Input,
+    InputCandidates, OriginalTxStats, Output, RbfParams, Selector, SelectorParams, TxStatus,
 };
 #[cfg(feature = "std")]
 use bitcoin::secp256k1::rand;
@@ -47,6 +51,7 @@ use bitcoin::{
 };
 use miniscript::{
     descriptor::KeyMap,
+    plan::{Assets, Plan},
     psbt::{PsbtExt, PsbtInputExt, PsbtInputSatisfier},
     ForEachKey,
 };
@@ -68,7 +73,7 @@ use crate::descriptor::{
     DerivedDescriptor, DescriptorMeta, ExtendedDescriptor, ExtractPolicy, IntoWalletDescriptor,
     Policy, XKeyUtils,
 };
-use crate::psbt::PsbtUtils;
+use crate::psbt::{AssetsExt, PsbtParams, PsbtUtils, ReplaceParams, SelectionStrategy};
 use crate::types::*;
 use crate::wallet::{
     coin_selection::{DefaultCoinSelectionAlgorithm, Excess, InsufficientFunds},
@@ -86,6 +91,9 @@ pub use changeset::ChangeSet;
 pub use params::*;
 pub use persisted::*;
 pub use utils::{IsDust, TxDetails};
+
+/// Alias [`FullTxOut`] indexed by keychain, index.
+type IndexedTxOut = KeychainIndexed<KeychainKind, FullTxOut<ConfirmationBlockTime>>;
 
 /// A Bitcoin wallet
 ///
@@ -2687,18 +2695,6 @@ impl Wallet {
             .spks_from_indexer(&self.indexed_graph.index)
     }
 }
-
-use bdk_chain::KeychainIndexed;
-use bdk_tx::{
-    selection_algorithm_lowest_fee_bnb, ChangePolicyType, DefiniteDescriptor, Finalizer, Input,
-    InputCandidates, OriginalTxStats, Output, RbfParams, Selector, SelectorParams, TxStatus,
-};
-use miniscript::plan::{Assets, Plan};
-
-use crate::psbt::{AssetsExt, PsbtParams, ReplaceParams, SelectionStrategy};
-
-/// Type
-type IndexedTxOut = KeychainIndexed<KeychainKind, FullTxOut<ConfirmationBlockTime>>;
 
 /// Maps a chain position to tx confirmation status, if `pos` is the confirmed
 /// variant.
