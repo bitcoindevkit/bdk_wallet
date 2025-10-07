@@ -2093,11 +2093,11 @@ impl Wallet {
             .0
     }
 
-    /// Informs the wallet that you no longer intend to broadcast a tx that was built from it.
+    /// Unreserves the change address used in a transaction that will not be broadcast.
     ///
     /// This frees up the change address used when creating the tx for use in future transactions.
     // TODO: Make this free up reserved utxos when that's implemented
-    pub fn cancel_tx(&mut self, tx: &Transaction) {
+    pub fn unreserve_change_address(&mut self, tx: &Transaction) {
         let txout_index = &mut self.indexed_graph.index;
         for txout in &tx.output {
             if let Some((keychain, index)) = txout_index.index_of_spk(txout.script_pubkey.clone()) {
