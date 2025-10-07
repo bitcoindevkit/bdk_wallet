@@ -2,9 +2,10 @@
 use bdk_esplora::{esplora_client, EsploraAsyncExt};
 use bdk_wallet::{
     bitcoin::{Amount, FeeRate, Network},
+    keyring::KeyRing,
     psbt::PsbtUtils,
     rusqlite::Connection,
-    KeychainKind, SignOptions, Wallet,
+    KeychainKind, LoadParams, PersistedWallet, SignOptions, Wallet,
 };
 use std::{collections::BTreeSet, io::Write};
 use tokio::time::{sleep, Duration};
@@ -21,57 +22,63 @@ const ESPLORA_URL: &str = "https://mempool.space/testnet4/api";
 
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
-    // let mut db = Connection::open(DB_PATH)?;
-    // let wallet_opt = Wallet::load()
-    //     .descriptor(KeychainKind::External, Some(EXTERNAL_DESC))
-    //     .descriptor(KeychainKind::Internal, Some(INTERNAL_DESC))
-    //     .extract_keys()
-    //     .check_network(NETWORK)
-    //     .load_wallet(&mut db)?;
-    // let mut wallet = match wallet_opt {
-    //     Some(wallet) => wallet,
-    //     None => Wallet::create(EXTERNAL_DESC, INTERNAL_DESC)
-    //         .network(NETWORK)
-    //         .create_wallet(&mut db)?,
-    // };
+    let mut db = Connection::open(DB_PATH)?;
+    let params = LoadParams::new()
+        .check_descriptor(KeychainKind::External, Some(EXTERNAL_DESC))
+        .check_descriptor(KeychainKind::Internal, Some(INTERNAL_DESC))
+        .check_genesis_hash(bitcoin::constants::genesis_block(NETWORK).block_hash())
+        .check_network(NETWORK);
 
-    // let address = wallet.next_unused_address(KeychainKind::External);
-    // wallet.persist(&mut db)?;
-    // println!("Next unused address: ({}) {address}", address.index);
+    let mut wallet = match params.load_wallet(&mut db).unwrap() {
+        Some(wallet) => wallet,
+        None => {
+            let mut keyring: KeyRing<KeychainKind> =
+                KeyRing::new(NETWORK, KeychainKind::External, EXTERNAL_DESC).unwrap();
+            keyring
+                .add_descriptor(KeychainKind::Internal, INTERNAL_DESC)
+                .unwrap();
 
-    // let balance = wallet.balance();
-    // println!("Wallet balance before syncing: {}", balance.total());
+            Wallet::create(keyring).create_wallet(&mut db)?
+        }
+    };
 
-    // println!("Full Sync...");
-    // let client = esplora_client::Builder::new(ESPLORA_URL).build_async()?;
+    let address = wallet.next_unused_address(KeychainKind::External).unwrap();
+    wallet.persist(&mut db)?;
+    println!("Generated Address: {address}");
 
-    // let request = wallet.start_full_scan().inspect({
-    //     let mut stdout = std::io::stdout();
-    //     let mut once = BTreeSet::<KeychainKind>::new();
-    //     move |keychain, spk_i, _| {
-    //         if once.insert(keychain) {
-    //             print!("\nScanning keychain [{keychain:?}]");
-    //         }
-    //         print!(" {spk_i:<3}");
-    //         stdout.flush().expect("must flush")
-    //     }
-    // });
+    let balance = wallet.balance();
+    println!("Wallet balance before syncing: {}", balance.total());
 
-    // let update = client
-    //     .full_scan(request, STOP_GAP, PARALLEL_REQUESTS)
-    //     .await?;
+    println!("Full Sync...");
+    let client = esplora_client::Builder::new(ESPLORA_URL).build_async()?;
 
-    // wallet.apply_update(update)?;
-    // wallet.persist(&mut db)?;
-    // println!();
+    let request = wallet.start_full_scan().inspect({
+        let mut stdout = std::io::stdout();
+        let mut once = BTreeSet::<KeychainKind>::new();
+        move |keychain, spk_i, _| {
+            if once.insert(keychain) {
+                print!("\nScanning keychain [{keychain:?}]");
+            }
+            print!(" {spk_i:<3}");
+            stdout.flush().expect("must flush")
+        }
+    });
 
-    // let balance = wallet.balance();
-    // println!("Wallet balance after full sync: {}", balance.total());
-    // println!(
-    //     "Wallet has {} transactions and {} utxos after full sync",
-    //     wallet.transactions().count(),
-    //     wallet.list_unspent().count()
-    // );
+    let update = client
+        .full_scan(request, STOP_GAP, PARALLEL_REQUESTS)
+        .await?;
+
+    wallet.apply_update(update)?;
+    wallet.persist(&mut db)?;
+    println!();
+
+    let balance = wallet.balance();
+    println!("Wallet balance after full sync: {}", balance.total());
+    println!(
+        "Wallet has {} transactions and {} utxos after full sync",
+        wallet.transactions().count(),
+        wallet.list_unspent().count()
+    );
 
     // if balance.total() < SEND_AMOUNT {
     //     println!("Please send at least {SEND_AMOUNT} to the receiving address");

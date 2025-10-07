@@ -5,10 +5,11 @@ use bdk_wallet::bitcoin::Amount;
 use bdk_wallet::bitcoin::FeeRate;
 use bdk_wallet::bitcoin::Network;
 use bdk_wallet::chain::collections::HashSet;
+use bdk_wallet::keyring::KeyRing;
 use bdk_wallet::psbt::PsbtUtils;
 use bdk_wallet::rusqlite::Connection;
-use bdk_wallet::Wallet;
-use bdk_wallet::{KeychainKind, SignOptions};
+use bdk_wallet::{KeychainKind, LoadParams, SignOptions};
+use bdk_wallet::{PersistedWallet, Wallet};
 use std::io::Write;
 use std::thread::sleep;
 use std::time::Duration;
@@ -24,60 +25,64 @@ const INTERNAL_DESC: &str = "wpkh(tprv8ZgxMBicQKsPdy6LMhUtFHAgpocR8GC6QmwMSFpZs7
 const ELECTRUM_URL: &str = "ssl://mempool.space:40002";
 
 fn main() -> Result<(), anyhow::Error> {
-    // let mut db = Connection::open(DB_PATH)?;
-    // let wallet_opt = Wallet::load()
-    //     .descriptor(KeychainKind::External, Some(EXTERNAL_DESC))
-    //     .descriptor(KeychainKind::Internal, Some(INTERNAL_DESC))
-    //     .extract_keys()
-    //     .check_network(NETWORK)
-    //     .load_wallet(&mut db)?;
-    // let mut wallet = match wallet_opt {
-    //     Some(wallet) => wallet,
-    //     None => Wallet::create(EXTERNAL_DESC, INTERNAL_DESC)
-    //         .network(NETWORK)
-    //         .create_wallet(&mut db)?,
-    // };
+    let mut db = Connection::open(DB_PATH)?;
+    let params = LoadParams::new()
+        .check_descriptor(KeychainKind::External, Some(EXTERNAL_DESC))
+        .check_descriptor(KeychainKind::Internal, Some(INTERNAL_DESC))
+        .check_genesis_hash(bitcoin::constants::genesis_block(NETWORK).block_hash())
+        .check_network(NETWORK);
 
-    // let address = wallet.next_unused_address(KeychainKind::External);
-    // wallet.persist(&mut db)?;
-    // println!("Generated Address: {address}");
+    let mut wallet = match params.load_wallet(&mut db).unwrap() {
+        Some(wallet) => wallet,
+        None => {
+            let mut keyring: KeyRing<KeychainKind> =
+                KeyRing::new(NETWORK, KeychainKind::External, EXTERNAL_DESC).unwrap();
+            keyring.add_descriptor(KeychainKind::Internal, INTERNAL_DESC)?;
 
-    // let balance = wallet.balance();
-    // println!("Wallet balance before syncing: {}", balance.total());
+            Wallet::create(keyring).create_wallet(&mut db)?
+        }
+    };
 
-    // println!("Performing Full Sync...");
-    // let client = BdkElectrumClient::new(electrum_client::Client::new(ELECTRUM_URL)?);
+    let address = wallet.next_unused_address(KeychainKind::External).unwrap();
+    wallet.persist(&mut db)?;
+    println!("Generated Address: {address}");
 
-    // // Populate the electrum client's transaction cache so it doesn't redownload transaction we
-    // // already have.
-    // client.populate_tx_cache(wallet.tx_graph().full_txs().map(|tx_node| tx_node.tx));
+    let balance = wallet.balance();
+    println!("Wallet balance before syncing: {}", balance.total());
 
-    // let request = wallet.start_full_scan().inspect({
-    //     let mut stdout = std::io::stdout();
-    //     let mut once = HashSet::<KeychainKind>::new();
-    //     move |k, spk_i, _| {
-    //         if once.insert(k) {
-    //             print!("\nScanning keychain [{k:?}]");
-    //         }
-    //         print!(" {spk_i:<3}");
-    //         stdout.flush().expect("must flush");
-    //     }
-    // });
+    println!("Performing Full Sync...");
+    let client = BdkElectrumClient::new(electrum_client::Client::new(ELECTRUM_URL)?);
 
-    // let update = client.full_scan(request, STOP_GAP, BATCH_SIZE, false)?;
+    // Populate the electrum client's transaction cache so it doesn't redownload transaction we
+    // already have.
+    client.populate_tx_cache(wallet.tx_graph().full_txs().map(|tx_node| tx_node.tx));
 
-    // println!();
+    let request = wallet.start_full_scan().inspect({
+        let mut stdout = std::io::stdout();
+        let mut once = HashSet::<KeychainKind>::new();
+        move |k, spk_i, _| {
+            if once.insert(k) {
+                print!("\nScanning keychain [{k:?}]");
+            }
+            print!(" {spk_i:<3}");
+            stdout.flush().expect("must flush");
+        }
+    });
 
-    // wallet.apply_update(update)?;
-    // wallet.persist(&mut db)?;
+    let update = client.full_scan(request, STOP_GAP, BATCH_SIZE, false)?;
 
-    // let balance = wallet.balance();
-    // println!("Wallet balance after full sync: {}", balance.total());
-    // println!(
-    //     "Wallet has {} transactions and {} utxos after full sync",
-    //     wallet.transactions().count(),
-    //     wallet.list_unspent().count()
-    // );
+    println!();
+
+    wallet.apply_update(update)?;
+    wallet.persist(&mut db)?;
+
+    let balance = wallet.balance();
+    println!("Wallet balance after full sync: {}", balance.total());
+    println!(
+        "Wallet has {} transactions and {} utxos after full sync",
+        wallet.transactions().count(),
+        wallet.list_unspent().count()
+    );
 
     // if balance.total() < SEND_AMOUNT {
     //     println!("Please send at least {SEND_AMOUNT} to the receiving address");
