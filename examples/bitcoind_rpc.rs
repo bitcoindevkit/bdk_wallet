@@ -6,7 +6,8 @@ use bdk_bitcoind_rpc::{
 use bdk_wallet::rusqlite::Connection;
 use bdk_wallet::{
     bitcoin::{Block, Network},
-    KeychainKind, Wallet,
+    keyring::KeyRing,
+    KeychainKind, LoadParams, PersistedWallet, Wallet,
 };
 use clap::{self, Parser};
 use std::{
@@ -85,125 +86,139 @@ enum Emission {
 }
 
 fn main() -> anyhow::Result<()> {
-    // let args = Args::parse();
+    let args = Args::parse();
 
-    // let rpc_client = Arc::new(args.client()?);
-    // println!(
-    //     "Connected to Bitcoin Core RPC at {:?}",
-    //     rpc_client.get_blockchain_info().unwrap()
-    // );
+    let rpc_client = Arc::new(args.client()?);
+    println!(
+        "Connected to Bitcoin Core RPC at {:?}",
+        rpc_client.get_blockchain_info().unwrap()
+    );
 
-    // let start_load_wallet = Instant::now();
-    // let mut db = Connection::open(args.db_path)?;
-    // let wallet_opt = Wallet::load()
-    //     .descriptor(KeychainKind::External, Some(args.descriptor.clone()))
-    //     .descriptor(KeychainKind::Internal, args.change_descriptor.clone())
-    //     .extract_keys()
-    //     .check_network(args.network)
-    //     .load_wallet(&mut db)?;
-    // let mut wallet = match wallet_opt {
-    //     Some(wallet) => wallet,
-    //     None => match &args.change_descriptor {
-    //         Some(change_desc) => Wallet::create(args.descriptor.clone(), change_desc.clone())
-    //             .network(args.network)
-    //             .create_wallet(&mut db)?,
-    //         None => Wallet::create_single(args.descriptor.clone())
-    //             .network(args.network)
-    //             .create_wallet(&mut db)?,
-    //     },
-    // };
-    // println!(
-    //     "Loaded wallet in {}s",
-    //     start_load_wallet.elapsed().as_secs_f32()
-    // );
+    let start_load_wallet = Instant::now();
+    let mut db = Connection::open(args.db_path)?;
 
-    // let address = wallet.reveal_next_address(KeychainKind::External).address;
-    // println!("Wallet address: {address}");
+    let mut params = LoadParams::new()
+        .check_descriptor(KeychainKind::External, Some(args.descriptor.clone()))
+        .check_genesis_hash(bitcoin::constants::genesis_block(args.network).block_hash())
+        .check_network(args.network);
 
-    // let balance = wallet.balance();
-    // println!("Wallet balance before syncing: {}", balance.total());
+    if let Some(desc) = &args.change_descriptor {
+        params = params.check_descriptor(KeychainKind::Internal, Some(desc.clone()));
+    }
 
-    // let wallet_tip = wallet.latest_checkpoint();
-    // println!(
-    //     "Wallet tip: {} at height {}",
-    //     wallet_tip.hash(),
-    //     wallet_tip.height()
-    // );
+    let mut wallet = match params.load_wallet(&mut db).unwrap() {
+        Some(wallet) => wallet,
+        None => {
+            let mut keyring: KeyRing<KeychainKind> = KeyRing::new(
+                args.network,
+                KeychainKind::External,
+                args.descriptor.clone(),
+            )
+            .unwrap();
+            if let Some(desc) = &args.change_descriptor {
+                keyring
+                    .add_descriptor(KeychainKind::Internal, desc.clone())
+                    .unwrap();
+            }
+            Wallet::create(keyring).create_wallet(&mut db)?
+        }
+    };
 
-    // let (sender, receiver) = sync_channel::<Emission>(21);
+    println!(
+        "Loaded wallet in {}s",
+        start_load_wallet.elapsed().as_secs_f32()
+    );
 
-    // let signal_sender = sender.clone();
-    // let _ = ctrlc::set_handler(move || {
-    //     signal_sender
-    //         .send(Emission::SigTerm)
-    //         .expect("failed to send sigterm")
-    // });
+    let address = wallet
+        .next_unused_address(KeychainKind::External)
+        .unwrap()
+        .address;
+    println!("Wallet address: {address}");
 
-    // let mut emitter = Emitter::new(
-    //     rpc_client,
-    //     wallet_tip,
-    //     args.start_height,
-    //     wallet
-    //         .transactions()
-    //         .filter(|tx| tx.chain_position.is_unconfirmed()),
-    // );
-    // spawn(move || -> Result<(), anyhow::Error> {
-    //     while let Some(emission) = emitter.next_block()? {
-    //         sender.send(Emission::Block(emission))?;
-    //     }
-    //     sender.send(Emission::Mempool(emitter.mempool()?))?;
-    //     Ok(())
-    // });
+    let balance = wallet.balance();
+    println!("Wallet balance before syncing: {}", balance.total());
 
-    // let mut blocks_received = 0_usize;
-    // for emission in receiver {
-    //     match emission {
-    //         Emission::SigTerm => {
-    //             println!("Sigterm received, exiting...");
-    //             break;
-    //         }
-    //         Emission::Block(block_emission) => {
-    //             blocks_received += 1;
-    //             let height = block_emission.block_height();
-    //             let hash = block_emission.block_hash();
-    //             let connected_to = block_emission.connected_to();
-    //             let start_apply_block = Instant::now();
-    //             wallet.apply_block_connected_to(&block_emission.block, height, connected_to)?;
-    //             wallet.persist(&mut db)?;
-    //             let elapsed = start_apply_block.elapsed().as_secs_f32();
-    //             println!("Applied block {hash} at height {height} in {elapsed}s");
-    //         }
-    //         Emission::Mempool(event) => {
-    //             let start_apply_mempool = Instant::now();
-    //             wallet.apply_evicted_txs(event.evicted);
-    //             wallet.apply_unconfirmed_txs(event.update);
-    //             wallet.persist(&mut db)?;
-    //             println!(
-    //                 "Applied unconfirmed transactions in {}s",
-    //                 start_apply_mempool.elapsed().as_secs_f32()
-    //             );
-    //             break;
-    //         }
-    //     }
-    // }
-    // let wallet_tip_end = wallet.latest_checkpoint();
-    // let balance = wallet.balance();
-    // println!(
-    //     "Synced {} blocks in {}s",
-    //     blocks_received,
-    //     start_load_wallet.elapsed().as_secs_f32(),
-    // );
-    // println!(
-    //     "Wallet tip is '{}:{}'",
-    //     wallet_tip_end.height(),
-    //     wallet_tip_end.hash()
-    // );
-    // println!("Wallet balance is {}", balance.total());
-    // println!(
-    //     "Wallet has {} transactions and {} utxos",
-    //     wallet.transactions().count(),
-    //     wallet.list_unspent().count()
-    // );
+    let wallet_tip = wallet.latest_checkpoint();
+    println!(
+        "Wallet tip: {} at height {}",
+        wallet_tip.hash(),
+        wallet_tip.height()
+    );
+
+    let (sender, receiver) = sync_channel::<Emission>(21);
+
+    let signal_sender = sender.clone();
+    let _ = ctrlc::set_handler(move || {
+        signal_sender
+            .send(Emission::SigTerm)
+            .expect("failed to send sigterm")
+    });
+
+    let mut emitter = Emitter::new(
+        rpc_client,
+        wallet_tip,
+        args.start_height,
+        wallet
+            .transactions()
+            .filter(|tx| tx.chain_position.is_unconfirmed()),
+    );
+    spawn(move || -> Result<(), anyhow::Error> {
+        while let Some(emission) = emitter.next_block()? {
+            sender.send(Emission::Block(emission))?;
+        }
+        sender.send(Emission::Mempool(emitter.mempool()?))?;
+        Ok(())
+    });
+
+    let mut blocks_received = 0_usize;
+    for emission in receiver {
+        match emission {
+            Emission::SigTerm => {
+                println!("Sigterm received, exiting...");
+                break;
+            }
+            Emission::Block(block_emission) => {
+                blocks_received += 1;
+                let height = block_emission.block_height();
+                let hash = block_emission.block_hash();
+                let connected_to = block_emission.connected_to();
+                let start_apply_block = Instant::now();
+                wallet.apply_block_connected_to(&block_emission.block, height, connected_to)?;
+                wallet.persist(&mut db)?;
+                let elapsed = start_apply_block.elapsed().as_secs_f32();
+                println!("Applied block {hash} at height {height} in {elapsed}s");
+            }
+            Emission::Mempool(event) => {
+                let start_apply_mempool = Instant::now();
+                wallet.apply_evicted_txs(event.evicted);
+                wallet.apply_unconfirmed_txs(event.update);
+                wallet.persist(&mut db)?;
+                println!(
+                    "Applied unconfirmed transactions in {}s",
+                    start_apply_mempool.elapsed().as_secs_f32()
+                );
+                break;
+            }
+        }
+    }
+    let wallet_tip_end = wallet.latest_checkpoint();
+    let balance = wallet.balance();
+    println!(
+        "Synced {} blocks in {}s",
+        blocks_received,
+        start_load_wallet.elapsed().as_secs_f32(),
+    );
+    println!(
+        "Wallet tip is '{}:{}'",
+        wallet_tip_end.height(),
+        wallet_tip_end.hash()
+    );
+    println!("Wallet balance is {}", balance.total());
+    println!(
+        "Wallet has {} transactions and {} utxos",
+        wallet.transactions().count(),
+        wallet.list_unspent().count()
+    );
 
     Ok(())
 }
