@@ -49,8 +49,8 @@ pub use self::error::Error as DescriptorError;
 use self::template::DescriptorTemplateOut;
 use crate::keys::{IntoDescriptorKey, KeyError};
 use crate::wallet::{
-    // signer::SignersContainer, 
-    utils::SecpCtx
+    // signer::SignersContainer,
+    utils::SecpCtx,
 };
 
 /// Alias for a [`Descriptor`] that can contain extended keys using [`DescriptorPublicKey`]

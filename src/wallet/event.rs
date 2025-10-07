@@ -26,9 +26,9 @@ use core::fmt::Debug;
 //     ///
 //     /// If the transaction was previously unconfirmed `old_block_time` will be `None`.
 //     ///
-//     /// If a confirmed transaction is now re-confirmed in a new block `old_block_time` will contain
-//     /// the block id and the time it was previously confirmed. This can happen after a chain
-//     /// reorg.
+//     /// If a confirmed transaction is now re-confirmed in a new block `old_block_time` will
+// contain     /// the block id and the time it was previously confirmed. This can happen after a
+// chain     /// reorg.
 //     TxConfirmed {
 //         /// Transaction id.
 //         txid: Txid,
@@ -72,8 +72,8 @@ use core::fmt::Debug;
 //     /// Unconfirmed transaction dropped.
 //     ///
 //     /// The transaction was dropped from the local mempool. This is generally due to the fee rate
-//     /// being too low. The transaction can still reappear in the mempool in the future resulting in
-//     /// a [`WalletEvent::TxUnconfirmed`] event.
+//     /// being too low. The transaction can still reappear in the mempool in the future resulting
+// in     /// a [`WalletEvent::TxUnconfirmed`] event.
 //     TxDropped {
 //         /// Transaction id.
 //         txid: Txid,

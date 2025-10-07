@@ -823,8 +823,8 @@ impl Default for FeePolicy {
 //                 "Requested outpoint doesn't exist for txid: {} with vout: {}",
 //                 outpoint.txid, outpoint.vout,
 //             ),
-//             Self::MissingUtxo => write!(f, "Foreign utxo missing witness_utxo or non_witness_utxo"),
-//         }
+//             Self::MissingUtxo => write!(f, "Foreign utxo missing witness_utxo or
+// non_witness_utxo"),         }
 //     }
 // }
 
