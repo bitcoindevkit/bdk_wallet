@@ -1,7 +1,7 @@
 // Bitcoin Dev Kit
 // Written in 2020 by Alekos Filini <alekos.filini@gmail.com>
 //
-// Copyright (c) 2020-2021 Bitcoin Dev Kit Developers
+// Copyright (c) 2020-2025 Bitcoin Dev Kit Developers
 //
 // This file is licensed under the Apache License, Version 2.0 <LICENSE-APACHE
 // or http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
@@ -16,14 +16,15 @@
 
 use crate::alloc::string::ToString;
 use crate::collections::BTreeMap;
+
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use bitcoin::bip32::{ChildNumber, DerivationPath, Fingerprint, KeySource, Xpub};
-use bitcoin::{key::XOnlyPublicKey, secp256k1, PublicKey};
-use bitcoin::{psbt, taproot};
-use bitcoin::{Network, TxOut};
-
+use bitcoin::{
+    bip32::{ChildNumber, DerivationPath, Fingerprint, KeySource, Xpub},
+    key::XOnlyPublicKey,
+    psbt, secp256k1, taproot, NetworkKind, PublicKey, TxOut,
+};
 use miniscript::descriptor::{
     DefiniteDescriptorKey, DescriptorMultiXKey, DescriptorSecretKey, DescriptorType,
     DescriptorXKey, InnerXKey, KeyMap, SinglePubKey, Wildcard,
@@ -47,8 +48,7 @@ pub use self::error::Error as DescriptorError;
 pub use self::policy::Policy;
 use self::template::DescriptorTemplateOut;
 use crate::keys::{IntoDescriptorKey, KeyError};
-use crate::wallet::signer::SignersContainer;
-use crate::wallet::utils::SecpCtx;
+use crate::wallet::{signer::SignersContainer, utils::SecpCtx};
 
 /// Alias for a [`Descriptor`] that can contain extended keys using [`DescriptorPublicKey`]
 pub type ExtendedDescriptor = Descriptor<DescriptorPublicKey>;
@@ -71,13 +71,13 @@ pub type HdKeyPaths = BTreeMap<secp256k1::PublicKey, KeySource>;
 pub type TapKeyOrigins = BTreeMap<XOnlyPublicKey, (Vec<taproot::TapLeafHash>, KeySource)>;
 
 /// Trait for types which can be converted into an [`ExtendedDescriptor`] and a [`KeyMap`] usable by
-/// a wallet in a specific [`Network`]
+/// a wallet in a specific [`NetworkKind`].
 pub trait IntoWalletDescriptor {
     /// Convert to wallet descriptor
     fn into_wallet_descriptor(
         self,
         secp: &SecpCtx,
-        network: Network,
+        network_kind: NetworkKind,
     ) -> Result<(ExtendedDescriptor, KeyMap), DescriptorError>;
 }
 
@@ -85,7 +85,7 @@ impl IntoWalletDescriptor for &str {
     fn into_wallet_descriptor(
         self,
         secp: &SecpCtx,
-        network: Network,
+        network_kind: NetworkKind,
     ) -> Result<(ExtendedDescriptor, KeyMap), DescriptorError> {
         let descriptor = match self.split_once('#') {
             Some((desc, original_checksum)) => {
@@ -99,7 +99,7 @@ impl IntoWalletDescriptor for &str {
         };
 
         ExtendedDescriptor::parse_descriptor(secp, descriptor)?
-            .into_wallet_descriptor(secp, network)
+            .into_wallet_descriptor(secp, network_kind)
     }
 }
 
@@ -107,9 +107,9 @@ impl IntoWalletDescriptor for &String {
     fn into_wallet_descriptor(
         self,
         secp: &SecpCtx,
-        network: Network,
+        network_kind: NetworkKind,
     ) -> Result<(ExtendedDescriptor, KeyMap), DescriptorError> {
-        self.as_str().into_wallet_descriptor(secp, network)
+        self.as_str().into_wallet_descriptor(secp, network_kind)
     }
 }
 
@@ -117,9 +117,9 @@ impl IntoWalletDescriptor for String {
     fn into_wallet_descriptor(
         self,
         secp: &SecpCtx,
-        network: Network,
+        network_kind: NetworkKind,
     ) -> Result<(ExtendedDescriptor, KeyMap), DescriptorError> {
-        self.as_str().into_wallet_descriptor(secp, network)
+        self.as_str().into_wallet_descriptor(secp, network_kind)
     }
 }
 
@@ -127,9 +127,9 @@ impl IntoWalletDescriptor for ExtendedDescriptor {
     fn into_wallet_descriptor(
         self,
         secp: &SecpCtx,
-        network: Network,
+        network_kind: NetworkKind,
     ) -> Result<(ExtendedDescriptor, KeyMap), DescriptorError> {
-        (self, KeyMap::default()).into_wallet_descriptor(secp, network)
+        (self, KeyMap::default()).into_wallet_descriptor(secp, network_kind)
     }
 }
 
@@ -137,21 +137,21 @@ impl IntoWalletDescriptor for (ExtendedDescriptor, KeyMap) {
     fn into_wallet_descriptor(
         self,
         secp: &SecpCtx,
-        network: Network,
+        network_kind: NetworkKind,
     ) -> Result<(ExtendedDescriptor, KeyMap), DescriptorError> {
         use crate::keys::DescriptorKey;
 
         struct Translator<'s, 'd> {
             secp: &'s SecpCtx,
             descriptor: &'d ExtendedDescriptor,
-            network: Network,
+            network_kind: NetworkKind,
         }
 
         impl miniscript::Translator<DescriptorPublicKey, String, DescriptorError> for Translator<'_, '_> {
             fn pk(&mut self, pk: &DescriptorPublicKey) -> Result<String, DescriptorError> {
                 let secp = &self.secp;
 
-                let (_, _, networks) = if self.descriptor.is_taproot() {
+                let (_, _, network_kinds) = if self.descriptor.is_taproot() {
                     let descriptor_key: DescriptorKey<miniscript::Tap> =
                         pk.clone().into_descriptor_key()?;
                     descriptor_key.extract(secp)?
@@ -165,10 +165,10 @@ impl IntoWalletDescriptor for (ExtendedDescriptor, KeyMap) {
                     descriptor_key.extract(secp)?
                 };
 
-                if networks.contains(&self.network) {
+                if network_kinds.contains(&self.network_kind) {
                     Ok(Default::default())
                 } else {
-                    Err(DescriptorError::Key(KeyError::InvalidNetwork))
+                    Err(DescriptorError::Key(KeyError::InvalidNetworkKind))
                 }
             }
             fn sha256(
@@ -197,11 +197,11 @@ impl IntoWalletDescriptor for (ExtendedDescriptor, KeyMap) {
             }
         }
 
-        // check the network for the keys
+        // Check the `network_kind` for the keys.
         use miniscript::TranslateErr;
         match self.0.translate_pk(&mut Translator {
             secp,
-            network,
+            network_kind,
             descriptor: &self.0,
         }) {
             Ok(_) => {}
@@ -217,10 +217,10 @@ impl IntoWalletDescriptor for DescriptorTemplateOut {
     fn into_wallet_descriptor(
         self,
         _secp: &SecpCtx,
-        network: Network,
+        network_kind: NetworkKind,
     ) -> Result<(ExtendedDescriptor, KeyMap), DescriptorError> {
         struct Translator {
-            network: Network,
+            network_kind: NetworkKind,
         }
 
         impl miniscript::Translator<DescriptorPublicKey, DescriptorPublicKey, DescriptorError>
@@ -230,15 +230,16 @@ impl IntoWalletDescriptor for DescriptorTemplateOut {
                 &mut self,
                 pk: &DescriptorPublicKey,
             ) -> Result<DescriptorPublicKey, DescriptorError> {
-                // workaround for xpubs generated by other key types, like bip39: since when the
-                // conversion is made one network has to be chosen, what we generally choose
-                // "mainnet", but then override the set of valid networks to specify that all of
-                // them are valid. here we reset the network to make sure the wallet struct gets a
-                // descriptor with the right network everywhere.
+                // Workaround for xpubs generated by other key types, like BIP39: since when the
+                // conversion is made a [`NetworkKind`] has to be chosen, what we generally do is
+                // choose [`NetworkKind::Main`], but then override the set of valid
+                // `network_kinds` to specify that all of them are valid. Here we
+                // reset the `network_kind` to make sure the wallet struct gets a
+                // descriptor with the right `network_kind` everywhere.
                 let pk = match pk {
                     DescriptorPublicKey::XPub(ref xpub) => {
                         let mut xpub = xpub.clone();
-                        xpub.xkey.network = self.network.into();
+                        xpub.xkey.network = self.network_kind;
 
                         DescriptorPublicKey::XPub(xpub)
                     }
@@ -254,30 +255,30 @@ impl IntoWalletDescriptor for DescriptorTemplateOut {
             );
         }
 
-        let (desc, keymap, networks) = self;
+        let (desc, keymap, network_kinds) = self;
 
-        if !networks.contains(&network) {
-            return Err(DescriptorError::Key(KeyError::InvalidNetwork));
+        if !network_kinds.contains(&network_kind) {
+            return Err(DescriptorError::Key(KeyError::InvalidNetworkKind));
         }
 
-        // fixup the network for keys that need it in the descriptor
+        // Fixup the network kind for keys that need it in the descriptor...
         use miniscript::TranslateErr;
-        let translated = match desc.translate_pk(&mut Translator { network }) {
+        let translated = match desc.translate_pk(&mut Translator { network_kind }) {
             Ok(descriptor) => descriptor,
             Err(TranslateErr::TranslatorErr(e)) => return Err(e),
             Err(TranslateErr::OuterError(e)) => return Err(e.into()),
         };
-        // ...and in the key map
+        // ...and in the key map.
         let fixed_keymap = keymap
             .into_iter()
             .map(|(mut k, mut v)| {
                 match (&mut k, &mut v) {
                     (DescriptorPublicKey::XPub(xpub), DescriptorSecretKey::XPrv(xprv)) => {
-                        xpub.xkey.network = network.into();
-                        xprv.xkey.network = network.into();
+                        xpub.xkey.network = network_kind;
+                        xprv.xkey.network = network_kind;
                     }
                     (_, DescriptorSecretKey::Single(key)) => {
-                        key.key.network = network.into();
+                        key.key.network = network_kind;
                     }
                     _ => {}
                 }
@@ -294,7 +295,7 @@ impl IntoWalletDescriptor for DescriptorTemplateOut {
 pub(crate) fn check_wallet_descriptor(
     descriptor: &Descriptor<DescriptorPublicKey>,
 ) -> Result<(), DescriptorError> {
-    // Ensure the keys don't contain any hardened derivation steps or hardened wildcards
+    // Ensure the keys don't contain any hardened derivation steps or hardened wildcards.
     let descriptor_contains_hardened_steps = descriptor.for_any_key(|k| {
         if let DescriptorPublicKey::XPub(DescriptorXKey {
             derivation_path,
@@ -321,14 +322,14 @@ pub(crate) fn check_wallet_descriptor(
     }
 
     // Run miniscript's sanity check, which will look for duplicated keys and other potential
-    // issues
+    // issues.
     descriptor.sanity_check()?;
 
     Ok(())
 }
 
 #[doc(hidden)]
-/// Used internally mainly by the `descriptor!()` and `fragment!()` macros
+/// Used internally mainly by the `descriptor!()` and `fragment!()` macros.
 pub trait CheckMiniscript<Ctx: miniscript::ScriptContext> {
     fn check_miniscript(&self) -> Result<(), miniscript::Error>;
 }
@@ -343,7 +344,7 @@ impl<Ctx: miniscript::ScriptContext, Pk: miniscript::MiniscriptKey> CheckMiniscr
     }
 }
 
-/// Trait implemented on [`Descriptor`]s to add a method to extract the spending [`policy`]
+/// Trait implemented on [`Descriptor`]s to add a method to extract the spending [`policy`].
 pub trait ExtractPolicy {
     /// Extract the spending [`policy`]
     fn extract_policy(
@@ -445,7 +446,7 @@ impl DescriptorMeta for ExtendedDescriptor {
         key_origins: BTreeMap<Fingerprint, (&DerivationPath, SinglePubKey)>,
         secp: &SecpCtx,
     ) -> Option<DerivedDescriptor> {
-        // Ensure that deriving `xpub` with `path` yields `expected`
+        // Ensure that deriving `xpub` with `path` yields `expected`.
         let verify_key =
             |xpub: &DescriptorXKey<Xpub>, path: &DerivationPath, expected: &SinglePubKey| {
                 let derived = xpub
@@ -463,7 +464,7 @@ impl DescriptorMeta for ExtendedDescriptor {
 
         let mut path_found = None;
 
-        // using `for_any_key` should make this stop as soon as we return `true`
+        // Using `for_any_key` should make this stop as soon as we return `true`.
         self.for_any_key(|key| {
             if let DescriptorPublicKey::XPub(xpub) = key {
                 // Check if the key matches one entry in our `key_origins`. If it does, `matches()`
@@ -486,10 +487,9 @@ impl DescriptorMeta for ExtendedDescriptor {
                             .collect::<DerivationPath>();
 
                         // `derive_path` only contains the replacement index for the wildcard, if
-                        // present, or an empty path for fixed descriptors.
-                        // To verify the key we also need the normal steps
-                        // that come before the wildcard, so we take them directly from `xpub` and
-                        // then append the final index
+                        // present, or an empty path for fixed descriptors. To verify the key we
+                        // also need the normal steps that come before the wildcard, so we take them
+                        // directly from `xpub` and then append the final index.
                         if verify_key(
                             xpub,
                             &xpub.derivation_path.extend(derive_path.clone()),
@@ -503,7 +503,7 @@ impl DescriptorMeta for ExtendedDescriptor {
 
                 match derive_path {
                     Some(path) if xpub.wildcard != Wildcard::None && path.len() == 1 => {
-                        // Ignore hardened wildcards
+                        // Ignore hardened wildcards.
                         if let ChildNumber::Normal { index } = path[0] {
                             path_found = Some(index);
                             return true;
@@ -531,7 +531,7 @@ impl DescriptorMeta for ExtendedDescriptor {
         hd_keypaths: &HdKeyPaths,
         secp: &SecpCtx,
     ) -> Option<DerivedDescriptor> {
-        // "Convert" an hd_keypaths map to the format required by `derive_from_psbt_key_origins`
+        // "Convert" an `hd_keypaths` map to the format required by `derive_from_psbt_key_origins`.
         let key_origins = hd_keypaths
             .iter()
             .map(|(pk, (fingerprint, path))| {
@@ -549,7 +549,8 @@ impl DescriptorMeta for ExtendedDescriptor {
         tap_key_origins: &TapKeyOrigins,
         secp: &SecpCtx,
     ) -> Option<DerivedDescriptor> {
-        // "Convert" a tap_key_origins map to the format required by `derive_from_psbt_key_origins`
+        // "Convert" a `tap_key_origins` map to the format required by
+        // `derive_from_psbt_key_origins`.
         let key_origins = tap_key_origins
             .iter()
             .map(|(pk, (_, (fingerprint, path)))| (*fingerprint, (path, SinglePubKey::XOnly(*pk))))
@@ -570,7 +571,7 @@ impl DescriptorMeta for ExtendedDescriptor {
             return Some(derived);
         }
         if self.has_wildcard() {
-            // We can't try to bruteforce the derivation index, exit here
+            // We can't try to bruteforce the derivation index, exit here.
             return None;
         }
 
@@ -731,25 +732,26 @@ mod test {
     }
 
     #[test]
-    fn test_to_wallet_descriptor_fixup_networks() {
-        use crate::keys::{any_network, IntoDescriptorKey};
+    fn test_to_wallet_descriptor_fixup_network_kinds() {
+        use crate::keys::{any_network_kind, IntoDescriptorKey};
 
         let secp = Secp256k1::new();
 
         let xprv = bip32::Xpriv::from_str("xprv9s21ZrQH143K3c3gF1DUWpWNr2SG2XrG8oYPpqYh7hoWsJy9NjabErnzriJPpnGHyKz5NgdXmq1KVbqS1r4NXdCoKitWg5e86zqXHa8kxyB").unwrap();
         let path = bip32::DerivationPath::from_str("m/0").unwrap();
 
-        // here `to_descriptor_key` will set the valid networks for the key to only mainnet, since
-        // we are using an "xpub"
+        // Here, `to_descriptor_key` will set the valid networks for the key to only
+        // [`NetworkKind::Main`], since we are using an "xpub".
         let key = (xprv, path.clone()).into_descriptor_key().unwrap();
-        // override it with any. this happens in some key conversions, like bip39
-        let key = key.override_valid_networks(any_network());
+        // Override it with any. This happens in some key conversions, like BIP39.
+        let key = key.override_valid_network_kinds(any_network_kind());
 
-        // make a descriptor out of it
+        // Make a descriptor out of it.
         let desc = crate::descriptor!(wpkh(key)).unwrap();
-        // this should convert the key that supports "any_network" to the right network (testnet)
+        // This should convert the key that supports "any_network_kind" to the right network kind
+        // ([`NetworkKind::Test`]).
         let (wallet_desc, keymap) = desc
-            .into_wallet_descriptor(&secp, Network::Testnet)
+            .into_wallet_descriptor(&secp, NetworkKind::Test)
             .unwrap();
 
         let mut xprv_testnet = xprv;
@@ -778,73 +780,80 @@ mod test {
         let secp = Secp256k1::new();
 
         let desc = "wpkh(tprv8ZgxMBicQKsPdpkqS7Eair4YxjcuuvDPNYmKX3sCniCf16tHEVrjjiSXEkFRnUH77yXc6ZcwHHcLNfjdi5qUvw3VDfgYiH5mNsj5izuiu2N/1/2/*)#tqz0nc62"
-            .into_wallet_descriptor(&secp, Network::Testnet);
+            .into_wallet_descriptor(&secp, NetworkKind::Test);
         assert!(desc.is_ok());
 
         let desc = "wpkh(tprv8ZgxMBicQKsPdpkqS7Eair4YxjcuuvDPNYmKX3sCniCf16tHEVrjjiSXEkFRnUH77yXc6ZcwHHcLNfjdi5qUvw3VDfgYiH5mNsj5izuiu2N/1/2/*)"
-            .into_wallet_descriptor(&secp, Network::Testnet);
+            .into_wallet_descriptor(&secp, NetworkKind::Test);
         assert!(desc.is_ok());
 
         let desc = "wpkh(tpubD6NzVbkrYhZ4XHndKkuB8FifXm8r5FQHwrN6oZuWCz13qb93rtgKvD4PQsqC4HP4yhV3tA2fqr2RbY5mNXfM7RxXUoeABoDtsFUq2zJq6YK/1/2/*)#67ju93jw"
-            .into_wallet_descriptor(&secp, Network::Testnet);
+            .into_wallet_descriptor(&secp, NetworkKind::Test);
         assert!(desc.is_ok());
 
         let desc = "wpkh(tpubD6NzVbkrYhZ4XHndKkuB8FifXm8r5FQHwrN6oZuWCz13qb93rtgKvD4PQsqC4HP4yhV3tA2fqr2RbY5mNXfM7RxXUoeABoDtsFUq2zJq6YK/1/2/*)"
-            .into_wallet_descriptor(&secp, Network::Testnet);
+            .into_wallet_descriptor(&secp, NetworkKind::Test);
         assert!(desc.is_ok());
 
         let desc = "wpkh(tprv8ZgxMBicQKsPdpkqS7Eair4YxjcuuvDPNYmKX3sCniCf16tHEVrjjiSXEkFRnUH77yXc6ZcwHHcLNfjdi5qUvw3VDfgYiH5mNsj5izuiu2N/1/2/*)#67ju93jw"
-            .into_wallet_descriptor(&secp, Network::Testnet);
+            .into_wallet_descriptor(&secp, NetworkKind::Test);
         assert_matches!(desc, Err(DescriptorError::InvalidDescriptorChecksum));
 
         let desc = "wpkh(tprv8ZgxMBicQKsPdpkqS7Eair4YxjcuuvDPNYmKX3sCniCf16tHEVrjjiSXEkFRnUH77yXc6ZcwHHcLNfjdi5qUvw3VDfgYiH5mNsj5izuiu2N/1/2/*)#67ju93jw"
-            .into_wallet_descriptor(&secp, Network::Testnet);
+            .into_wallet_descriptor(&secp, NetworkKind::Test);
         assert_matches!(desc, Err(DescriptorError::InvalidDescriptorChecksum));
     }
 
-    // test IntoWalletDescriptor trait from &str with keys from right and wrong network
+    // Test the `IntoWalletDescriptor` trait from `&str` with keys from the right and wrong
+    // [`NetworkKind`].
     #[test]
-    fn test_descriptor_from_str_with_keys_network() {
+    fn test_descriptor_from_str_with_keys_network_kind() {
         let secp = Secp256k1::new();
 
         let desc = "wpkh(tprv8ZgxMBicQKsPdpkqS7Eair4YxjcuuvDPNYmKX3sCniCf16tHEVrjjiSXEkFRnUH77yXc6ZcwHHcLNfjdi5qUvw3VDfgYiH5mNsj5izuiu2N/1/2/*)"
-            .into_wallet_descriptor(&secp, Network::Testnet);
+            .into_wallet_descriptor(&secp, NetworkKind::Test);
         assert!(desc.is_ok());
 
         let desc = "wpkh(tprv8ZgxMBicQKsPdpkqS7Eair4YxjcuuvDPNYmKX3sCniCf16tHEVrjjiSXEkFRnUH77yXc6ZcwHHcLNfjdi5qUvw3VDfgYiH5mNsj5izuiu2N/1/2/*)"
-            .into_wallet_descriptor(&secp, Network::Testnet4);
+            .into_wallet_descriptor(&secp, NetworkKind::Test);
         assert!(desc.is_ok());
 
         let desc = "wpkh(tprv8ZgxMBicQKsPdpkqS7Eair4YxjcuuvDPNYmKX3sCniCf16tHEVrjjiSXEkFRnUH77yXc6ZcwHHcLNfjdi5qUvw3VDfgYiH5mNsj5izuiu2N/1/2/*)"
-            .into_wallet_descriptor(&secp, Network::Regtest);
+            .into_wallet_descriptor(&secp, NetworkKind::Test);
         assert!(desc.is_ok());
 
         let desc = "wpkh(tpubD6NzVbkrYhZ4XHndKkuB8FifXm8r5FQHwrN6oZuWCz13qb93rtgKvD4PQsqC4HP4yhV3tA2fqr2RbY5mNXfM7RxXUoeABoDtsFUq2zJq6YK/1/2/*)"
-            .into_wallet_descriptor(&secp, Network::Testnet);
+            .into_wallet_descriptor(&secp, NetworkKind::Test);
         assert!(desc.is_ok());
 
         let desc = "wpkh(tpubD6NzVbkrYhZ4XHndKkuB8FifXm8r5FQHwrN6oZuWCz13qb93rtgKvD4PQsqC4HP4yhV3tA2fqr2RbY5mNXfM7RxXUoeABoDtsFUq2zJq6YK/1/2/*)"
-            .into_wallet_descriptor(&secp, Network::Regtest);
+            .into_wallet_descriptor(&secp, NetworkKind::Test);
         assert!(desc.is_ok());
 
         let desc = "sh(wpkh(02864bb4ad00cefa806098a69e192bbda937494e69eb452b87bb3f20f6283baedb))"
-            .into_wallet_descriptor(&secp, Network::Testnet);
+            .into_wallet_descriptor(&secp, NetworkKind::Test);
         assert!(desc.is_ok());
 
         let desc = "sh(wpkh(02864bb4ad00cefa806098a69e192bbda937494e69eb452b87bb3f20f6283baedb))"
-            .into_wallet_descriptor(&secp, Network::Bitcoin);
+            .into_wallet_descriptor(&secp, NetworkKind::Main);
         assert!(desc.is_ok());
 
         let desc = "wpkh(tprv8ZgxMBicQKsPdpkqS7Eair4YxjcuuvDPNYmKX3sCniCf16tHEVrjjiSXEkFRnUH77yXc6ZcwHHcLNfjdi5qUvw3VDfgYiH5mNsj5izuiu2N/1/2/*)"
-            .into_wallet_descriptor(&secp, Network::Bitcoin);
-        assert_matches!(desc, Err(DescriptorError::Key(KeyError::InvalidNetwork)));
+            .into_wallet_descriptor(&secp, NetworkKind::Main);
+        assert_matches!(
+            desc,
+            Err(DescriptorError::Key(KeyError::InvalidNetworkKind))
+        );
 
         let desc = "wpkh(tpubD6NzVbkrYhZ4XHndKkuB8FifXm8r5FQHwrN6oZuWCz13qb93rtgKvD4PQsqC4HP4yhV3tA2fqr2RbY5mNXfM7RxXUoeABoDtsFUq2zJq6YK/1/2/*)"
-            .into_wallet_descriptor(&secp, Network::Bitcoin);
-        assert_matches!(desc, Err(DescriptorError::Key(KeyError::InvalidNetwork)));
+            .into_wallet_descriptor(&secp, NetworkKind::Main);
+        assert_matches!(
+            desc,
+            Err(DescriptorError::Key(KeyError::InvalidNetworkKind))
+        );
     }
 
-    // test IntoWalletDescriptor trait from the output of the descriptor!() macro
+    // Test IntoWalletDescriptor trait from the output of the `descriptor!()` macro.
     #[test]
     fn test_descriptor_from_str_from_output_of_macro() {
         let secp = Secp256k1::new();
@@ -853,17 +862,17 @@ mod test {
         let path = bip32::DerivationPath::from_str("m/1/2").unwrap();
         let key = (tpub, path).into_descriptor_key().unwrap();
 
-        // make a descriptor out of it
+        // Make a descriptor out of it.
         let desc = crate::descriptor!(wpkh(key)).unwrap();
 
         let (wallet_desc, _) = desc
-            .into_wallet_descriptor(&secp, Network::Testnet)
+            .into_wallet_descriptor(&secp, NetworkKind::Test)
             .unwrap();
         let wallet_desc_str = wallet_desc.to_string();
         assert_eq!(wallet_desc_str, "wpkh(tpubD6NzVbkrYhZ4XHndKkuB8FifXm8r5FQHwrN6oZuWCz13qb93rtgKvD4PQsqC4HP4yhV3tA2fqr2RbY5mNXfM7RxXUoeABoDtsFUq2zJq6YK/1/2/*)#67ju93jw");
 
         let (wallet_desc2, _) = wallet_desc_str
-            .into_wallet_descriptor(&secp, Network::Testnet)
+            .into_wallet_descriptor(&secp, NetworkKind::Test)
             .unwrap();
         assert_eq!(wallet_desc, wallet_desc2)
     }
@@ -874,7 +883,7 @@ mod test {
 
         let descriptor = "wpkh(tpubD6NzVbkrYhZ4XHndKkuB8FifXm8r5FQHwrN6oZuWCz13qb93rtgKvD4PQsqC4HP4yhV3tA2fqr2RbY5mNXfM7RxXUoeABoDtsFUq2zJq6YK/0'/1/2/*)";
         let (descriptor, _) = descriptor
-            .into_wallet_descriptor(&secp, Network::Testnet)
+            .into_wallet_descriptor(&secp, NetworkKind::Test)
             .expect("must parse");
         let result = check_wallet_descriptor(&descriptor);
 
@@ -883,7 +892,7 @@ mod test {
         // Any multipath descriptor should fail
         let descriptor = "wpkh(tpubD6NzVbkrYhZ4XHndKkuB8FifXm8r5FQHwrN6oZuWCz13qb93rtgKvD4PQsqC4HP4yhV3tA2fqr2RbY5mNXfM7RxXUoeABoDtsFUq2zJq6YK/<0;1>/*)";
         let (descriptor, _) = descriptor
-            .into_wallet_descriptor(&secp, Network::Testnet)
+            .into_wallet_descriptor(&secp, NetworkKind::Test)
             .expect("must parse");
         let result = check_wallet_descriptor(&descriptor);
 
@@ -894,10 +903,10 @@ mod test {
             ))
         );
 
-        // repeated pubkeys
+        // Repeated pubkeys.
         let descriptor = "wsh(multi(2,tpubD6NzVbkrYhZ4XHndKkuB8FifXm8r5FQHwrN6oZuWCz13qb93rtgKvD4PQsqC4HP4yhV3tA2fqr2RbY5mNXfM7RxXUoeABoDtsFUq2zJq6YK/0/*,tpubD6NzVbkrYhZ4XHndKkuB8FifXm8r5FQHwrN6oZuWCz13qb93rtgKvD4PQsqC4HP4yhV3tA2fqr2RbY5mNXfM7RxXUoeABoDtsFUq2zJq6YK/0/*))";
         let (descriptor, _) = descriptor
-            .into_wallet_descriptor(&secp, Network::Testnet)
+            .into_wallet_descriptor(&secp, NetworkKind::Test)
             .expect("must parse");
         let result = check_wallet_descriptor(&descriptor);
 
@@ -912,7 +921,7 @@ mod test {
 
         let descriptor = "sh(wsh(sortedmulti(3,tpubDEsqS36T4DVsKJd9UH8pAKzrkGBYPLEt9jZMwpKtzh1G6mgYehfHt9WCgk7MJG5QGSFWf176KaBNoXbcuFcuadAFKxDpUdMDKGBha7bY3QM/0/*,tpubDF3cpwfs7fMvXXuoQbohXtLjNM6ehwYT287LWtmLsd4r77YLg6MZg4vTETx5MSJ2zkfigbYWu31VA2Z2Vc1cZugCYXgS7FQu6pE8V6TriEH/0/*,tpubDE1SKfcW76Tb2AASv5bQWMuScYNAdoqLHoexw13sNDXwmUhQDBbCD3QAedKGLhxMrWQdMDKENzYtnXPDRvexQPNuDrLj52wAjHhNEm8sJ4p/0/*,tpubDFLc6oXwJmhm3FGGzXkfJNTh2KitoY3WhmmQvuAjMhD8YbyWn5mAqckbxXfm2etM3p5J6JoTpSrMqRSTfMLtNW46poDaEZJ1kjd3csRSjwH/0/*,tpubDEWD9NBeWP59xXmdqSNt4VYdtTGwbpyP8WS962BuqpQeMZmX9Pur14dhXdZT5a7wR1pK6dPtZ9fP5WR493hPzemnBvkfLLYxnUjAKj1JCQV/0/*,tpubDEHyZkkwd7gZWCTgQuYQ9C4myF2hMEmyHsBCCmLssGqoqUxeT3gzohF5uEVURkf9TtmeepJgkSUmteac38FwZqirjApzNX59XSHLcwaTZCH/0/*,tpubDEqLouCekwnMUWN486kxGzD44qVgeyuqHyxUypNEiQt5RnUZNJe386TKPK99fqRV1vRkZjYAjtXGTECz98MCsdLcnkM67U6KdYRzVubeCgZ/0/*)))";
         let (descriptor, _) = descriptor
-            .into_wallet_descriptor(&secp, Network::Testnet)
+            .into_wallet_descriptor(&secp, NetworkKind::Test)
             .unwrap();
         check_wallet_descriptor(&descriptor).expect("descriptor");
 
@@ -934,27 +943,27 @@ mod test {
         // See <https://github.com/bitcoindevkit/bdk_wallet/issues/10>
         let secp = Secp256k1::new();
 
-        // multipath tpub
+        // Multipath `tpub`.
         let descriptor_str = "wpkh([9a6a2580/84'/1'/0']tpubDDnGNapGEY6AZAdQbfRJgMg9fvz8pUBrLwvyvUqEgcUfgzM6zc2eVK4vY9x9L5FJWdX8WumXuLEDV5zDZnTfbn87vLe9XceCFwTu9so9Kks/<0;1>/*)";
         let (descriptor, _key_map) = descriptor_str
-            .into_wallet_descriptor(&secp, Network::Testnet)
+            .into_wallet_descriptor(&secp, NetworkKind::Test)
             .expect("should parse multipath tpub");
 
         assert!(descriptor.is_multipath());
 
-        // invalid network for descriptor
+        // Invalid [`NetworkKind`] for descriptor.
         let descriptor_str = "wpkh([9a6a2580/84'/0'/0']xpub6DEzNop46vmxR49zYWFnMwmEfawSNmAMf6dLH5YKDY463twtvw1XD7ihwJRLPRGZJz799VPFzXHpZu6WdhT29WnaeuChS6aZHZPFmqczR5K/<0;1>/*)";
-        let res = descriptor_str.into_wallet_descriptor(&secp, Network::Testnet);
+        let res = descriptor_str.into_wallet_descriptor(&secp, NetworkKind::Test);
 
         assert!(matches!(
             res,
-            Err(DescriptorError::Key(KeyError::InvalidNetwork))
+            Err(DescriptorError::Key(KeyError::InvalidNetworkKind))
         ));
 
-        // multipath xpub
+        // Multipath xpub.
         let descriptor_str = "wpkh([9a6a2580/84'/0'/0']xpub6DEzNop46vmxR49zYWFnMwmEfawSNmAMf6dLH5YKDY463twtvw1XD7ihwJRLPRGZJz799VPFzXHpZu6WdhT29WnaeuChS6aZHZPFmqczR5K/<0;1>/*)";
         let (descriptor, _key_map) = descriptor_str
-            .into_wallet_descriptor(&secp, Network::Bitcoin)
+            .into_wallet_descriptor(&secp, NetworkKind::Main)
             .expect("should parse multipath xpub");
 
         assert!(descriptor.is_multipath());
@@ -967,7 +976,7 @@ mod test {
             Err(miniscript::Error::Unexpected(..)),
         ));
         let _ = descriptor_str
-            .into_wallet_descriptor(&secp, Network::Testnet)
+            .into_wallet_descriptor(&secp, NetworkKind::Main)
             .unwrap_err();
 
         Ok(())

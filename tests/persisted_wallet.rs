@@ -16,7 +16,8 @@ use bitcoin::constants::ChainHash;
 use bitcoin::hashes::Hash;
 use bitcoin::key::Secp256k1;
 use bitcoin::{
-    absolute, secp256k1, transaction, Amount, BlockHash, Network, ScriptBuf, Transaction, TxOut,
+    absolute, secp256k1, transaction, Amount, BlockHash, Network, NetworkKind, ScriptBuf,
+    Transaction, TxOut,
 };
 use miniscript::{Descriptor, DescriptorPublicKey};
 
@@ -42,10 +43,10 @@ fn wallet_is_persisted() -> anyhow::Result<()> {
         let secp = secp256k1::Secp256k1::new();
         let (external, internal) = get_test_tr_single_sig_xprv_and_change_desc();
         let (external_desc, _) = external
-            .into_wallet_descriptor(&secp, Network::Testnet)
+            .into_wallet_descriptor(&secp, NetworkKind::Test)
             .unwrap();
         let (internal_desc, _) = internal
-            .into_wallet_descriptor(&secp, Network::Testnet)
+            .into_wallet_descriptor(&secp, NetworkKind::Test)
             .unwrap();
         let external_did = external_desc.descriptor_id();
         let internal_did = internal_desc.descriptor_id();
@@ -144,7 +145,7 @@ fn wallet_is_persisted() -> anyhow::Result<()> {
             assert_eq!(
                 *wallet.public_descriptor(KeychainKind::External),
                 external_desc
-                    .into_wallet_descriptor(&secp, wallet.network())
+                    .into_wallet_descriptor(&secp, wallet.network().into())
                     .unwrap()
                     .0
             );
