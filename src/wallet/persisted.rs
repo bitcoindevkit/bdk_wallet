@@ -150,7 +150,9 @@ impl<P: WalletPersister> PersistedWallet<P> {
     ) -> Result<Self, CreateWithPersistError<P::Error>> {
         let existing = P::initialize(persister).map_err(CreateWithPersistError::Persist)?;
         if !existing.is_empty() {
-            return Err(CreateWithPersistError::DataAlreadyExists(existing));
+            return Err(CreateWithPersistError::DataAlreadyExists(Box::new(
+                existing,
+            )));
         }
         let mut inner =
             Wallet::create_with_params(params).map_err(CreateWithPersistError::Descriptor)?;
@@ -207,7 +209,9 @@ impl<P: AsyncWalletPersister> PersistedWallet<P> {
             .await
             .map_err(CreateWithPersistError::Persist)?;
         if !existing.is_empty() {
-            return Err(CreateWithPersistError::DataAlreadyExists(existing));
+            return Err(CreateWithPersistError::DataAlreadyExists(Box::new(
+                existing,
+            )));
         }
         let mut inner =
             Wallet::create_with_params(params).map_err(CreateWithPersistError::Descriptor)?;
@@ -293,6 +297,7 @@ impl WalletPersister for bdk_chain::rusqlite::Connection {
 /// Error for [`bdk_file_store`]'s implementation of [`WalletPersister`].
 #[cfg(feature = "file_store")]
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)]
 pub enum FileStoreError {
     /// Error when loading from the store.
     Load(bdk_file_store::StoreErrorWithDump<ChangeSet>),
@@ -357,7 +362,7 @@ pub enum CreateWithPersistError<E> {
     /// Error from persistence.
     Persist(E),
     /// Persister already has wallet data.
-    DataAlreadyExists(ChangeSet),
+    DataAlreadyExists(Box<ChangeSet>),
     /// Occurs when the loaded changeset cannot construct [`Wallet`].
     Descriptor(DescriptorError),
 }
