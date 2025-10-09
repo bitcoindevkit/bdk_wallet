@@ -3045,6 +3045,20 @@ impl Wallet {
     /// ### Parameters:
     ///
     /// - `params`: [`ReplaceParams`]
+    #[cfg(feature = "std")]
+    pub fn replace_by_fee(
+        &self,
+        params: ReplaceParams,
+    ) -> Result<(Psbt, Finalizer), ReplaceByFeeError> {
+        self.replace_by_fee_with_aux_rand(params, &mut rand::thread_rng())
+    }
+
+    /// Creates a Replace-By-Fee transaction (RBF) and returns the updated [`Psbt`] and
+    /// [`Finalizer`].
+    ///
+    /// ### Parameters:
+    ///
+    /// - `params`: [`ReplaceParams`]
     /// - `rng`: Source of entropy, may be used during coin selection.
     pub fn replace_by_fee_with_aux_rand(
         &self,
