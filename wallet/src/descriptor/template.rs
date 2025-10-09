@@ -239,7 +239,16 @@ pub struct Bip44<K: DerivableKey<Legacy>>(pub K, pub KeychainKind);
 impl<K: DerivableKey<Legacy>> DescriptorTemplate for Bip44<K> {
     fn build(self, network: Network) -> Result<DescriptorTemplateOut, DescriptorError> {
         P2Pkh(legacy::make_bipxx_private(
-            44, self.0, self.1, network, None,
+            44, self.0, self.1, network, None, None,
+        )?)
+        .build(network)
+    }
+}
+
+impl<K: DerivableKey<Legacy>> Bip44<K> {
+    pub fn build_account(self, network: Network, account_index: u32) ->  Result<DescriptorTemplateOut, DescriptorError> {
+        P2Pkh(legacy::make_bipxx_private(
+            44, self.0, self.1, network, None, Some(account_index),
         )?)
         .build(network)
     }
@@ -321,7 +330,16 @@ pub struct Bip49<K: DerivableKey<Segwitv0>>(pub K, pub KeychainKind);
 impl<K: DerivableKey<Segwitv0>> DescriptorTemplate for Bip49<K> {
     fn build(self, network: Network) -> Result<DescriptorTemplateOut, DescriptorError> {
         P2Wpkh_P2Sh(segwit_v0::make_bipxx_private(
-            49, self.0, self.1, network, None,
+            49, self.0, self.1, network, None, None,
+        )?)
+        .build(network)
+    }
+}
+
+impl<K: DerivableKey<Segwitv0>> Bip49<K> {
+    pub fn build_account(self, network: Network, account_index: u32) ->  Result<DescriptorTemplateOut, DescriptorError> {
+        P2Wpkh_P2Sh(segwit_v0::make_bipxx_private(
+            49, self.0, self.1, network, None, Some(account_index),
         )?)
         .build(network)
     }
@@ -403,7 +421,16 @@ pub struct Bip84<K: DerivableKey<Segwitv0>>(pub K, pub KeychainKind);
 impl<K: DerivableKey<Segwitv0>> DescriptorTemplate for Bip84<K> {
     fn build(self, network: Network) -> Result<DescriptorTemplateOut, DescriptorError> {
         P2Wpkh(segwit_v0::make_bipxx_private(
-            84, self.0, self.1, network, None,
+            84, self.0, self.1, network, None, None,
+        )?)
+        .build(network)
+    }
+}
+
+impl<K: DerivableKey<Segwitv0>> Bip84<K> {
+    pub fn build_account(self, network: Network, account_index: u32) ->  Result<DescriptorTemplateOut, DescriptorError> {
+        P2Wpkh(segwit_v0::make_bipxx_private(
+            84, self.0, self.1, network, None, Some(account_index),
         )?)
         .build(network)
     }
@@ -485,7 +512,16 @@ pub struct Bip86<K: DerivableKey<Tap>>(pub K, pub KeychainKind);
 impl<K: DerivableKey<Tap>> DescriptorTemplate for Bip86<K> {
     fn build(self, network: Network) -> Result<DescriptorTemplateOut, DescriptorError> {
         P2TR(segwit_v1::make_bipxx_private(
-            86, self.0, self.1, network, None,
+            86, self.0, self.1, network, None, None,
+        )?)
+        .build(network)
+    }
+}
+
+impl<K: DerivableKey<Tap>> Bip86<K> {
+    pub fn build_account(self, network: Network, account_index: u32) -> Result<DescriptorTemplateOut, DescriptorError> {
+        P2TR(segwit_v1::make_bipxx_private(
+            86, self.0, self.1, network, None, Some(account_index),
         )?)
         .build(network)
     }
@@ -566,6 +602,21 @@ impl<K: DerivableKey<Legacy>> DescriptorTemplate for Bip48Member<K> {
             self.1,
             network,
             Some(self.2),
+            None,
+        )?)
+        .build(network)
+    }
+}
+
+impl<K: DerivableKey<Legacy>> Bip48Member<K> {
+    pub fn build_account(self, network: Network, account_index: u32) -> Result<DescriptorTemplateOut, DescriptorError> {
+        P2Pkh(legacy::make_bipxx_private(
+            48,
+            self.0,
+            self.1,
+            network,
+            Some(self.2),
+            Some(account_index),
         )?)
         .build(network)
     }
@@ -582,6 +633,7 @@ macro_rules! expand_make_bipxx {
                 keychain: KeychainKind,
                 network: Network,
                 script: Option<u32>,
+                account_index: Option<u32>,
             ) -> Result<impl IntoDescriptorKey<$ctx>, DescriptorError> {
                 let mut derivation_path = alloc::vec::Vec::with_capacity(4);
                 derivation_path.push(bip32::ChildNumber::from_hardened_idx(bip)?);
@@ -594,7 +646,8 @@ macro_rules! expand_make_bipxx {
                         derivation_path.push(bip32::ChildNumber::from_hardened_idx(1)?);
                     }
                 }
-                derivation_path.push(bip32::ChildNumber::from_hardened_idx(0)?);
+
+                derivation_path.push(bip32::ChildNumber::from_hardened_idx(account_index.unwrap_or(0))?);
 
                 if let Some(s) = script {
                     derivation_path.push(bip32::ChildNumber::from_hardened_idx(s)?);
