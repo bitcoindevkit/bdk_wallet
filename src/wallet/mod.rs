@@ -2773,7 +2773,7 @@ impl Wallet {
         let mut canon_params = params.canonical_params.clone();
         canon_params
             .assume_canonical
-            .extend(params.utxos().iter().map(|op| op.txid));
+            .extend(params.utxos.iter().map(|op| op.txid));
         let txouts = self
             .list_indexed_txouts(canon_params)
             .map(|(_, txo)| (txo.outpoint, txo))
@@ -2882,13 +2882,14 @@ impl Wallet {
         let (assets, change_script, txouts) = self.parse_params(&params);
 
         let must_spend: Vec<Input> = params
-            .utxos()
+            .utxos
             .iter()
             .map(|&op| -> Result<_, CreatePsbtError> {
                 let txo = txouts.get(&op).ok_or(CreatePsbtError::UnknownUtxo(op))?;
                 self.plan_input(txo, &assets)
                     .ok_or(CreatePsbtError::Plan(op))
             })
+            .chain(params.inputs.iter().cloned().map(Result::Ok))
             .collect::<Result<_, _>>()?;
 
         // Get input candidates
@@ -3068,13 +3069,14 @@ impl Wallet {
         let (assets, change_script, txouts) = self.parse_params(&params);
 
         let must_spend: Vec<Input> = params
-            .utxos()
+            .utxos
             .iter()
             .map(|&op| -> Result<_, CreatePsbtError> {
                 let txo = txouts.get(&op).ok_or(CreatePsbtError::UnknownUtxo(op))?;
                 self.plan_input(txo, &assets)
                     .ok_or(CreatePsbtError::Plan(op))
             })
+            .chain(params.inputs.iter().cloned().map(Result::Ok))
             .collect::<Result<_, _>>()?;
 
         // Get input candidates

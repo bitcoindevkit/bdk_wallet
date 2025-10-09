@@ -19,7 +19,9 @@ use crate::TxOrdering;
 #[derive(Debug)]
 pub struct PsbtParams {
     // Inputs
-    pub(crate) utxos: SelectedOutpoints,
+    pub(crate) set: HashSet<OutPoint>,
+    pub(crate) utxos: Vec<OutPoint>,
+    pub(crate) inputs: Vec<Input>,
 
     // Outputs
     pub(crate) recipients: Vec<(ScriptBuf, Amount)>,
@@ -44,7 +46,9 @@ pub struct PsbtParams {
 impl Default for PsbtParams {
     fn default() -> Self {
         Self {
+            set: Default::default(),
             utxos: Default::default(),
+            inputs: Default::default(),
             assets: Default::default(),
             recipients: Default::default(),
             change_descriptor: Default::default(),
@@ -69,18 +73,21 @@ impl PsbtParams {
     /// responsible for ensuring that elements of `outpoints` correspond to outputs of previous
     /// transactions and are currently unspent.
     pub fn add_utxos(&mut self, outpoints: &[OutPoint]) -> &mut Self {
-        self.utxos.extend(outpoints.iter().copied());
+        self.utxos
+            .extend(outpoints.iter().copied().filter(|&op| self.set.insert(op)));
         self
     }
 
     /// Get the currently selected spends.
-    pub fn utxos(&self) -> &Vec<OutPoint> {
-        self.utxos.utxos()
+    pub fn utxos(&self) -> &HashSet<OutPoint> {
+        &self.set
     }
 
     /// Remove a UTXO from the currently selected inputs.
     pub fn remove_utxo(&mut self, outpoint: &OutPoint) -> &mut Self {
-        self.utxos.remove(outpoint);
+        if self.set.remove(outpoint) {
+            self.utxos.retain(|op| op != outpoint);
+        }
         self
     }
 
@@ -185,41 +192,18 @@ impl PsbtParams {
         self.ordering = ordering;
         self
     }
-}
 
-/// Structure containing the set of outpoints that are manually selected. This
-/// ensures that no single outpoint appears more than once in the inputs, while preserving
-/// the order in which they are added to the [`PsbtParams`].
-#[derive(Debug, Clone, Default)]
-pub(crate) struct SelectedOutpoints {
-    /// Unique set of selected outpoints.
-    set: HashSet<OutPoint>,
-    /// UTXOs added.
-    pub utxos: Vec<OutPoint>,
-}
-
-impl SelectedOutpoints {
-    /// Add an outpoint.
-    fn extend(&mut self, outpoints: impl IntoIterator<Item = OutPoint>) {
-        self.utxos
-            .extend(outpoints.into_iter().filter(|&op| self.set.insert(op)))
-    }
-
-    /// Remove an outpoint.
-    fn remove(&mut self, outpoint: &OutPoint) {
-        if self.set.remove(outpoint) {
-            self.utxos.retain(|op| op != outpoint)
+    /// Add a planned input.
+    ///
+    /// This can be used to add inputs that come with a [`Plan`] or [`psbt::Input`] provided.
+    ///
+    /// [`Plan`]: miniscript::plan::Plan
+    /// [`psbt::Input`]: bitcoin::psbt::Input
+    pub fn add_planned_input(&mut self, input: Input) -> &mut Self {
+        if self.set.insert(input.prev_outpoint()) {
+            self.inputs.push(input);
         }
-    }
-
-    /// Whether the current selection contains the given `outpoint`.
-    pub fn contains(&self, outpoint: &OutPoint) -> bool {
-        self.set.contains(outpoint)
-    }
-
-    /// Get the selected spends (UTXOs).
-    fn utxos(&self) -> &Vec<OutPoint> {
-        &self.utxos
+        self
     }
 }
 
@@ -262,26 +246,27 @@ pub struct ReplaceParams {
 }
 
 impl ReplaceParams {
-    /// Construct from PSBT `params` and an iterator of `txs` to replace.
-    pub(crate) fn new(txs: &[Arc<Transaction>], params: PsbtParams) -> Self {
-        Self {
-            inner: params,
+    /// Construct from `inner` params and the `txs` to replace.
+    pub(crate) fn new(txs: &[Arc<Transaction>], inner: PsbtParams) -> Self {
+        let mut params = Self {
+            inner,
             ..Default::default()
-        }
-        .replace(txs)
+        };
+        params.replace(txs);
+        params
     }
 
     /// Replace spends of the provided `txs`. This will internally set the internal list
     /// of UTXOs to be spent.
-    pub fn replace(self, txs: &[Arc<Transaction>]) -> Self {
-        let txs: Vec<Arc<Transaction>> = txs.to_vec();
-        let mut txids: HashSet<Txid> = txs.iter().map(|tx| tx.compute_txid()).collect();
-        let mut tx_graph = TxGraph::<BlockId>::default();
-        let mut utxos = SelectedOutpoints::default();
+    pub fn replace(&mut self, txs: &[Arc<Transaction>]) {
+        self.inner.utxos.clear();
+        let mut utxos = vec![];
 
-        for tx in txs {
-            let _ = tx_graph.insert_tx(tx);
-        }
+        let (mut txids_to_replace, txs): (HashSet<Txid>, Vec<Transaction>) = txs
+            .iter()
+            .map(|tx| (tx.compute_txid(), tx.as_ref().clone()))
+            .unzip();
+        let tx_graph = TxGraph::<BlockId>::new(txs);
 
         // Sanitize the RBF set by removing elements of `txs` which have ancestors
         // in the same set. This is to avoid spending outputs of txs that are bound
@@ -291,21 +276,16 @@ impl ReplaceParams {
             if tx.is_coinbase()
                 || tx_graph
                     .walk_ancestors(Arc::clone(tx), |_, tx| Some(tx.compute_txid()))
-                    .any(|ancestor_txid| txids.contains(&ancestor_txid))
+                    .any(|ancestor_txid| txids_to_replace.contains(&ancestor_txid))
             {
-                txids.remove(&tx_node.txid);
+                txids_to_replace.remove(&tx_node.txid);
             } else {
                 utxos.extend(tx.input.iter().map(|txin| txin.previous_output));
             }
         }
 
-        Self {
-            inner: PsbtParams {
-                utxos,
-                ..self.inner
-            },
-            replace: txids,
-        }
+        self.replace = txids_to_replace;
+        self.inner.add_utxos(&utxos);
     }
 
     /// Add recipients.
@@ -325,8 +305,8 @@ impl ReplaceParams {
     }
 
     /// Get the currently selected spends.
-    pub fn utxos(&self) -> &Vec<OutPoint> {
-        self.inner.utxos()
+    pub fn utxos(&self) -> &HashSet<OutPoint> {
+        &self.inner.set
     }
 
     /// Remove a UTXO from the currently selected inputs.
@@ -416,7 +396,7 @@ mod test {
         let txs: Vec<Arc<Transaction>> =
             [tx_a, tx_b, tx_c, tx_d].into_iter().map(Arc::new).collect();
         let params = ReplaceParams::new(&txs, PsbtParams::default());
-        assert_eq!(params.inner.utxos.set, expect_spends);
+        assert_eq!(params.inner.set, expect_spends);
         assert_eq!(params.replace, [txid_a, txid_c].into());
     }
 
@@ -431,20 +411,20 @@ mod test {
         }
         assert_eq!(
             params.utxos(),
-            &vec![op],
+            &[op].into(),
             "Failed to filter duplicate outpoints"
         );
-        assert!(params.utxos.contains(&op));
+        assert_eq!(params.set, [op].into());
 
-        params.utxos = SelectedOutpoints::default();
+        params.utxos = vec![];
 
         // Try adding duplicates in the same set.
         params.add_utxos(&[op, op, op]);
         assert_eq!(
             params.utxos(),
-            &vec![op],
+            &[op].into(),
             "Failed to filter duplicate outpoints"
         );
-        assert!(params.utxos.contains(&op));
+        assert_eq!(params.set, [op].into());
     }
 }
