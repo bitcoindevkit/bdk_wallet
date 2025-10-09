@@ -2895,10 +2895,7 @@ impl Wallet {
         // Get input candidates
         let mut may_spend: Vec<Input> = self
             .filter_spendable(txouts.into_values(), &params, |txo| {
-                params
-                    .utxo_filter
-                    .as_ref()
-                    .is_some_and(|filter| (filter.0)(txo))
+                (params.utxo_filter.0)(txo)
             })
             .flat_map(|txo| self.plan_input(&txo, &assets))
             .collect();
@@ -3100,10 +3097,7 @@ impl Wallet {
                 // per replacement policy Rule 2.
                 to_replace.contains(&txo.outpoint.txid)
                     || txo.chain_position.is_unconfirmed()
-                    || params
-                        .utxo_filter
-                        .as_ref()
-                        .is_some_and(|filter| (filter.0)(txo))
+                    || (params.utxo_filter.0)(txo)
             })
             .flat_map(|txo| self.plan_input(&txo, &assets))
             .collect();
