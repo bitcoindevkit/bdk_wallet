@@ -1,6 +1,9 @@
+mod common;
+
 use bdk_esplora::{esplora_client, EsploraAsyncExt};
 use bdk_wallet::{
     bitcoin::{Amount, FeeRate, Network},
+    miniscript::Descriptor,
     psbt::PsbtUtils,
     rusqlite::Connection,
     KeychainKind, SignOptions, Wallet,
@@ -83,7 +86,19 @@ async fn main() -> Result<(), anyhow::Error> {
     tx_builder.fee_rate(target_fee_rate);
 
     let mut psbt = tx_builder.finish()?;
-    let finalized = wallet.sign(&mut psbt, SignOptions::default())?;
+
+    let secp = bdk_wallet::bitcoin::key::Secp256k1::new();
+
+    let (_, external_keymap) = Descriptor::parse_descriptor(&secp, EXTERNAL_DESC)?;
+    let (_, internal_keymap) = Descriptor::parse_descriptor(&secp, INTERNAL_DESC)?;
+    let key_map = external_keymap.into_iter().chain(internal_keymap).collect();
+
+    // Using the signer implementation from the common module.
+    // Note: This is temporary until miniscript 12.x is released with native KeyMap signing.
+    let signer = common::SignerWrapper::new(key_map);
+    let _ = psbt.sign(&signer, &secp);
+
+    let finalized = wallet.finalize_psbt(&mut psbt, SignOptions::default())?;
     assert!(finalized);
     let original_fee = psbt.fee_amount().unwrap();
     let tx_feerate = psbt.fee_rate().unwrap();
@@ -117,7 +132,8 @@ async fn main() -> Result<(), anyhow::Error> {
     let mut builder = wallet.build_fee_bump(txid).expect("failed to bump tx");
     builder.fee_rate(feerate);
     let mut bumped_psbt = builder.finish().unwrap();
-    let finalize_btx = wallet.sign(&mut bumped_psbt, SignOptions::default())?;
+    let _ = bumped_psbt.sign(&signer, &secp);
+    let finalize_btx = wallet.finalize_psbt(&mut bumped_psbt, SignOptions::default())?;
     assert!(finalize_btx);
     let new_fee = bumped_psbt.fee_amount().unwrap();
     let bumped_tx = bumped_psbt.extract_tx()?;

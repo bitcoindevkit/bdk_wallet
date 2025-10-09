@@ -72,11 +72,12 @@
 //! let mut wallet = Wallet::create(descriptor, change_descriptor)
 //!     .network(Network::Testnet)
 //!     .create_wallet_no_persist()?;
-//! wallet.add_signer(
-//!     KeychainKind::External,
-//!     SignerOrdering(200),
-//!     Arc::new(custom_signer)
-//! );
+//! // FIXME: (@leonardo) should be removed ?
+//! // wallet.add_signer(
+//! //     KeychainKind::External,
+//! //     SignerOrdering(200),
+//! //     Arc::new(custom_signer)
+//! // );
 //!
 //! # Ok::<_, anyhow::Error>(())
 //! ```

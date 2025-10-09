@@ -1,19 +1,25 @@
 use std::str::FromStr;
 
 use bdk_wallet::psbt::PsbtUtils;
-use bdk_wallet::signer::SignOptions;
 use bdk_wallet::test_utils::*;
 use bdk_wallet::tx_builder::AddForeignUtxoError;
 use bdk_wallet::KeychainKind;
-use bitcoin::{psbt, Address, Amount};
+use bitcoin::{key::Secp256k1, psbt, Address, Amount};
 
 mod common;
 
 #[test]
 fn test_add_foreign_utxo() {
+    let secp = Secp256k1::new();
+
     let (mut wallet1, _) = get_funded_wallet_wpkh();
+    let (descriptor, change_descriptor) = get_test_wpkh_and_change_desc();
+    let signer1 = get_wallet_signer(descriptor, Some(change_descriptor));
+
     let (wallet2, _) =
         get_funded_wallet_single("wpkh(cVbZ8ovhye9AoAHFsqobCf7LxbXDAECy9Kb8TZdfsDYMZGBUyCnm)");
+    let signer2 =
+        get_wallet_signer_single("wpkh(cVbZ8ovhye9AoAHFsqobCf7LxbXDAECy9Kb8TZdfsDYMZGBUyCnm)");
 
     let addr = Address::from_str("2N1Ffz3WaNzbeLFBb51xyFMHYSEUXcbiSoX")
         .unwrap()
@@ -24,10 +30,7 @@ fn test_add_foreign_utxo() {
         .max_weight_to_satisfy()
         .unwrap();
 
-    let psbt_input = psbt::Input {
-        witness_utxo: Some(utxo.txout.clone()),
-        ..Default::default()
-    };
+    let psbt_input = wallet2.get_psbt_input(utxo.clone(), None, true).unwrap();
 
     let mut builder = wallet1.build_tx();
     builder
@@ -55,14 +58,10 @@ fn test_add_foreign_utxo() {
         "foreign_utxo should be in there"
     );
 
+    let _signed = psbt.sign(&signer1, &secp).unwrap();
+
     let finished = wallet1
-        .sign(
-            &mut psbt,
-            SignOptions {
-                trust_witness_utxo: true,
-                ..Default::default()
-            },
-        )
+        .finalize_psbt(&mut psbt, Default::default())
         .unwrap();
 
     assert!(
@@ -70,15 +69,12 @@ fn test_add_foreign_utxo() {
         "only one of the inputs should have been signed so far"
     );
 
+    let _signed = psbt.sign(&signer2, &secp).unwrap();
+
     let finished = wallet2
-        .sign(
-            &mut psbt,
-            SignOptions {
-                trust_witness_utxo: true,
-                ..Default::default()
-            },
-        )
+        .finalize_psbt(&mut psbt, Default::default())
         .unwrap();
+
     assert!(finished, "all the inputs should have been signed now");
 }
 
