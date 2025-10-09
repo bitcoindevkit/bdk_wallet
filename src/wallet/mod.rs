@@ -2817,6 +2817,27 @@ impl Wallet {
         })
     }
 
+    /// Maps the recipients of the `params` to a collection of target [`Output`]s.
+    fn target_outputs(&self, params: &PsbtParams) -> Vec<Output> {
+        params
+            .recipients
+            .iter()
+            .cloned()
+            .map(
+                |(script, value)| match self.indexed_graph.index.index_of_spk(script.clone()) {
+                    Some(&(keychain, index)) => {
+                        let descriptor = self
+                            .public_descriptor(keychain)
+                            .at_derivation_index(index)
+                            .expect("should be valid derivation index");
+                        Output::with_descriptor(descriptor, value)
+                    }
+                    None => Output::with_script(script, value),
+                },
+            )
+            .collect()
+    }
+
     /// Creates a PSBT with the given `params` and returns the updated [`Psbt`] and
     /// [`Finalizer`].
     ///
@@ -2885,18 +2906,11 @@ impl Wallet {
 
         let input_candidates = InputCandidates::new(must_spend, may_spend);
 
-        let target_outputs = params
-            .recipients
-            .iter()
-            .cloned()
-            .map(Output::from)
-            .collect();
-
         let mut selector = Selector::new(
             &input_candidates,
             SelectorParams {
                 target_feerate: params.feerate,
-                target_outputs,
+                target_outputs: self.target_outputs(&params),
                 change_descriptor: change_script,
                 change_policy: ChangePolicyType::NoDustAndLeastWaste {
                     longterm_feerate: params.longterm_feerate,
@@ -3105,18 +3119,11 @@ impl Wallet {
             incremental_relay_feerate: FeeRate::BROADCAST_MIN,
         };
 
-        let target_outputs = params
-            .recipients
-            .iter()
-            .cloned()
-            .map(Output::from)
-            .collect();
-
         let mut selector = Selector::new(
             &input_candidates,
             SelectorParams {
                 target_feerate: params.feerate,
-                target_outputs,
+                target_outputs: self.target_outputs(&params),
                 change_descriptor: change_script,
                 change_policy: ChangePolicyType::NoDustAndLeastWaste {
                     longterm_feerate: params.longterm_feerate,
