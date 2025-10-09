@@ -34,7 +34,7 @@ pub struct PsbtParams {
     pub(crate) drain_wallet: bool,
     pub(crate) coin_selection: SelectionStrategy,
     pub(crate) canonical_params: CanonicalizationParams,
-    pub(crate) utxo_filter: Option<UtxoFilter>,
+    pub(crate) utxo_filter: UtxoFilter,
 
     // PSBT
     pub(crate) version: Option<Version>,
@@ -57,7 +57,7 @@ impl Default for PsbtParams {
             drain_wallet: Default::default(),
             coin_selection: Default::default(),
             canonical_params: Default::default(),
-            utxo_filter: None,
+            utxo_filter: Default::default(),
             version: Default::default(),
             locktime: Default::default(),
             fallback_sequence: Default::default(),
@@ -173,7 +173,7 @@ impl PsbtParams {
     where
         F: Fn(&FullTxOut<ConfirmationBlockTime>) -> bool + Send + Sync + 'static,
     {
-        self.utxo_filter = Some(UtxoFilter(Arc::new(exclude)));
+        self.utxo_filter = UtxoFilter(Arc::new(exclude));
         self
     }
 
@@ -228,6 +228,12 @@ pub enum SelectionStrategy {
 pub(crate) struct UtxoFilter(
     pub Arc<dyn Fn(&FullTxOut<ConfirmationBlockTime>) -> bool + Send + Sync>,
 );
+
+impl Default for UtxoFilter {
+    fn default() -> Self {
+        Self(Arc::new(|_| false))
+    }
+}
 
 impl fmt::Debug for UtxoFilter {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
