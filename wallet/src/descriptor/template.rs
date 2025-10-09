@@ -246,7 +246,7 @@ impl<K: DerivableKey<Legacy>> DescriptorTemplate for Bip44<K> {
 }
 
 impl<K: DerivableKey<Legacy>> Bip44<K> {
-    fn build_account(self, network: Network, account_index: u32) ->  Result<DescriptorTemplateOut, DescriptorError> {
+    pub fn build_account(self, network: Network, account_index: u32) ->  Result<DescriptorTemplateOut, DescriptorError> {
         P2Pkh(legacy::make_bipxx_private(
             44, self.0, self.1, network, None, Some(account_index),
         )?)
@@ -337,7 +337,7 @@ impl<K: DerivableKey<Segwitv0>> DescriptorTemplate for Bip49<K> {
 }
 
 impl<K: DerivableKey<Segwitv0>> Bip49<K> {
-    fn build_account(self, network: Network, account_index: u32) ->  Result<DescriptorTemplateOut, DescriptorError> {
+    pub fn build_account(self, network: Network, account_index: u32) ->  Result<DescriptorTemplateOut, DescriptorError> {
         P2Wpkh_P2Sh(segwit_v0::make_bipxx_private(
             49, self.0, self.1, network, None, Some(account_index),
         )?)
@@ -428,7 +428,7 @@ impl<K: DerivableKey<Segwitv0>> DescriptorTemplate for Bip84<K> {
 }
 
 impl<K: DerivableKey<Segwitv0>> Bip84<K> {
-    fn build_account(self, network: Network, account_index: u32) ->  Result<DescriptorTemplateOut, DescriptorError> {
+    pub fn build_account(self, network: Network, account_index: u32) ->  Result<DescriptorTemplateOut, DescriptorError> {
         P2Wpkh(segwit_v0::make_bipxx_private(
             84, self.0, self.1, network, None, Some(account_index),
         )?)
@@ -519,7 +519,7 @@ impl<K: DerivableKey<Tap>> DescriptorTemplate for Bip86<K> {
 }
 
 impl<K: DerivableKey<Tap>> Bip86<K> {
-    fn build_account(self, network: Network, account_index: u32) -> Result<DescriptorTemplateOut, DescriptorError> {
+    pub fn build_account(self, network: Network, account_index: u32) -> Result<DescriptorTemplateOut, DescriptorError> {
         P2TR(segwit_v1::make_bipxx_private(
             86, self.0, self.1, network, None, Some(account_index),
         )?)
@@ -609,7 +609,7 @@ impl<K: DerivableKey<Legacy>> DescriptorTemplate for Bip48Member<K> {
 }
 
 impl<K: DerivableKey<Legacy>> Bip48Member<K> {
-    fn build_account(self, network: Network, account_index: u32) -> Result<DescriptorTemplateOut, DescriptorError> {
+    pub fn build_account(self, network: Network, account_index: u32) -> Result<DescriptorTemplateOut, DescriptorError> {
         P2Pkh(legacy::make_bipxx_private(
             48,
             self.0,
