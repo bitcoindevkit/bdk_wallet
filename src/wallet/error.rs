@@ -11,7 +11,7 @@
 
 //! Errors that can be thrown by the [`Wallet`](crate::wallet::Wallet)
 
-use crate::descriptor::policy::PolicyError;
+// use crate::descriptor::policy::PolicyError;
 use crate::descriptor::DescriptorError;
 use crate::wallet::coin_selection;
 use crate::{descriptor, KeychainKind};
@@ -51,7 +51,7 @@ pub enum CreateTxError {
     /// There was a problem with the descriptors passed in
     Descriptor(DescriptorError),
     /// There was a problem while extracting and manipulating policies
-    Policy(PolicyError),
+    // Policy(PolicyError),
     /// Spending policy is not compatible with this [`KeychainKind`]
     SpendingPolicyRequired(KeychainKind),
     /// Requested invalid transaction version '0'
@@ -110,7 +110,7 @@ impl fmt::Display for CreateTxError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Descriptor(e) => e.fmt(f),
-            Self::Policy(e) => e.fmt(f),
+            // Self::Policy(e) => e.fmt(f),
             CreateTxError::SpendingPolicyRequired(keychain_kind) => {
                 write!(f, "Spending policy required: {keychain_kind}")
             }
@@ -180,11 +180,11 @@ impl From<descriptor::error::Error> for CreateTxError {
     }
 }
 
-impl From<PolicyError> for CreateTxError {
-    fn from(err: PolicyError) -> Self {
-        CreateTxError::Policy(err)
-    }
-}
+// impl From<PolicyError> for CreateTxError {
+//     fn from(err: PolicyError) -> Self {
+//         CreateTxError::Policy(err)
+//     }
+// }
 
 impl From<MiniscriptPsbtError> for CreateTxError {
     fn from(err: MiniscriptPsbtError) -> Self {
