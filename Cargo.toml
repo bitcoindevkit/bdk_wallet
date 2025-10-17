@@ -52,6 +52,7 @@ ctrlc = "3.4.6"
 rand = "0.8"
 tempfile = "3"
 tokio = { version = "1.38.1", features = ["rt", "rt-multi-thread", "macros"] }
+ureq = "2"
 
 [[example]]
 name = "mnemonic_to_descriptors"
