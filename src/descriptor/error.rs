@@ -26,9 +26,8 @@ pub enum Error {
     MultiPath,
     /// Error thrown while working with [`keys`](crate::keys)
     Key(crate::keys::KeyError),
-    /// Error while extracting and manipulating policies
-    Policy(crate::descriptor::policy::PolicyError),
-
+    // /// Error while extracting and manipulating policies
+    // Policy(crate::descriptor::policy::PolicyError),
     /// Invalid byte found in the descriptor checksum
     InvalidDescriptorCharacter(u8),
 
@@ -42,8 +41,10 @@ pub enum Error {
     Miniscript(miniscript::Error),
     /// Hex decoding error
     Hex(bitcoin::hex::HexToBytesError),
-    /// The provided wallet descriptors are identical
-    ExternalAndInternalAreTheSame,
+    /// The keychain exists in the `KeyRing` but mapped to a different descriptor
+    KeychainAlreadyExists,
+    /// The descriptor exists in the `KeyRing` but mapped to a different keychain
+    DescAlreadyExists,
 }
 
 impl From<crate::keys::KeyError> for Error {
@@ -72,7 +73,7 @@ impl fmt::Display for Error {
                 "The descriptor contains multipath keys with invalid number of paths (must have exactly 2 paths for receive and change)"
             ),
             Self::Key(err) => write!(f, "Key error: {err}"),
-            Self::Policy(err) => write!(f, "Policy error: {err}"),
+            // Self::Policy(err) => write!(f, "Policy error: {err}"),
             Self::InvalidDescriptorCharacter(char) => {
                 write!(f, "Invalid descriptor character: {char}")
             }
@@ -81,9 +82,8 @@ impl fmt::Display for Error {
             Self::Pk(err) => write!(f, "Key-related error: {err}"),
             Self::Miniscript(err) => write!(f, "Miniscript error: {err}"),
             Self::Hex(err) => write!(f, "Hex decoding error: {err}"),
-            Self::ExternalAndInternalAreTheSame => {
-                write!(f, "External and internal descriptors are the same")
-            }
+            Self::KeychainAlreadyExists => write!(f, "Keychain already exists but corresponds to a different descriptor"),
+            Self::DescAlreadyExists => write!(f, "Descriptor already exists but corresponds to a different keychain"),
         }
     }
 }
@@ -118,11 +118,5 @@ impl From<miniscript::Error> for Error {
 impl From<bitcoin::hex::HexToBytesError> for Error {
     fn from(err: bitcoin::hex::HexToBytesError) -> Self {
         Error::Hex(err)
-    }
-}
-
-impl From<crate::descriptor::policy::PolicyError> for Error {
-    fn from(err: crate::descriptor::policy::PolicyError) -> Self {
-        Error::Policy(err)
     }
 }

@@ -1,4 +1,5 @@
-use alloc::boxed::Box;
+#![allow(unused)]
+use alloc::{boxed::Box, collections::btree_map::BTreeMap};
 use bdk_chain::keychain_txout::DEFAULT_LOOKAHEAD;
 use bitcoin::{BlockHash, Network};
 use miniscript::descriptor::KeyMap;
@@ -6,11 +7,18 @@ use miniscript::descriptor::KeyMap;
 use crate::{
     descriptor::{DescriptorError, ExtendedDescriptor, IntoWalletDescriptor},
     utils::SecpCtx,
-    AsyncWalletPersister, CreateWithPersistError, KeychainKind, LoadWithPersistError, Wallet,
-    WalletPersister,
+    // AsyncWalletPersister, CreateWithPersistError,
+    KeychainKind,
+    LoadWithPersistError,
+    Wallet,
+    // WalletPersister,
 };
 
-use super::{ChangeSet, LoadError, PersistedWallet};
+use super::{
+    ChangeSet,
+    LoadError,
+    // PersistedWallet
+};
 
 fn make_two_path_descriptor_to_extract<D>(
     two_path_descriptor: D,
@@ -42,7 +50,7 @@ where
 ///
 /// The better option would be to do `Box<dyn IntoWalletDescriptor>`, but we cannot due to Rust's
 /// [object safety rules](https://doc.rust-lang.org/reference/items/traits.html#object-safety).
-type DescriptorToExtract = Box<
+pub(crate) type DescriptorToExtract = Box<
     dyn FnOnce(&SecpCtx, Network) -> Result<(ExtendedDescriptor, KeyMap), DescriptorError>
         + Send
         + 'static,
@@ -181,91 +189,75 @@ impl CreateParams {
         self
     }
 
-    /// Create [`PersistedWallet`] with the given [`WalletPersister`].
-    pub fn create_wallet<P>(
-        self,
-        persister: &mut P,
-    ) -> Result<PersistedWallet<P>, CreateWithPersistError<P::Error>>
-    where
-        P: WalletPersister,
-    {
-        PersistedWallet::create(persister, self)
-    }
+    // /// Create [`PersistedWallet`] with the given [`WalletPersister`].
+    // pub fn create_wallet<P>(
+    //     self,
+    //     persister: &mut P,
+    // ) -> Result<PersistedWallet<P>, CreateWithPersistError<P::Error>>
+    // where
+    //     P: WalletPersister,
+    // {
+    //     PersistedWallet::create(persister, self)
+    // }
 
-    /// Create [`PersistedWallet`] with the given [`AsyncWalletPersister`].
-    pub async fn create_wallet_async<P>(
-        self,
-        persister: &mut P,
-    ) -> Result<PersistedWallet<P>, CreateWithPersistError<P::Error>>
-    where
-        P: AsyncWalletPersister,
-    {
-        PersistedWallet::create_async(persister, self).await
-    }
+    // /// Create [`PersistedWallet`] with the given [`AsyncWalletPersister`].
+    // pub async fn create_wallet_async<P>(
+    //     self,
+    //     persister: &mut P,
+    // ) -> Result<PersistedWallet<P>, CreateWithPersistError<P::Error>>
+    // where
+    //     P: AsyncWalletPersister,
+    // {
+    //     PersistedWallet::create_async(persister, self).await
+    // }
 
-    /// Create [`Wallet`] without persistence.
-    pub fn create_wallet_no_persist(self) -> Result<Wallet, DescriptorError> {
-        Wallet::create_with_params(self)
-    }
+    // /// Create [`Wallet`] without persistence.
+    // pub fn create_wallet_no_persist(self) -> Result<Wallet, DescriptorError> {
+    //     Wallet::create_with_params(self)
+    // }
 }
 
 /// Parameters for [`Wallet::load`] or [`PersistedWallet::load`].
 #[must_use]
-pub struct LoadParams {
-    pub(crate) descriptor_keymap: KeyMap,
-    pub(crate) change_descriptor_keymap: KeyMap,
+pub struct LoadParams<K> {
     pub(crate) lookahead: u32,
     pub(crate) check_network: Option<Network>,
     pub(crate) check_genesis_hash: Option<BlockHash>,
-    pub(crate) check_descriptor: Option<Option<DescriptorToExtract>>,
-    pub(crate) check_change_descriptor: Option<Option<DescriptorToExtract>>,
-    pub(crate) extract_keys: bool,
+    pub(crate) check_descs: BTreeMap<K, Option<DescriptorToExtract>>, /* none means just check
+                                                                       * keychain is there */
+    pub(crate) check_default: Option<K>,
     pub(crate) use_spk_cache: bool,
 }
 
-impl LoadParams {
+impl<K> LoadParams<K> {
     /// Construct parameters with default values.
     ///
     /// Default values: `lookahead` = [`DEFAULT_LOOKAHEAD`]
     pub fn new() -> Self {
         Self {
-            descriptor_keymap: KeyMap::default(),
-            change_descriptor_keymap: KeyMap::default(),
             lookahead: DEFAULT_LOOKAHEAD,
             check_network: None,
             check_genesis_hash: None,
-            check_descriptor: None,
-            check_change_descriptor: None,
-            extract_keys: false,
+            check_descs: BTreeMap::new(),
+            check_default: None,
             use_spk_cache: false,
         }
     }
 
-    /// Extend the given `keychain`'s `keymap`.
-    pub fn keymap(mut self, keychain: KeychainKind, keymap: KeyMap) -> Self {
-        match keychain {
-            KeychainKind::External => &mut self.descriptor_keymap,
-            KeychainKind::Internal => &mut self.change_descriptor_keymap,
-        }
-        .extend(keymap);
+    /// Checks the `expected_descriptor` matches exactly what is loaded for `keychain`.
+    pub fn check_descriptor<D>(mut self, keychain: K, expected_descriptor: Option<D>) -> Self
+    where
+        D: IntoWalletDescriptor + Send + 'static,
+        K: Ord,
+    {
+        let expected = expected_descriptor.map(|d| make_descriptor_to_extract(d));
+        self.check_descs.insert(keychain, expected);
         self
     }
 
-    /// Checks the `expected_descriptor` matches exactly what is loaded for `keychain`.
-    ///
-    /// # Note
-    ///
-    /// You must also specify [`extract_keys`](Self::extract_keys) if you wish to add a signer
-    /// for an expected descriptor containing secrets.
-    pub fn descriptor<D>(mut self, keychain: KeychainKind, expected_descriptor: Option<D>) -> Self
-    where
-        D: IntoWalletDescriptor + Send + 'static,
-    {
-        let expected = expected_descriptor.map(|d| make_descriptor_to_extract(d));
-        match keychain {
-            KeychainKind::External => self.check_descriptor = Some(expected),
-            KeychainKind::Internal => self.check_change_descriptor = Some(expected),
-        }
+    /// Checks that the given keychain is loaded from persistence as the default keychain
+    pub fn check_default(mut self, default_keychain: K) -> Self {
+        self.check_default = Some(default_keychain);
         self
     }
 
@@ -292,13 +284,6 @@ impl LoadParams {
         self
     }
 
-    /// Whether to try extracting private keys from the *provided descriptors* upon loading.
-    /// See also [`LoadParams::descriptor`].
-    pub fn extract_keys(mut self) -> Self {
-        self.extract_keys = true;
-        self
-    }
-
     /// Use a persistent cache of indexed script pubkeys (SPKs).
     ///
     /// **Note:** This should only be used if you have previously persisted a cache of script
@@ -308,35 +293,35 @@ impl LoadParams {
         self
     }
 
-    /// Load [`PersistedWallet`] with the given [`WalletPersister`].
-    pub fn load_wallet<P>(
-        self,
-        persister: &mut P,
-    ) -> Result<Option<PersistedWallet<P>>, LoadWithPersistError<P::Error>>
-    where
-        P: WalletPersister,
-    {
-        PersistedWallet::load(persister, self)
-    }
+    // /// Load [`PersistedWallet`] with the given [`WalletPersister`].
+    // pub fn load_wallet<P>(
+    //     self,
+    //     persister: &mut P,
+    // ) -> Result<Option<PersistedWallet<P>>, LoadWithPersistError<P::Error>>
+    // where
+    //     P: WalletPersister,
+    // {
+    //     PersistedWallet::load(persister, self)
+    // }
 
-    /// Load [`PersistedWallet`] with the given [`AsyncWalletPersister`].
-    pub async fn load_wallet_async<P>(
-        self,
-        persister: &mut P,
-    ) -> Result<Option<PersistedWallet<P>>, LoadWithPersistError<P::Error>>
-    where
-        P: AsyncWalletPersister,
-    {
-        PersistedWallet::load_async(persister, self).await
-    }
+    // /// Load [`PersistedWallet`] with the given [`AsyncWalletPersister`].
+    // pub async fn load_wallet_async<P>(
+    //     self,
+    //     persister: &mut P,
+    // ) -> Result<Option<PersistedWallet<P>>, LoadWithPersistError<P::Error>>
+    // where
+    //     P: AsyncWalletPersister,
+    // {
+    //     PersistedWallet::load_async(persister, self).await
+    // }
 
-    /// Load [`Wallet`] without persistence.
-    pub fn load_wallet_no_persist(self, changeset: ChangeSet) -> Result<Option<Wallet>, LoadError> {
-        Wallet::load_with_params(changeset, self)
-    }
+    // /// Load [`Wallet`] without persistence.
+    // pub fn load_wallet_no_persist(self, changeset: ChangeSet) -> Result<Option<Wallet>,
+    // LoadError> {     Wallet::load_with_params(changeset, self)
+    // }
 }
 
-impl Default for LoadParams {
+impl<K> Default for LoadParams<K> {
     fn default() -> Self {
         Self::new()
     }
