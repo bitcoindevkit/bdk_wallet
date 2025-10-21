@@ -2862,6 +2862,7 @@ impl Wallet {
     /// # Ok::<_, anyhow::Error>(())
     /// ```
     #[cfg(feature = "std")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "std")))]
     pub fn create_psbt(&self, params: PsbtParams) -> Result<(Psbt, Finalizer), CreatePsbtError> {
         self.create_psbt_with_aux_rand(params, &mut rand::thread_rng())
     }
@@ -3017,6 +3018,7 @@ impl Wallet {
     ///
     /// [`replace_by_fee_with_aux_rand`]: Wallet::replace_by_fee_with_aux_rand
     #[cfg(feature = "std")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "std")))]
     pub fn replace_by_fee_and_recipients(
         &self,
         txs: &[Arc<Transaction>],
