@@ -2796,7 +2796,7 @@ impl Wallet {
         I: IntoIterator<Item = FullTxOut<ConfirmationBlockTime>> + 'a,
         F: Fn(&FullTxOut<ConfirmationBlockTime>) -> bool + 'a,
     {
-        let current_height = self.latest_checkpoint().height();
+        let current_height = params.maturity_height.unwrap_or(self.chain.tip().height());
         txos.into_iter().filter(move |txo| {
             // Exclude outputs that are manually selected.
             if params.utxos.contains(&txo.outpoint) {

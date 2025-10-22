@@ -35,6 +35,7 @@ pub struct PsbtParams {
     pub(crate) coin_selection: SelectionStrategy,
     pub(crate) canonical_params: CanonicalizationParams,
     pub(crate) utxo_filter: UtxoFilter,
+    pub(crate) maturity_height: Option<u32>,
 
     // PSBT
     pub(crate) version: Option<Version>,
@@ -58,6 +59,7 @@ impl Default for PsbtParams {
             coin_selection: Default::default(),
             canonical_params: Default::default(),
             utxo_filter: Default::default(),
+            maturity_height: Default::default(),
             version: Default::default(),
             locktime: Default::default(),
             fallback_sequence: Default::default(),
@@ -124,6 +126,13 @@ impl PsbtParams {
     {
         self.recipients
             .extend(recipients.into_iter().map(|(s, amt)| (s.into(), amt)));
+        self
+    }
+
+    /// Set the height to be used when evaluating the maturity of coinbase outputs during coin
+    /// selection.
+    pub fn maturity_height(&mut self, height: absolute::Height) -> &mut Self {
+        self.maturity_height = Some(height.to_consensus_u32());
         self
     }
 
