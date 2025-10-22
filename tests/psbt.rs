@@ -147,7 +147,7 @@ fn test_create_psbt_cltv() {
 #[test]
 fn test_create_psbt_csv() {
     use bitcoin::relative;
-    use bitcoin::Sequence; 
+    use bitcoin::Sequence;
 
     let desc = get_test_single_sig_csv();
     let mut wallet = Wallet::create_single(desc)
@@ -204,7 +204,9 @@ fn test_create_psbt_csv() {
         };
         insert_checkpoint(&mut wallet, anchor.block_id);
         let mut params = PsbtParams::default();
-        params.add_recipients([(addr.script_pubkey(), Amount::from_btc(0.42).unwrap())]);
+        params
+            .add_utxos(&[op])
+            .add_recipients([(addr.script_pubkey(), Amount::from_btc(0.42).unwrap())]);
         let (psbt, _) = wallet.create_psbt(params).unwrap();
         assert_eq!(psbt.unsigned_tx.input[0].sequence, Sequence(6));
     }

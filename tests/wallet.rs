@@ -77,8 +77,11 @@ fn test_spend_non_canonical_txout() -> anyhow::Result<()> {
 
     // Create tx2, spending the change of tx1
     let mut params = psbt::PsbtParams::default();
+    let canonical_params = bdk_chain::CanonicalizationParams {
+        assume_canonical: vec![to_select_op.txid],
+    };
     params
-        .add_utxos(&[to_select_op])
+        .canonicalization_params(canonical_params)
         .add_recipients([(recip, Amount::from_btc(0.01)?)]);
 
     let psbt = wallet.create_psbt(params)?.0;

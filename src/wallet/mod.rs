@@ -2770,12 +2770,8 @@ impl Wallet {
         });
 
         // Get wallet txouts.
-        let mut canon_params = params.canonical_params.clone();
-        canon_params
-            .assume_canonical
-            .extend(params.utxos.iter().map(|op| op.txid));
         let txouts = self
-            .list_indexed_txouts(canon_params)
+            .list_indexed_txouts(params.canonical_params.clone())
             .map(|(_, txo)| (txo.outpoint, txo))
             .collect();
 

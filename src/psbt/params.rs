@@ -175,6 +175,19 @@ impl PsbtParams {
         self
     }
 
+    /// Set the parameters for modifying the wallet's view of canonical transactions.
+    ///
+    /// The `params` can be used to resolve conflicts manually, or to assert that a particular
+    /// transaction should be treated as canonical for the purpose of building the current PSBT.
+    /// Refer to [`CanonicalizationParams`] for more.
+    pub fn canonicalization_params(
+        &mut self,
+        params: bdk_chain::CanonicalizationParams,
+    ) -> &mut Self {
+        self.canonical_params = params;
+        self
+    }
+
     /// Set the definite descriptor used for generating the change output.
     pub fn change_descriptor(&mut self, desc: DefiniteDescriptor) -> &mut Self {
         self.change_descriptor = Some(desc);
