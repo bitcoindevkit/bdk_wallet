@@ -2906,13 +2906,22 @@ impl Wallet {
 
         utils::shuffle_slice(&mut may_spend, rng);
 
+        let target_outputs = self.target_outputs(&params);
+
         let input_candidates = InputCandidates::new(must_spend, may_spend);
+        if input_candidates.inputs().next().is_none() {
+            let target_amount: Amount = target_outputs.iter().map(|output| output.value).sum();
+            let err = bdk_coin_select::InsufficientFunds {
+                missing: target_amount.to_sat(),
+            };
+            return Err(CreatePsbtError::InsufficientFunds(err));
+        }
 
         let mut selector = Selector::new(
             &input_candidates,
             SelectorParams {
                 target_feerate: params.feerate,
-                target_outputs: self.target_outputs(&params),
+                target_outputs,
                 change_descriptor: change_script,
                 change_policy: ChangePolicyType::NoDustAndLeastWaste {
                     longterm_feerate: params.longterm_feerate,
@@ -2985,6 +2994,8 @@ impl Wallet {
                 fallback_locktime,
                 fallback_sequence,
                 mandate_full_tx_for_segwit_v0: true,
+                // TODO: Only witness utxo
+                // mandate_full_tx_for_segwit_v0: params.only_witness_utxo,
             })
             .map_err(CreatePsbtError::Psbt)?;
 
@@ -3114,7 +3125,16 @@ impl Wallet {
 
         utils::shuffle_slice(&mut may_spend, rng);
 
+        let target_outputs = self.target_outputs(&params);
+
         let input_candidates = InputCandidates::new(must_spend, may_spend);
+        if input_candidates.inputs().next().is_none() {
+            let target_amount: Amount = target_outputs.iter().map(|output| output.value).sum();
+            let err = bdk_coin_select::InsufficientFunds {
+                missing: target_amount.to_sat(),
+            };
+            return Err(CreatePsbtError::InsufficientFunds(err))?;
+        }
 
         let original_txs: Vec<OriginalTxStats> = txids_to_replace
             .iter()
@@ -3143,7 +3163,7 @@ impl Wallet {
             &input_candidates,
             SelectorParams {
                 target_feerate: params.feerate,
-                target_outputs: self.target_outputs(&params),
+                target_outputs,
                 change_descriptor: change_script,
                 change_policy: ChangePolicyType::NoDustAndLeastWaste {
                     longterm_feerate: params.longterm_feerate,
