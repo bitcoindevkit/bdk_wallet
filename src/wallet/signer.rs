@@ -1,7 +1,7 @@
 // Bitcoin Dev Kit
 // Written in 2020 by Alekos Filini <alekos.filini@gmail.com>
 //
-// Copyright (c) 2020-2021 Bitcoin Dev Kit Developers
+// Copyright (c) 2020-2025 Bitcoin Dev Kit Developers
 //
 // This file is licensed under the Apache License, Version 2.0 <LICENSE-APACHE
 // or http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
@@ -921,13 +921,16 @@ impl Eq for SignersContainerKey {}
 #[cfg(test)]
 mod signers_container_tests {
     use super::*;
-    use crate::descriptor;
-    use crate::descriptor::IntoWalletDescriptor;
+
     use crate::keys::{DescriptorKey, IntoDescriptorKey};
+    use crate::{descriptor, descriptor::IntoWalletDescriptor};
+
     use assert_matches::assert_matches;
-    use bitcoin::bip32;
-    use bitcoin::secp256k1::{All, Secp256k1};
-    use bitcoin::Network;
+    use bitcoin::{
+        bip32,
+        secp256k1::{All, Secp256k1},
+        NetworkKind,
+    };
     use core::str::FromStr;
     use miniscript::ScriptContext;
 
@@ -947,7 +950,7 @@ mod signers_container_tests {
         let (prvkey2, _, _) = setup_keys(TPRV1_STR);
         let desc = descriptor!(sh(multi(2, prvkey1, prvkey2))).unwrap();
         let (wallet_desc, keymap) = desc
-            .into_wallet_descriptor(&secp, Network::Testnet)
+            .into_wallet_descriptor(&secp, NetworkKind::Test)
             .unwrap();
 
         let signers = SignersContainer::build(keymap, &wallet_desc, &secp);
@@ -969,7 +972,7 @@ mod signers_container_tests {
         signers.add_external(SignerId::Dummy(1), SignerOrdering(1), signer1.clone());
         signers.add_external(SignerId::Dummy(3), SignerOrdering(3), signer3.clone());
 
-        // Check that signers are sorted from lowest to highest ordering
+        // Check that signers are sorted from lowest to highest ordering.
         let signers = signers.signers();
 
         assert!(is_equal(signers[0], &signer1));

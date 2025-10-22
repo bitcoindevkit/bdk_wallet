@@ -1,7 +1,7 @@
 // Bitcoin Dev Kit
 // Written in 2020 by Alekos Filini <alekos.filini@gmail.com>
 //
-// Copyright (c) 2020-2021 Bitcoin Dev Kit Developers
+// Copyright (c) 2020-2025 Bitcoin Dev Kit Developers
 //
 // This file is licensed under the Apache License, Version 2.0 <LICENSE-APACHE
 // or http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
@@ -11,7 +11,6 @@
 
 //! Key formats
 
-use crate::collections::HashSet;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::any::TypeId;
@@ -20,105 +19,99 @@ use core::marker::PhantomData;
 use core::ops::Deref;
 use core::str::FromStr;
 
+use crate::collections::HashSet;
+use crate::descriptor::{CheckMiniscript, DescriptorError};
+use crate::wallet::utils::SecpCtx;
+
+use bitcoin::{
+    bip32,
+    key::XOnlyPublicKey,
+    secp256k1::{self, Secp256k1, Signing},
+    NetworkKind, PrivateKey, PublicKey,
+};
+use miniscript::{
+    descriptor::{Descriptor, DescriptorMultiXKey, DescriptorXKey, Wildcard},
+    {Miniscript, Terminal},
+};
 use rand_core::{CryptoRng, RngCore};
 
-use bitcoin::secp256k1::{self, Secp256k1, Signing};
-
-use bitcoin::bip32;
-use bitcoin::{key::XOnlyPublicKey, Network, PrivateKey, PublicKey};
-
-use miniscript::descriptor::{Descriptor, DescriptorMultiXKey, DescriptorXKey, Wildcard};
 pub use miniscript::descriptor::{
     DescriptorPublicKey, DescriptorSecretKey, KeyMap, SinglePriv, SinglePub, SinglePubKey,
     SortedMultiVec,
 };
 pub use miniscript::ScriptContext;
-use miniscript::{Miniscript, Terminal};
-
-use crate::descriptor::{CheckMiniscript, DescriptorError};
-use crate::wallet::utils::SecpCtx;
 
 #[cfg(feature = "keys-bip39")]
 #[cfg_attr(docsrs, doc(cfg(feature = "keys-bip39")))]
 pub mod bip39;
 
-/// Set of valid networks for a key
-pub type ValidNetworks = HashSet<Network>;
+/// Set of valid networks kinds for a key.
+pub type ValidNetworkKinds = HashSet<NetworkKind>;
 
-/// Create a set containing mainnet, testnet, testnet4, signet, and regtest
-pub fn any_network() -> ValidNetworks {
-    vec![
-        Network::Bitcoin,
-        Network::Testnet,
-        Network::Testnet4,
-        Network::Regtest,
-        Network::Signet,
-    ]
-    .into_iter()
-    .collect()
+/// Create a set containing the [`NetworkKind::Main`] and [`NetworkKind::Test`] network kinds.
+pub fn any_network_kind() -> ValidNetworkKinds {
+    vec![NetworkKind::Main, NetworkKind::Test]
+        .into_iter()
+        .collect()
 }
-/// Create a set only containing mainnet
-pub fn mainnet_network() -> ValidNetworks {
-    vec![Network::Bitcoin].into_iter().collect()
+/// Create a set containing the [`NetworkKind::Main`] kind.
+pub fn mainnet_network_kind() -> ValidNetworkKinds {
+    vec![NetworkKind::Main].into_iter().collect()
 }
-/// Create a set containing test networks
-pub fn test_networks() -> ValidNetworks {
-    vec![
-        Network::Testnet,
-        Network::Testnet4,
-        Network::Regtest,
-        Network::Signet,
-    ]
-    .into_iter()
-    .collect()
+/// Create a set containing only the [`NetworkKind::Test`] kind.
+pub fn test_network_kind() -> ValidNetworkKinds {
+    vec![NetworkKind::Test].into_iter().collect()
 }
-/// Compute the intersection of two sets
-pub fn merge_networks(a: &ValidNetworks, b: &ValidNetworks) -> ValidNetworks {
+/// Compute the intersection of two sets.
+pub fn intersect_network_kinds(a: &ValidNetworkKinds, b: &ValidNetworkKinds) -> ValidNetworkKinds {
     a.intersection(b).cloned().collect()
 }
 
-/// Container for public or secret keys
+/// Container for public or secret keys.
 #[derive(Debug)]
 pub enum DescriptorKey<Ctx: ScriptContext> {
     #[doc(hidden)]
-    Public(DescriptorPublicKey, ValidNetworks, PhantomData<Ctx>),
+    Public(DescriptorPublicKey, ValidNetworkKinds, PhantomData<Ctx>),
     #[doc(hidden)]
-    Secret(DescriptorSecretKey, ValidNetworks, PhantomData<Ctx>),
+    Secret(DescriptorSecretKey, ValidNetworkKinds, PhantomData<Ctx>),
 }
 
 impl<Ctx: ScriptContext> DescriptorKey<Ctx> {
-    /// Create an instance given a public key and a set of valid networks
-    pub fn from_public(public: DescriptorPublicKey, networks: ValidNetworks) -> Self {
-        DescriptorKey::Public(public, networks, PhantomData)
+    /// Create an instance given a public key and a set of valid network kinds.
+    pub fn from_public(public: DescriptorPublicKey, network_kinds: ValidNetworkKinds) -> Self {
+        DescriptorKey::Public(public, network_kinds, PhantomData)
     }
 
-    /// Create an instance given a secret key and a set of valid networks
-    pub fn from_secret(secret: DescriptorSecretKey, networks: ValidNetworks) -> Self {
-        DescriptorKey::Secret(secret, networks, PhantomData)
+    /// Create an instance given a secret key and a set of valid network kinds.
+    pub fn from_secret(secret: DescriptorSecretKey, network_kinds: ValidNetworkKinds) -> Self {
+        DescriptorKey::Secret(secret, network_kinds, PhantomData)
     }
 
-    /// Override the computed set of valid networks
-    pub fn override_valid_networks(self, networks: ValidNetworks) -> Self {
+    /// Override the computed set of valid network kinds.
+    pub fn override_valid_network_kinds(self, network_kinds: ValidNetworkKinds) -> Self {
         match self {
-            DescriptorKey::Public(key, _, _) => DescriptorKey::Public(key, networks, PhantomData),
-            DescriptorKey::Secret(key, _, _) => DescriptorKey::Secret(key, networks, PhantomData),
+            DescriptorKey::Public(key, _, _) => {
+                DescriptorKey::Public(key, network_kinds, PhantomData)
+            }
+            DescriptorKey::Secret(key, _, _) => {
+                DescriptorKey::Secret(key, network_kinds, PhantomData)
+            }
         }
     }
 
     // This method is used internally by `bdk_wallet::fragment!` and `bdk_wallet::descriptor!`. It
     // has to be public because it is effectively called by external crates once the macros are
-    // expanded, but since it is not meant to be part of the public api we hide it from the
-    // docs.
+    // expanded, but since it is not meant to be part of the public API we hide it from the docs.
     #[doc(hidden)]
     pub fn extract(
         self,
         secp: &SecpCtx,
-    ) -> Result<(DescriptorPublicKey, KeyMap, ValidNetworks), KeyError> {
+    ) -> Result<(DescriptorPublicKey, KeyMap, ValidNetworkKinds), KeyError> {
         match self {
-            DescriptorKey::Public(public, valid_networks, _) => {
-                Ok((public, KeyMap::default(), valid_networks))
+            DescriptorKey::Public(public, valid_network_kinds, _) => {
+                Ok((public, KeyMap::default(), valid_network_kinds))
             }
-            DescriptorKey::Secret(secret, valid_networks, _) => {
+            DescriptorKey::Secret(secret, valid_network_kinds, _) => {
                 let mut key_map = KeyMap::new();
 
                 let public = secret
@@ -126,13 +119,13 @@ impl<Ctx: ScriptContext> DescriptorKey<Ctx> {
                     .map_err(|e| miniscript::Error::Unexpected(e.to_string()))?;
                 key_map.insert(public.clone(), secret);
 
-                Ok((public, key_map, valid_networks))
+                Ok((public, key_map, valid_network_kinds))
             }
         }
     }
 }
 
-/// Enum representation of the known valid [`ScriptContext`]s
+/// Enum representation of the known valid [`ScriptContext`]s.
 #[derive(Debug, Eq, PartialEq, Copy, Clone)]
 pub enum ScriptContextEnum {
     /// Legacy scripts
@@ -144,38 +137,38 @@ pub enum ScriptContextEnum {
 }
 
 impl ScriptContextEnum {
-    /// Returns whether the script context is [`ScriptContextEnum::Legacy`]
+    /// Returns whether the script context is [`ScriptContextEnum::Legacy`].
     pub fn is_legacy(&self) -> bool {
         self == &ScriptContextEnum::Legacy
     }
 
-    /// Returns whether the script context is [`ScriptContextEnum::Segwitv0`]
+    /// Returns whether the script context is [`ScriptContextEnum::Segwitv0`].
     pub fn is_segwit_v0(&self) -> bool {
         self == &ScriptContextEnum::Segwitv0
     }
 
-    /// Returns whether the script context is [`ScriptContextEnum::Tap`]
+    /// Returns whether the script context is [`ScriptContextEnum::Tap`].
     pub fn is_taproot(&self) -> bool {
         self == &ScriptContextEnum::Tap
     }
 }
 
-/// Trait that adds extra useful methods to [`ScriptContext`]s
+/// Trait that adds extra useful methods to [`ScriptContext`]s.
 pub trait ExtScriptContext: ScriptContext {
-    /// Returns the [`ScriptContext`] as a [`ScriptContextEnum`]
+    /// Returns the [`ScriptContext`] as a [`ScriptContextEnum`].
     fn as_enum() -> ScriptContextEnum;
 
-    /// Returns whether the script context is [`Legacy`](miniscript::Legacy)
+    /// Returns whether the script context is [`Legacy`](miniscript::Legacy).
     fn is_legacy() -> bool {
         Self::as_enum().is_legacy()
     }
 
-    /// Returns whether the script context is [`Segwitv0`](miniscript::Segwitv0)
+    /// Returns whether the script context is [`Segwitv0`](miniscript::Segwitv0).
     fn is_segwit_v0() -> bool {
         Self::as_enum().is_segwit_v0()
     }
 
-    /// Returns whether the script context is [`Tap`](miniscript::Tap), aka Taproot or Segwit V1
+    /// Returns whether the script context is [`Tap`](miniscript::Tap), aka Taproot or Segwit V1.
     fn is_taproot() -> bool {
         Self::as_enum().is_taproot()
     }
@@ -206,9 +199,9 @@ impl<Ctx: ScriptContext + 'static> ExtScriptContext for Ctx {
 /// single `Ctx`), the "specialized" trait can be implemented to make the compiler handle the type
 /// checking.
 ///
-/// Keys also have control over the networks they support: constructing the return object with
+/// Keys also have control over the network kinds they support: constructing the return object with
 /// [`DescriptorKey::from_public`] or [`DescriptorKey::from_secret`] allows to specify a set of
-/// [`ValidNetworks`].
+/// [`ValidNetworkKinds`].
 ///
 /// ## Examples
 ///
@@ -236,7 +229,7 @@ impl<Ctx: ScriptContext + 'static> ExtScriptContext for Ctx {
 /// use bdk_wallet::bitcoin::PublicKey;
 ///
 /// use bdk_wallet::keys::{
-///     mainnet_network, DescriptorKey, DescriptorPublicKey, IntoDescriptorKey, KeyError,
+///     mainnet_network_kind, DescriptorKey, DescriptorPublicKey, IntoDescriptorKey, KeyError,
 ///     ScriptContext, SinglePub, SinglePubKey,
 /// };
 ///
@@ -251,7 +244,7 @@ impl<Ctx: ScriptContext + 'static> ExtScriptContext for Ctx {
 ///                 origin: None,
 ///                 key: SinglePubKey::FullKey(self.pubkey),
 ///             }),
-///             mainnet_network(),
+///             mainnet_network_kind(),
 ///         ))
 ///     }
 /// }
@@ -332,7 +325,7 @@ pub enum ExtendedKey<Ctx: ScriptContext = miniscript::Legacy> {
 }
 
 impl<Ctx: ScriptContext> ExtendedKey<Ctx> {
-    /// Return whether or not the key contains the private data
+    /// Return whether or not the key contains the private data.
     pub fn has_secret(&self) -> bool {
         match self {
             ExtendedKey::Private(_) => true,
@@ -341,11 +334,11 @@ impl<Ctx: ScriptContext> ExtendedKey<Ctx> {
     }
 
     /// Transform the [`ExtendedKey`] into an [`Xpriv`](bip32::Xpriv) for the
-    /// given [`Network`], if the key contains the private data
-    pub fn into_xprv(self, network: Network) -> Option<bip32::Xpriv> {
+    /// given [`NetworkKind`], if the key contains the private data.
+    pub fn into_xprv(self, network_kind: NetworkKind) -> Option<bip32::Xpriv> {
         match self {
             ExtendedKey::Private((mut xprv, _)) => {
-                xprv.network = network.into();
+                xprv.network = network_kind;
                 Some(xprv)
             }
             ExtendedKey::Public(_) => None,
@@ -353,10 +346,10 @@ impl<Ctx: ScriptContext> ExtendedKey<Ctx> {
     }
 
     /// Transform the [`ExtendedKey`] into an [`Xpub`](bip32::Xpub) for the
-    /// given [`Network`]
+    /// given [`NetworkKind`].
     pub fn into_xpub<C: Signing>(
         self,
-        network: bitcoin::Network,
+        network_kind: NetworkKind,
         secp: &Secp256k1<C>,
     ) -> bip32::Xpub {
         let mut xpub = match self {
@@ -364,7 +357,7 @@ impl<Ctx: ScriptContext> ExtendedKey<Ctx> {
             ExtendedKey::Public((xpub, _)) => xpub,
         };
 
-        xpub.network = network.into();
+        xpub.network = network_kind;
         xpub
     }
 }
@@ -390,7 +383,7 @@ impl<Ctx: ScriptContext> From<bip32::Xpriv> for ExtendedKey<Ctx> {
 ///
 /// For key types that don't encode any indication about the path to use (like bip39), it's
 /// generally recommended to implement this trait instead of [`IntoDescriptorKey`]. The same
-/// rules regarding script context and valid networks apply.
+/// rules regarding script context and valid network kinds apply.
 ///
 /// ## Examples
 ///
@@ -398,20 +391,19 @@ impl<Ctx: ScriptContext> From<bip32::Xpriv> for ExtendedKey<Ctx> {
 /// an [`Xpub`] can implement only the required `into_extended_key()` method.
 ///
 /// ```
-/// use bdk_wallet::bitcoin;
-/// use bdk_wallet::bitcoin::bip32;
+/// use bdk_wallet::bitcoin::{bip32, NetworkKind};
 /// use bdk_wallet::keys::{DerivableKey, ExtendedKey, KeyError, ScriptContext};
 ///
 /// struct MyCustomKeyType {
 ///     key_data: bitcoin::PrivateKey,
 ///     chain_code: [u8; 32],
-///     network: bitcoin::Network,
+///     network_kind: NetworkKind,
 /// }
 ///
 /// impl<Ctx: ScriptContext> DerivableKey<Ctx> for MyCustomKeyType {
 ///     fn into_extended_key(self) -> Result<ExtendedKey<Ctx>, KeyError> {
 ///         let xprv = bip32::Xpriv {
-///             network: self.network.into(),
+///             network: self.network_kind,
 ///             depth: 0,
 ///             parent_fingerprint: bip32::Fingerprint::default(),
 ///             private_key: self.key_data.inner,
@@ -424,15 +416,12 @@ impl<Ctx: ScriptContext> From<bip32::Xpriv> for ExtendedKey<Ctx> {
 /// }
 /// ```
 ///
-/// Types that don't internally encode the [`Network`] in which they are valid need some extra
-/// steps to override the set of valid networks, otherwise only the network specified in the
-/// [`Xpriv`] or [`Xpub`] will be considered valid.
-///
+/// For types that don't internally encode the [`NetworkKind`] in which they are valid, only the
+/// network kind specified in the [`Xpriv`] or [`Xpub`] will be considered valid.
 /// ```
-/// use bdk_wallet::bitcoin;
-/// use bdk_wallet::bitcoin::bip32;
+/// use bdk_wallet::bitcoin::{bip32, NetworkKind};
 /// use bdk_wallet::keys::{
-///     any_network, DerivableKey, DescriptorKey, ExtendedKey, KeyError, ScriptContext,
+///     any_network_kind, DerivableKey, DescriptorKey, ExtendedKey, KeyError, ScriptContext,
 /// };
 ///
 /// struct MyCustomKeyType {
@@ -443,7 +432,7 @@ impl<Ctx: ScriptContext> From<bip32::Xpriv> for ExtendedKey<Ctx> {
 /// impl<Ctx: ScriptContext> DerivableKey<Ctx> for MyCustomKeyType {
 ///     fn into_extended_key(self) -> Result<ExtendedKey<Ctx>, KeyError> {
 ///         let xprv = bip32::Xpriv {
-///             network: bitcoin::Network::Bitcoin.into(), // pick an arbitrary network here
+///             network: NetworkKind::Main,
 ///             depth: 0,
 ///             parent_fingerprint: bip32::Fingerprint::default(),
 ///             private_key: self.key_data.inner,
@@ -463,8 +452,7 @@ impl<Ctx: ScriptContext> From<bip32::Xpriv> for ExtendedKey<Ctx> {
 ///             .into_extended_key()?
 ///             .into_descriptor_key(source, derivation_path)?;
 ///
-///         // Override the set of valid networks here
-///         Ok(descriptor_key.override_valid_networks(any_network()))
+///         Ok(descriptor_key)
 ///     }
 /// }
 /// ```
@@ -480,7 +468,7 @@ pub trait DerivableKey<Ctx: ScriptContext = miniscript::Legacy>: Sized {
 This can be used to get direct access to `xprv`s and `xpub`s for types that implement this trait,
 like [`Mnemonic`](bip39::Mnemonic) when the `keys-bip39` feature is enabled.
 ```rust
-use bdk_wallet::bitcoin::Network;
+use bdk_wallet::bitcoin::NetworkKind;
 use bdk_wallet::keys::{DerivableKey, ExtendedKey};
 use bdk_wallet::keys::bip39::{Mnemonic, Language};
 
@@ -491,7 +479,7 @@ let xkey: ExtendedKey =
         "jelly crash boy whisper mouse ecology tuna soccer memory million news short",
     )?
     .into_extended_key()?;
-let xprv = xkey.into_xprv(Network::Bitcoin).unwrap();
+let xprv = xkey.into_xprv(NetworkKind::Main).unwrap();
 # Ok(()) }
 ```
 "##
@@ -543,18 +531,18 @@ impl<Ctx: ScriptContext> DerivableKey<Ctx> for bip32::Xpriv {
     }
 }
 
-/// Output of a [`GeneratableKey`] key generation
+/// Output of a [`GeneratableKey`] key generation.
 pub struct GeneratedKey<K, Ctx: ScriptContext> {
     key: K,
-    valid_networks: ValidNetworks,
+    valid_network_kinds: ValidNetworkKinds,
     phantom: PhantomData<Ctx>,
 }
 
 impl<K, Ctx: ScriptContext> GeneratedKey<K, Ctx> {
-    fn new(key: K, valid_networks: ValidNetworks) -> Self {
+    fn new(key: K, valid_network_kinds: ValidNetworkKinds) -> Self {
         GeneratedKey {
             key,
-            valid_networks,
+            valid_network_kinds,
             phantom: PhantomData,
         }
     }
@@ -577,7 +565,7 @@ impl<K: Clone, Ctx: ScriptContext> Clone for GeneratedKey<K, Ctx> {
     fn clone(&self) -> GeneratedKey<K, Ctx> {
         GeneratedKey {
             key: self.key.clone(),
-            valid_networks: self.valid_networks.clone(),
+            valid_network_kinds: self.valid_network_kinds.clone(),
             phantom: self.phantom,
         }
     }
@@ -600,12 +588,12 @@ where
         derivation_path: bip32::DerivationPath,
     ) -> Result<DescriptorKey<Ctx>, KeyError> {
         let descriptor_key = self.key.into_descriptor_key(origin, derivation_path)?;
-        Ok(descriptor_key.override_valid_networks(self.valid_networks))
+        Ok(descriptor_key.override_valid_network_kinds(self.valid_network_kinds))
     }
 }
 
 // Make generated keys directly usable in descriptors, and make sure they get assigned the right
-// `valid_networks`.
+// `valid_network_kinds`.
 impl<Ctx, K> IntoDescriptorKey<Ctx> for GeneratedKey<K, Ctx>
 where
     Ctx: ScriptContext,
@@ -613,13 +601,14 @@ where
 {
     fn into_descriptor_key(self) -> Result<DescriptorKey<Ctx>, KeyError> {
         let desc_key = self.key.into_descriptor_key()?;
-        Ok(desc_key.override_valid_networks(self.valid_networks))
+        Ok(desc_key.override_valid_network_kinds(self.valid_network_kinds))
     }
 }
 
 /// Trait for keys that can be generated
 ///
-/// The same rules about [`ScriptContext`] and [`ValidNetworks`] from [`IntoDescriptorKey`] apply.
+/// The same rules about [`ScriptContext`] and [`ValidNetworkKinds`] from [`IntoDescriptorKey`]
+/// apply.
 ///
 /// This trait is particularly useful when combined with [`DerivableKey`]: if `Self`
 /// implements it, the returned [`GeneratedKey`] will also implement it. The same is true for
@@ -629,7 +618,7 @@ pub trait GeneratableKey<Ctx: ScriptContext>: Sized {
     /// Type specifying the amount of entropy required e.g. `[u8;32]`
     type Entropy: AsMut<[u8]> + Default;
 
-    /// Extra options required by the `generate_with_entropy`
+    /// Extra options required to generate the key.
     type Options;
     /// Returned error in case of failure
     type Error: core::fmt::Debug;
@@ -708,31 +697,55 @@ where
 impl<Ctx: ScriptContext> GeneratableKey<Ctx> for bip32::Xpriv {
     type Entropy = [u8; 32];
 
-    type Options = ();
+    type Options = XprivGenerateOptions;
     type Error = bip32::Error;
 
     fn generate_with_entropy(
-        _: Self::Options,
+        options: Self::Options,
         entropy: Self::Entropy,
     ) -> Result<GeneratedKey<Self, Ctx>, Self::Error> {
-        // pick a arbitrary network here, but say that we support all of them
-        let xprv = bip32::Xpriv::new_master(Network::Bitcoin, entropy.as_ref())?;
-        Ok(GeneratedKey::new(xprv, any_network()))
+        let (kind, valid_networks) = if options.network.is_mainnet() {
+            (NetworkKind::Main, mainnet_network_kind())
+        } else {
+            (NetworkKind::Test, test_network_kind())
+        };
+        let xprv = bip32::Xpriv::new_master(kind, entropy.as_ref())?;
+        Ok(GeneratedKey::new(xprv, valid_networks))
     }
 }
 
-/// Options for generating a [`PrivateKey`]
+/// Options for generating a [`bip32::Xpriv`].
+#[derive(Debug, Copy, Clone)]
+pub struct XprivGenerateOptions {
+    /// The network to be used when generating the xprv, default to `NetworkKind::Main`
+    pub network: NetworkKind,
+}
+
+impl Default for XprivGenerateOptions {
+    fn default() -> Self {
+        XprivGenerateOptions {
+            network: NetworkKind::Main,
+        }
+    }
+}
+
+/// Options for generating a [`PrivateKey`].
 ///
-/// Defaults to creating compressed keys, which save on-chain bytes and fees
+/// Defaults to creating compressed keys, which save on-chain bytes and fees.
 #[derive(Debug, Copy, Clone)]
 pub struct PrivateKeyGenerateOptions {
-    /// Whether the generated key should be "compressed" or not
+    /// Whether the generated key should be "compressed" or not.
     pub compressed: bool,
+    /// The kind of network to be used, defaults to `NetworkKind::Main`.
+    pub network: NetworkKind,
 }
 
 impl Default for PrivateKeyGenerateOptions {
     fn default() -> Self {
-        PrivateKeyGenerateOptions { compressed: true }
+        PrivateKeyGenerateOptions {
+            compressed: true,
+            network: NetworkKind::Main,
+        }
     }
 }
 
@@ -746,15 +759,19 @@ impl<Ctx: ScriptContext> GeneratableKey<Ctx> for PrivateKey {
         options: Self::Options,
         entropy: Self::Entropy,
     ) -> Result<GeneratedKey<Self, Ctx>, Self::Error> {
-        // pick a arbitrary network here, but say that we support all of them
         let inner = secp256k1::SecretKey::from_slice(&entropy)?;
         let private_key = PrivateKey {
             compressed: options.compressed,
-            network: Network::Bitcoin.into(),
+            network: options.network,
             inner,
         };
+        let valid_networks = if private_key.network.is_mainnet() {
+            mainnet_network_kind()
+        } else {
+            test_network_kind()
+        };
 
-        Ok(GeneratedKey::new(private_key, any_network()))
+        Ok(GeneratedKey::new(private_key, valid_networks))
     }
 }
 
@@ -777,8 +794,8 @@ impl<Ctx: ScriptContext, T: DerivableKey<Ctx>> IntoDescriptorKey<Ctx>
 fn expand_multi_keys<Pk: IntoDescriptorKey<Ctx>, Ctx: ScriptContext>(
     pks: Vec<Pk>,
     secp: &SecpCtx,
-) -> Result<(Vec<DescriptorPublicKey>, KeyMap, ValidNetworks), KeyError> {
-    let (pks, key_maps_networks): (Vec<_>, Vec<_>) = pks
+) -> Result<(Vec<DescriptorPublicKey>, KeyMap, ValidNetworkKinds), KeyError> {
+    let (pks, key_maps_network_kinds): (Vec<_>, Vec<_>) = pks
         .into_iter()
         .map(|key| key.into_descriptor_key()?.extract(secp))
         .collect::<Result<Vec<_>, _>>()?
@@ -786,48 +803,64 @@ fn expand_multi_keys<Pk: IntoDescriptorKey<Ctx>, Ctx: ScriptContext>(
         .map(|(a, b, c)| (a, (b, c)))
         .unzip();
 
-    let (key_map, valid_networks) = key_maps_networks.into_iter().fold(
-        (KeyMap::default(), any_network()),
-        |(mut keys_acc, net_acc), (key, net)| {
+    let (key_map, valid_network_kinds) = key_maps_network_kinds.into_iter().fold(
+        (KeyMap::default(), any_network_kind()),
+        |(mut keys_acc, netkind_acc), (key, netkind)| {
             keys_acc.extend(key);
-            let net_acc = merge_networks(&net_acc, &net);
+            let netkind_acc = intersect_network_kinds(&netkind_acc, &netkind);
 
-            (keys_acc, net_acc)
+            (keys_acc, netkind_acc)
         },
     );
 
-    Ok((pks, key_map, valid_networks))
+    Ok((pks, key_map, valid_network_kinds))
 }
 
-// Used internally by `bdk_wallet::fragment!` to build `pk_k()` fragments
+// Used internally by `bdk_wallet::fragment!` to build `pk_k()` fragments.
 #[doc(hidden)]
 pub fn make_pk<Pk: IntoDescriptorKey<Ctx>, Ctx: ScriptContext>(
     descriptor_key: Pk,
     secp: &SecpCtx,
-) -> Result<(Miniscript<DescriptorPublicKey, Ctx>, KeyMap, ValidNetworks), DescriptorError> {
-    let (key, key_map, valid_networks) = descriptor_key.into_descriptor_key()?.extract(secp)?;
+) -> Result<
+    (
+        Miniscript<DescriptorPublicKey, Ctx>,
+        KeyMap,
+        ValidNetworkKinds,
+    ),
+    DescriptorError,
+> {
+    let (key, key_map, valid_network_kinds) =
+        descriptor_key.into_descriptor_key()?.extract(secp)?;
     let minisc = Miniscript::from_ast(Terminal::PkK(key))?;
 
     minisc.check_miniscript()?;
 
-    Ok((minisc, key_map, valid_networks))
+    Ok((minisc, key_map, valid_network_kinds))
 }
 
-// Used internally by `bdk_wallet::fragment!` to build `pk_h()` fragments
+// Used internally by `bdk_wallet::fragment!` to build `pk_h()` fragments.
 #[doc(hidden)]
 pub fn make_pkh<Pk: IntoDescriptorKey<Ctx>, Ctx: ScriptContext>(
     descriptor_key: Pk,
     secp: &SecpCtx,
-) -> Result<(Miniscript<DescriptorPublicKey, Ctx>, KeyMap, ValidNetworks), DescriptorError> {
-    let (key, key_map, valid_networks) = descriptor_key.into_descriptor_key()?.extract(secp)?;
+) -> Result<
+    (
+        Miniscript<DescriptorPublicKey, Ctx>,
+        KeyMap,
+        ValidNetworkKinds,
+    ),
+    DescriptorError,
+> {
+    let (key, key_map, valid_network_kinds) =
+        descriptor_key.into_descriptor_key()?.extract(secp)?;
     let minisc = Miniscript::from_ast(Terminal::PkH(key))?;
 
     minisc.check_miniscript()?;
 
-    Ok((minisc, key_map, valid_networks))
+    Ok((minisc, key_map, valid_network_kinds))
 }
 
-// Used internally by `bdk_wallet::fragment!` to build `multi()` fragments
+// Used internally by `bdk_wallet::fragment!` to build `multi()` fragments.
 #[doc(hidden)]
 pub fn make_multi<
     Pk: IntoDescriptorKey<Ctx>,
@@ -838,23 +871,30 @@ pub fn make_multi<
     variant: V,
     pks: Vec<Pk>,
     secp: &SecpCtx,
-) -> Result<(Miniscript<DescriptorPublicKey, Ctx>, KeyMap, ValidNetworks), DescriptorError> {
-    let (pks, key_map, valid_networks) = expand_multi_keys(pks, secp)?;
+) -> Result<
+    (
+        Miniscript<DescriptorPublicKey, Ctx>,
+        KeyMap,
+        ValidNetworkKinds,
+    ),
+    DescriptorError,
+> {
+    let (pks, key_map, valid_network_kinds) = expand_multi_keys(pks, secp)?;
     let minisc = Miniscript::from_ast(variant(thresh, pks))?;
 
     minisc.check_miniscript()?;
 
-    Ok((minisc, key_map, valid_networks))
+    Ok((minisc, key_map, valid_network_kinds))
 }
 
-// Used internally by `bdk_wallet::descriptor!` to build `sortedmulti()` fragments
+// Used internally by `bdk_wallet::descriptor!` to build `sortedmulti()` fragments.
 #[doc(hidden)]
 pub fn make_sortedmulti<Pk, Ctx, F>(
     thresh: usize,
     pks: Vec<Pk>,
     build_desc: F,
     secp: &SecpCtx,
-) -> Result<(Descriptor<DescriptorPublicKey>, KeyMap, ValidNetworks), DescriptorError>
+) -> Result<(Descriptor<DescriptorPublicKey>, KeyMap, ValidNetworkKinds), DescriptorError>
 where
     Pk: IntoDescriptorKey<Ctx>,
     Ctx: ScriptContext,
@@ -863,13 +903,13 @@ where
         Vec<DescriptorPublicKey>,
     ) -> Result<(Descriptor<DescriptorPublicKey>, PhantomData<Ctx>), DescriptorError>,
 {
-    let (pks, key_map, valid_networks) = expand_multi_keys(pks, secp)?;
+    let (pks, key_map, valid_network_kinds) = expand_multi_keys(pks, secp)?;
     let descriptor = build_desc(thresh, pks)?.0;
 
-    Ok((descriptor, key_map, valid_networks))
+    Ok((descriptor, key_map, valid_network_kinds))
 }
 
-/// The "identity" conversion is used internally by some `bdk_wallet::fragment`s
+/// The "identity" conversion is used internally by some `bdk_wallet::fragment`s.
 impl<Ctx: ScriptContext> IntoDescriptorKey<Ctx> for DescriptorKey<Ctx> {
     fn into_descriptor_key(self) -> Result<DescriptorKey<Ctx>, KeyError> {
         Ok(self)
@@ -878,25 +918,25 @@ impl<Ctx: ScriptContext> IntoDescriptorKey<Ctx> for DescriptorKey<Ctx> {
 
 impl<Ctx: ScriptContext> IntoDescriptorKey<Ctx> for DescriptorPublicKey {
     fn into_descriptor_key(self) -> Result<DescriptorKey<Ctx>, KeyError> {
-        let networks = match self {
-            DescriptorPublicKey::Single(_) => any_network(),
+        let network_kinds = match self {
+            DescriptorPublicKey::Single(_) => any_network_kind(),
             DescriptorPublicKey::XPub(DescriptorXKey { xkey, .. }) => {
                 if xkey.network.is_mainnet() {
-                    mainnet_network()
+                    mainnet_network_kind()
                 } else {
-                    test_networks()
+                    test_network_kind()
                 }
             }
             DescriptorPublicKey::MultiXPub(DescriptorMultiXKey { xkey, .. }) => {
                 if xkey.network.is_mainnet() {
-                    mainnet_network()
+                    mainnet_network_kind()
                 } else {
-                    test_networks()
+                    test_network_kind()
                 }
             }
         };
 
-        Ok(DescriptorKey::from_public(self, networks))
+        Ok(DescriptorKey::from_public(self, network_kinds))
     }
 }
 
@@ -922,15 +962,17 @@ impl<Ctx: ScriptContext> IntoDescriptorKey<Ctx> for XOnlyPublicKey {
 
 impl<Ctx: ScriptContext> IntoDescriptorKey<Ctx> for DescriptorSecretKey {
     fn into_descriptor_key(self) -> Result<DescriptorKey<Ctx>, KeyError> {
-        let networks = match &self {
-            DescriptorSecretKey::Single(sk) if sk.key.network.is_mainnet() => mainnet_network(),
-            DescriptorSecretKey::XPrv(DescriptorXKey { xkey, .. }) if xkey.network.is_mainnet() => {
-                mainnet_network()
+        let network_kinds = match &self {
+            DescriptorSecretKey::Single(sk) if sk.key.network.is_mainnet() => {
+                mainnet_network_kind()
             }
-            _ => test_networks(),
+            DescriptorSecretKey::XPrv(DescriptorXKey { xkey, .. }) if xkey.network.is_mainnet() => {
+                mainnet_network_kind()
+            }
+            _ => test_network_kind(),
         };
 
-        Ok(DescriptorKey::from_secret(self, networks))
+        Ok(DescriptorKey::from_secret(self, network_kinds))
     }
 }
 
@@ -952,13 +994,13 @@ impl<Ctx: ScriptContext> IntoDescriptorKey<Ctx> for PrivateKey {
     }
 }
 
-/// Errors thrown while working with [`keys`](crate::keys)
+/// Errors thrown while working with [`keys`](crate::keys).
 #[derive(Debug, PartialEq)]
 pub enum KeyError {
     /// The key cannot exist in the given script context
     InvalidScriptContext,
-    /// The key is not valid for the given network
-    InvalidNetwork,
+    /// The key is not valid for the given network kind
+    InvalidNetworkKind,
     /// The key has an invalid checksum
     InvalidChecksum,
 
@@ -987,7 +1029,7 @@ impl fmt::Display for KeyError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidScriptContext => write!(f, "Invalid script context"),
-            Self::InvalidNetwork => write!(f, "Invalid network"),
+            Self::InvalidNetworkKind => write!(f, "Invalid network kind"),
             Self::InvalidChecksum => write!(f, "Invalid checksum"),
             Self::Message(err) => write!(f, "{err}"),
             Self::Bip32(err) => write!(f, "BIP32 error: {err}"),
@@ -1001,18 +1043,44 @@ impl std::error::Error for KeyError {}
 
 #[cfg(test)]
 mod test {
-    use bitcoin::bip32;
-
     use super::*;
 
+    use bitcoin::bip32;
+
     pub const TEST_ENTROPY: [u8; 32] = [0xAA; 32];
+
+    #[test]
+    fn test_xpriv_generate_options() {
+        use bitcoin::bip32::Xpriv;
+        let secp = SecpCtx::new();
+        // Test
+        let options = XprivGenerateOptions {
+            network: NetworkKind::Test,
+        };
+        let xpriv: GeneratedKey<Xpriv, miniscript::Segwitv0> = Xpriv::generate(options).unwrap();
+        let desc_key = xpriv
+            .into_descriptor_key(None, "m/84h/1h/0h".parse().unwrap())
+            .unwrap();
+        let desc_pk = desc_key.extract(&secp).unwrap().0;
+        assert!(desc_pk.to_string().contains("tpub"));
+        // Main
+        let options = XprivGenerateOptions {
+            network: NetworkKind::Main,
+        };
+        let xpriv: GeneratedKey<Xpriv, miniscript::Segwitv0> = Xpriv::generate(options).unwrap();
+        let desc_key = xpriv
+            .into_descriptor_key(None, "m/84h/1h/0h".parse().unwrap())
+            .unwrap();
+        let desc_pk = desc_key.extract(&secp).unwrap().0;
+        assert!(desc_pk.to_string().contains("xpub"));
+    }
 
     #[test]
     fn test_keys_generate_xprv() {
         let generated_xprv: GeneratedKey<_, miniscript::Segwitv0> =
             bip32::Xpriv::generate_with_entropy_default(TEST_ENTROPY).unwrap();
 
-        assert_eq!(generated_xprv.valid_networks, any_network());
+        assert_eq!(generated_xprv.valid_network_kinds, mainnet_network_kind());
         assert_eq!(generated_xprv.to_string(), "xprv9s21ZrQH143K4Xr1cJyqTvuL2FWR8eicgY9boWqMBv8MDVUZ65AXHnzBrK1nyomu6wdcabRgmGTaAKawvhAno1V5FowGpTLVx3jxzE5uk3Q");
     }
 
@@ -1021,7 +1089,7 @@ mod test {
         let generated_wif: GeneratedKey<_, miniscript::Segwitv0> =
             bitcoin::PrivateKey::generate_with_entropy_default(TEST_ENTROPY).unwrap();
 
-        assert_eq!(generated_wif.valid_networks, any_network());
+        assert_eq!(generated_wif.valid_network_kinds, mainnet_network_kind());
         assert_eq!(
             generated_wif.to_string(),
             "L2wTu6hQrnDMiFNWA5na6jB12ErGQqtXwqpSL7aWquJaZG8Ai3ch"
@@ -1030,7 +1098,7 @@ mod test {
 
     #[cfg(feature = "keys-bip39")]
     #[test]
-    fn test_keys_wif_network_bip39() {
+    fn test_keys_wif_network_kind_bip39() {
         let xkey: ExtendedKey = bip39::Mnemonic::parse_in(
             bip39::Language::English,
             "jelly crash boy whisper mouse ecology tuna soccer memory million news short",
@@ -1038,8 +1106,8 @@ mod test {
         .unwrap()
         .into_extended_key()
         .unwrap();
-        let xprv = xkey.into_xprv(Network::Testnet).unwrap();
+        let xprv = xkey.into_xprv(NetworkKind::Test).unwrap();
 
-        assert_eq!(xprv.network, Network::Testnet.into());
+        assert_eq!(xprv.network, NetworkKind::Test);
     }
 }

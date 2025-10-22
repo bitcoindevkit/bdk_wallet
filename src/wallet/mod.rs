@@ -1,7 +1,7 @@
 // Bitcoin Dev Kit
 // Written in 2020 by Alekos Filini <alekos.filini@gmail.com>
 //
-// Copyright (c) 2020-2021 Bitcoin Dev Kit Developers
+// Copyright (c) 2020-2025 Bitcoin Dev Kit Developers
 //
 // This file is licensed under the Apache License, Version 2.0 <LICENSE-APACHE
 // or http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
@@ -40,8 +40,8 @@ use bitcoin::{
     psbt,
     secp256k1::Secp256k1,
     sighash::{EcdsaSighashType, TapSighashType},
-    transaction, Address, Amount, Block, BlockHash, FeeRate, Network, OutPoint, Psbt, ScriptBuf,
-    Sequence, SignedAmount, Transaction, TxOut, Txid, Weight, Witness,
+    transaction, Address, Amount, Block, BlockHash, FeeRate, Network, NetworkKind, OutPoint, Psbt,
+    ScriptBuf, Sequence, SignedAmount, Transaction, TxOut, Txid, Weight, Witness,
 };
 use miniscript::{
     descriptor::KeyMap,
@@ -443,12 +443,13 @@ impl Wallet {
     pub fn create_with_params(params: CreateParams) -> Result<Self, DescriptorError> {
         let secp = SecpCtx::new();
         let network = params.network;
+        let network_kind = NetworkKind::from(network);
         let genesis_hash = params
             .genesis_hash
             .unwrap_or(genesis_block(network).block_hash());
         let (chain, chain_changeset) = LocalChain::from_genesis_hash(genesis_hash);
 
-        let (descriptor, mut descriptor_keymap) = (params.descriptor)(&secp, network)?;
+        let (descriptor, mut descriptor_keymap) = (params.descriptor)(&secp, network_kind)?;
         check_wallet_descriptor(&descriptor)?;
         descriptor_keymap.extend(params.descriptor_keymap);
 
@@ -460,7 +461,7 @@ impl Wallet {
 
         let (change_descriptor, change_signers) = match params.change_descriptor {
             Some(make_desc) => {
-                let (change_descriptor, mut internal_keymap) = make_desc(&secp, network)?;
+                let (change_descriptor, mut internal_keymap) = make_desc(&secp, network_kind)?;
                 check_wallet_descriptor(&change_descriptor)?;
                 internal_keymap.extend(params.change_descriptor_keymap);
                 let change_signers = Arc::new(SignersContainer::build(
@@ -564,6 +565,7 @@ impl Wallet {
         }
         let secp = Secp256k1::new();
         let network = changeset.network.ok_or(LoadError::MissingNetwork)?;
+        let network_kind = NetworkKind::from(network);
         let chain = LocalChain::from_changeset(changeset.local_chain)
             .map_err(|_| LoadError::MissingGenesis)?;
 
@@ -593,7 +595,7 @@ impl Wallet {
         if let Some(expected) = params.check_descriptor {
             if let Some(make_desc) = expected {
                 let (exp_desc, keymap) =
-                    make_desc(&secp, network).map_err(LoadError::Descriptor)?;
+                    make_desc(&secp, network_kind).map_err(LoadError::Descriptor)?;
                 if descriptor.descriptor_id() != exp_desc.descriptor_id() {
                     return Err(LoadError::Mismatch(LoadMismatch::Descriptor {
                         keychain: KeychainKind::External,
@@ -618,12 +620,13 @@ impl Wallet {
         let mut internal_keymap = params.change_descriptor_keymap;
 
         match (changeset.change_descriptor, params.check_change_descriptor) {
-            // empty signer
+            // Empty signer.
             (None, None) => {}
             (None, Some(expect)) => {
-                // expected desc but none loaded
+                // Expected descriptor, but none is loaded.
                 if let Some(make_desc) = expect {
-                    let (exp_desc, _) = make_desc(&secp, network).map_err(LoadError::Descriptor)?;
+                    let (exp_desc, _) =
+                        make_desc(&secp, network_kind).map_err(LoadError::Descriptor)?;
                     return Err(LoadError::Mismatch(LoadMismatch::Descriptor {
                         keychain: KeychainKind::Internal,
                         loaded: None,
@@ -631,13 +634,13 @@ impl Wallet {
                     }));
                 }
             }
-            // nothing expected
+            // Nothing expected.
             (Some(desc), None) => {
                 check_wallet_descriptor(&desc).map_err(LoadError::Descriptor)?;
                 change_descriptor = Some(desc);
             }
             (Some(desc), Some(expect)) => match expect {
-                // expected none for existing
+                // Expected none for existing.
                 None => {
                     return Err(LoadError::Mismatch(LoadMismatch::Descriptor {
                         keychain: KeychainKind::Internal,
@@ -645,11 +648,11 @@ impl Wallet {
                         expected: None,
                     }))
                 }
-                // parameters must match
+                // Parameters must match.
                 Some(make_desc) => {
                     check_wallet_descriptor(&desc).map_err(LoadError::Descriptor)?;
                     let (exp_desc, keymap) =
-                        make_desc(&secp, network).map_err(LoadError::Descriptor)?;
+                        make_desc(&secp, network_kind).map_err(LoadError::Descriptor)?;
                     if desc.descriptor_id() != exp_desc.descriptor_id() {
                         return Err(LoadError::Mismatch(LoadMismatch::Descriptor {
                             keychain: KeychainKind::Internal,
@@ -698,7 +701,7 @@ impl Wallet {
         }))
     }
 
-    /// Get the Bitcoin network the wallet is using.
+    /// Get the [`Network`] the wallet is using.
     pub fn network(&self) -> Network {
         self.network
     }
@@ -1425,7 +1428,7 @@ impl Wallet {
         };
 
         let lock_time = match params.locktime {
-            // When no nLockTime is specified, we try to prevent fee sniping, if possible
+            // When no `nLockTime` is specified, we try to prevent fee sniping, if possible.
             None => {
                 // Fee sniping can be partially prevented by setting the timelock
                 // to current_height. If we don't know the current_height,
@@ -1433,30 +1436,30 @@ impl Wallet {
                 let fee_sniping_height = current_height;
 
                 // We choose the biggest between the required nlocktime and the fee sniping
-                // height
+                // height.
                 match requirements.timelock {
-                    // No requirement, just use the fee_sniping_height
+                    // No requirement, just use the fee_sniping_height.
                     None => fee_sniping_height,
                     // There's a block-based requirement, but the value is lower than the
-                    // fee_sniping_height
+                    // fee_sniping_height.
                     Some(value @ absolute::LockTime::Blocks(_)) if value < fee_sniping_height => {
                         fee_sniping_height
                     }
                     // There's a time-based requirement or a block-based requirement greater
-                    // than the fee_sniping_height use that value
+                    // than the fee_sniping_height use that value.
                     Some(value) => value,
                 }
             }
-            // Specific nLockTime required and we have no constraints, so just set to that value
+            // Specific nLockTime required and we have no constraints, so just set to that value.
             Some(x) if requirements.timelock.is_none() => x,
-            // Specific nLockTime required and it's compatible with the constraints
+            // Specific nLockTime required and it's compatible with the constraints.
             Some(x)
                 if requirements.timelock.unwrap().is_same_unit(x)
                     && x >= requirements.timelock.unwrap() =>
             {
                 x
             }
-            // Invalid nLockTime required
+            // Invalid nLockTime required.
             Some(x) => {
                 return Err(CreateTxError::LockTime {
                     requested: x,
@@ -1465,19 +1468,19 @@ impl Wallet {
             }
         };
 
-        // nSequence value for inputs
-        // When not explicitly specified, defaults to 0xFFFFFFFD,
-        // meaning RBF signaling is enabled
+        // nSequence value for inputs.
+        // When not explicitly specified, it defaults to 0xFFFFFFFD, meaning RBF signaling is
+        // enabled.
         let n_sequence = match (params.sequence, requirements.csv) {
-            // Enable RBF by default
+            // Enable RBF by default.
             (None, None) => Sequence::ENABLE_RBF_NO_LOCKTIME,
-            // None requested, use required
+            // None requested, use required.
             (None, Some(csv)) => csv,
-            // Requested sequence is incompatible with requirements
+            // Requested sequence is incompatible with requirements.
             (Some(sequence), Some(csv)) if !check_nsequence_rbf(sequence, csv) => {
                 return Err(CreateTxError::RbfSequenceCsv { sequence, csv })
             }
-            // Use requested nSequence value
+            // Use requested nSequence value.
             (Some(sequence), _) => sequence,
         };
 
@@ -1545,7 +1548,7 @@ impl Wallet {
             let mut required: Vec<WeightedUtxo> = params.utxos.clone();
             let optional = self.filter_utxos(&params, current_height.to_consensus_u32());
 
-            // if drain_wallet is true, all UTxOs are required
+            // If `drain_wallet` is true, all UTxOs are required.
             if params.drain_wallet {
                 required.extend(optional);
                 (required, vec![])
@@ -1554,7 +1557,7 @@ impl Wallet {
             }
         };
 
-        // get drain script
+        // Get drain script.
         let mut drain_index = Option::<(KeychainKind, u32)>::None;
         let drain_script = match params.drain_to {
             Some(ref drain_recipient) => drain_recipient.clone(),
@@ -1608,8 +1611,8 @@ impl Wallet {
             // Uh oh, our transaction has no outputs.
             // We allow this when:
             // - We have a drain_to address and the utxos we must spend (this happens,
-            // for example, when we RBF)
-            // - We have a drain_to address and drain_wallet set
+            // for example, when we RBF).
+            // - We have a drain_to address and drain_wallet set.
             // Otherwise, we don't know who we should send the funds to, and how much
             // we should send!
             if params.drain_to.is_some() && (params.drain_wallet || !params.utxos.is_empty()) {
@@ -1631,9 +1634,9 @@ impl Wallet {
             }
         }
 
-        // if there's change, create and add a change output
+        // If there's change, create and add a change output.
         if let Excess::Change { amount, .. } = excess {
-            // create drain output
+            // Create drain output.
             let drain_output = TxOut {
                 value: *amount,
                 script_pubkey: drain_script,
@@ -1641,16 +1644,16 @@ impl Wallet {
 
             // TODO: We should pay attention when adding a new output: this might increase
             // the length of the "number of vouts" parameter by 2 bytes, potentially making
-            // our feerate too low
+            // our feerate too low.
             tx.output.push(drain_output);
         }
 
-        // sort input/outputs according to the chosen algorithm
+        // Sort inputs/outputs according to the chosen algorithm.
         params.ordering.sort_tx_with_aux_rand(&mut tx, rng);
 
         let psbt = self.complete_transaction(tx, coin_selection.selected, params)?;
 
-        // recording changes to the change keychain
+        // Recording changes to the change keychain.
         if let (Excess::Change { .. }, Some((keychain, index))) = (excess, drain_index) {
             if let Some((_, index_changeset)) =
                 self.indexed_graph.index.reveal_to_target(keychain, index)
@@ -1747,16 +1750,16 @@ impl Wallet {
             .calculate_fee_rate(&tx)
             .map_err(|_| BuildFeeBumpError::FeeRateUnavailable)?;
 
-        // remove the inputs from the tx and process them
+        // Remove the inputs from the tx and process them.
         let utxos = tx
             .input
             .drain(..)
             .map(|txin| -> Result<_, BuildFeeBumpError> {
                 graph
-                    // Get previous transaction
+                    // Get previous transaction.
                     .get_tx(txin.previous_output.txid)
                     .ok_or(BuildFeeBumpError::UnknownUtxo(txin.previous_output))
-                    // Get chain position
+                    // Get chain position.
                     .and_then(|prev_tx| {
                         let chain_position = chain_positions
                             .get(&txin.previous_output.txid)
@@ -1881,12 +1884,12 @@ impl Wallet {
     /// # Ok::<(),anyhow::Error>(())
     pub fn sign(&self, psbt: &mut Psbt, sign_options: SignOptions) -> Result<bool, SignerError> {
         // This adds all the PSBT metadata for the inputs, which will help us later figure out how
-        // to derive our keys
+        // to derive our keys.
         self.update_psbt_with_descriptor(psbt)
             .map_err(SignerError::MiniscriptPsbt)?;
 
         // If we aren't allowed to use `witness_utxo`, ensure that every input (except p2tr and
-        // finalized ones) has the `non_witness_utxo`
+        // finalized ones) has the `non_witness_utxo`.
         if !sign_options.trust_witness_utxo
             && psbt
                 .inputs
@@ -1899,7 +1902,7 @@ impl Wallet {
         }
 
         // If the user hasn't explicitly opted-in, refuse to sign the transaction unless every input
-        // is using `SIGHASH_ALL` or `SIGHASH_DEFAULT` for taproot
+        // is using `SIGHASH_ALL` or `SIGHASH_DEFAULT` for Taproot.
         if !sign_options.allow_all_sighashes
             && !psbt.inputs.iter().all(|i| {
                 i.sighash_type.is_none()
@@ -1920,7 +1923,7 @@ impl Wallet {
             signer.sign_transaction(psbt, &sign_options, &self.secp)?;
         }
 
-        // attempt to finalize
+        // Attempt to finalize.
         if sign_options.try_finalize {
             self.finalize_psbt(psbt, sign_options)
         } else {
@@ -1928,7 +1931,7 @@ impl Wallet {
         }
     }
 
-    /// Return the spending policies for the wallet's descriptor
+    /// Return the spending policies for the wallet's descriptor.
     pub fn policies(&self, keychain: KeychainKind) -> Result<Option<Policy>, DescriptorError> {
         let signers = match keychain {
             KeychainKind::External => &self.signers,
@@ -2011,11 +2014,11 @@ impl Wallet {
                 .unwrap_or_else(|| self.chain.tip().height());
 
             // - Try to derive the descriptor by looking at the txout. If it's in our database, we
-            //   know exactly which `keychain` to use, and which derivation index it is
+            //   know exactly which `keychain` to use, and which derivation index it is.
             // - If that fails, try to derive it by looking at the psbt input: the complete logic is
             //   in `src/descriptor/mod.rs`, but it will basically look at `bip32_derivation`,
-            //   `redeem_script` and `witness_script` to determine the right derivation
-            // - If that also fails, it will try it on the internal descriptor, if present
+            //   `redeem_script` and `witness_script` to determine the right derivation.
+            // - If that also fails, it will try it on the internal descriptor, if present.
             let desc = psbt
                 .get_utxo_for(n)
                 .and_then(|txout| self.get_descriptor_for_txout(&txout))
@@ -2061,7 +2064,7 @@ impl Wallet {
             }
         }
 
-        // Clear derivation paths from outputs
+        // Clear derivation paths from outputs.
         if finished {
             for output in &mut psbt.outputs {
                 output.bip32_derivation.clear();
@@ -2072,7 +2075,7 @@ impl Wallet {
         Ok(finished)
     }
 
-    /// Return the secp256k1 context used for all signing operations
+    /// Return the secp256k1 context used for all signing operations.
     pub fn secp_ctx(&self) -> &SecpCtx {
         &self.secp
     }
@@ -2084,7 +2087,7 @@ impl Wallet {
     }
 
     /// The index of the next address that you would get if you were to ask the wallet for a new
-    /// address
+    /// address.
     pub fn next_derivation_index(&self, keychain: KeychainKind) -> u32 {
         self.indexed_graph
             .index
@@ -2122,7 +2125,7 @@ impl Wallet {
     fn filter_utxos(&self, params: &TxParams, current_height: u32) -> Vec<WeightedUtxo> {
         if params.manually_selected_only {
             vec![]
-        // only process optional UTxOs if manually_selected_only is false
+        // Only process optional UTxOs if manually_selected_only is false.
         } else {
             let manually_selected_outpoints = params
                 .utxos
@@ -2131,16 +2134,16 @@ impl Wallet {
                 .collect::<HashSet<OutPoint>>();
             self.indexed_graph
                 .graph()
-                // get all unspent UTxOs from wallet
+                // Get all unspent UTxOs from wallet.
                 // NOTE: the UTxOs returned by the following method already belong to wallet as the
-                // call chain uses get_tx_node infallibly
+                // call chain uses get_tx_node infallibly.
                 .filter_chain_unspents(
                     &self.chain,
                     self.chain.tip().block_id(),
                     CanonicalizationParams::default(),
                     self.indexed_graph.index.outpoints().iter().cloned(),
                 )
-                // only create LocalOutput if UTxO is mature
+                // Only create LocalOutput if UTxO is mature.
                 .filter_map(move |((k, i), full_txo)| {
                     full_txo
                         .is_mature(current_height)
@@ -2156,9 +2159,9 @@ impl Wallet {
                     self.keychains().count() == 1
                         || params.change_policy.is_satisfied_by(local_output)
                 })
-                // only add to optional UTxOs those marked as spendable
+                // Only add to optional UTxOs those marked as spendable.
                 .filter(|local_output| !params.unspendable.contains(&local_output.outpoint))
-                // if bumping fees only add to optional UTxOs those confirmed
+                // If bumping fees only add to optional UTxOs those confirmed.
                 .filter(|local_output| {
                     params.bumping_fee.is_none() || local_output.chain_position.is_confirmed()
                 })
@@ -2205,7 +2208,7 @@ impl Wallet {
             .map(|utxo| (utxo.outpoint(), utxo))
             .collect::<HashMap<_, _>>();
 
-        // add metadata for the inputs
+        // Add metadata for the inputs.
         for (psbt_input, input) in psbt.inputs.iter_mut().zip(psbt.unsigned_tx.input.iter()) {
             let utxo = match lookup_output.remove(&input.previous_output) {
                 Some(utxo) => utxo,
@@ -2252,7 +2255,7 @@ impl Wallet {
         Ok(psbt)
     }
 
-    /// get the corresponding PSBT Input for a LocalUtxo
+    /// Get the corresponding PSBT Input for a [`LocalOutput`].
     pub fn get_psbt_input(
         &self,
         utxo: LocalOutput,
@@ -2260,7 +2263,7 @@ impl Wallet {
         only_witness_utxo: bool,
     ) -> Result<psbt::Input, CreateTxError> {
         // Try to find the prev_script in our db to figure out if this is internal or external,
-        // and the derivation index
+        // and the derivation index.
         let &(keychain, child) = self
             .indexed_graph
             .index
@@ -2283,7 +2286,8 @@ impl Wallet {
 
         let prev_output = utxo.outpoint;
         if let Some(prev_tx) = self.indexed_graph.graph().get_tx(prev_output.txid) {
-            // We want to check that the prevout actually exists in the tx before continuing.
+            // We want to check that the prevout actually exists in the transaction before
+            // continuing.
             let prevout = prev_tx.output.get(prev_output.vout as usize).ok_or(
                 MiniscriptPsbtError::UtxoUpdate(miniscript::psbt::UtxoUpdateError::UtxoCheck),
             )?;
@@ -2299,7 +2303,7 @@ impl Wallet {
 
     fn update_psbt_with_descriptor(&self, psbt: &mut Psbt) -> Result<(), MiniscriptPsbtError> {
         // We need to borrow `psbt` mutably within the loops, so we have to allocate a vec for all
-        // the input utxos and outputs
+        // the input utxos and outputs.
         let utxos = (0..psbt.inputs.len())
             .filter_map(|i| psbt.get_utxo_for(i).map(|utxo| (true, i, utxo)))
             .chain(
@@ -2311,7 +2315,7 @@ impl Wallet {
             )
             .collect::<Vec<_>>();
 
-        // Try to figure out the keychain and derivation for every input and output
+        // Try to figure out the keychain and derivation for every input and output.
         for (is_input, index, out) in utxos.into_iter() {
             if let Some(&(keychain, child)) =
                 self.indexed_graph.index.index_of_spk(out.script_pubkey)
@@ -2334,9 +2338,9 @@ impl Wallet {
         Ok(())
     }
 
-    /// Return the checksum of the public descriptor associated to `keychain`
+    /// Return the checksum of the public descriptor associated to the `keychain`.
     ///
-    /// Internally calls [`Self::public_descriptor`] to fetch the right descriptor
+    /// Internally calls [`Self::public_descriptor`] to fetch the right descriptor.
     pub fn descriptor_checksum(&self, keychain: KeychainKind) -> String {
         self.public_descriptor(keychain)
             .to_string()
@@ -2642,27 +2646,27 @@ impl AsRef<bdk_chain::tx_graph::TxGraph<ConfirmationBlockTime>> for Wallet {
     }
 }
 
-/// Deterministically generate a unique name given the descriptors defining the wallet
+/// Deterministically generate a unique name given the descriptors defining the [`Wallet`].
 ///
-/// Compatible with [`wallet_name_from_descriptor`]
+/// Compatible with [`wallet_name_from_descriptor`].
 pub fn wallet_name_from_descriptor<T>(
     descriptor: T,
     change_descriptor: Option<T>,
-    network: Network,
+    network_kind: NetworkKind,
     secp: &SecpCtx,
 ) -> Result<String, DescriptorError>
 where
     T: IntoWalletDescriptor,
 {
-    //TODO check descriptors contains only public keys
+    // TODO: check descriptors contains only public keys
     let descriptor = descriptor
-        .into_wallet_descriptor(secp, network)?
+        .into_wallet_descriptor(secp, network_kind)?
         .0
         .to_string();
     let mut wallet_name = descriptor.split_once('#').unwrap().1.to_string();
     if let Some(change_descriptor) = change_descriptor {
         let change_descriptor = change_descriptor
-            .into_wallet_descriptor(secp, network)?
+            .into_wallet_descriptor(secp, network_kind)?
             .0
             .to_string();
         wallet_name.push_str(change_descriptor.split_once('#').unwrap().1);
@@ -2756,7 +2760,7 @@ macro_rules! floating_rate {
 
 #[macro_export]
 #[doc(hidden)]
-/// Macro for getting a wallet for use in a doctest
+/// Macro for getting a [`Wallet`] for use in a doctest.
 macro_rules! doctest_wallet {
     () => {{
         use $crate::bitcoin::{BlockHash, Transaction, absolute, TxOut, Network, hashes::Hash};
@@ -2805,7 +2809,7 @@ mod test {
     fn not_duplicated_utxos_across_optional_and_required() {
         let (external_desc, internal_desc) = get_test_tr_single_sig_xprv_and_change_desc();
 
-        // create new wallet
+        // Create new wallet.
         let mut wallet = Wallet::create(external_desc, internal_desc)
             .network(Network::Testnet)
             .create_wallet_no_persist()
@@ -2840,8 +2844,8 @@ mod test {
         let params = builder.params.clone();
         // enforce selection of first output in transaction
         let received = wallet.filter_utxos(&params, wallet.latest_checkpoint().block_id().height);
-        // notice expected doesn't include the first output from two_output_tx as it should be
-        // filtered out
+        // Notice expected doesn't include the first output from two_output_tx as it should be
+        // filtered out.
         let expected = vec![wallet
             .get_utxo(OutPoint { txid, vout: 1 })
             .map(|utxo| WeightedUtxo {

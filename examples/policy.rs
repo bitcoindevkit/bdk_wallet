@@ -1,7 +1,7 @@
 // Bitcoin Dev Kit
 // Written in 2020 by Alekos Filini <alekos.filini@gmail.com>
 //
-// Copyright (c) 2020-2021 Bitcoin Dev Kit Developers
+// Copyright (c) 2020-2025 Bitcoin Dev Kit Developers
 //
 // This file is licensed under the Apache License, Version 2.0 <LICENSE-APACHE
 // or http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
@@ -10,11 +10,12 @@
 // licenses.
 
 extern crate bdk_wallet;
+
 use std::error::Error;
 
-use bdk_wallet::bitcoin::Network;
 use bdk_wallet::descriptor::{policy::BuildSatisfaction, ExtractPolicy, IntoWalletDescriptor};
 use bdk_wallet::signer::SignersContainer;
+use bitcoin::NetworkKind;
 
 /// This example describes the use of the BDK's [`bdk_wallet::descriptor::policy`] module.
 ///
@@ -29,8 +30,7 @@ use bdk_wallet::signer::SignersContainer;
 fn main() -> Result<(), Box<dyn Error>> {
     let secp = bitcoin::secp256k1::Secp256k1::new();
 
-    // The descriptor used in the example
-    // The form is "wsh(multi(2, <privkey>, <pubkey>))"
+    // The descriptor used in the example. The form is "wsh(multi(2, <privkey>, <pubkey>))".
     let desc = "wsh(multi(2,tprv8ZgxMBicQKsPdpkqS7Eair4YxjcuuvDPNYmKX3sCniCf16tHEVrjjiSXEkFRnUH77yXc6ZcwHHcLNfjdi5qUvw3VDfgYiH5mNsj5izuiu2N/1/*,tpubD6NzVbkrYhZ4XHndKkuB8FifXm8r5FQHwrN6oZuWCz13qb93rtgKvD4PQsqC4HP4yhV3tA2fqr2RbY5mNXfM7RxXUoeABoDtsFUq2zJq6YK/1/*))";
 
     // Use the descriptor string to derive the full descriptor and a keymap.
@@ -38,9 +38,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     // While the `keymap` can be used to create a `SignerContainer`.
     //
     // The `SignerContainer` can sign for `PSBT`s.
-    // a `bdk_wallet::Wallet` internally uses these to handle transaction signing.
-    // But they can be used as independent tools also.
-    let (wallet_desc, keymap) = desc.into_wallet_descriptor(&secp, Network::Testnet)?;
+    // A `bdk_wallet::Wallet` internally uses these to handle transaction signing, but they can be
+    // used as independent tools as well.
+    let (wallet_desc, keymap) = desc.into_wallet_descriptor(&secp, NetworkKind::Test)?;
 
     println!("Example Descriptor for policy analysis : {wallet_desc}");
 

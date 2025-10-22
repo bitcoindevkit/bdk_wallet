@@ -1,7 +1,7 @@
 // Bitcoin Dev Kit
 // Written in 2020 by Alekos Filini <alekos.filini@gmail.com>
 //
-// Copyright (c) 2020-2021 Bitcoin Dev Kit Developers
+// Copyright (c) 2020-2025 Bitcoin Dev Kit Developers
 //
 // This file is licensed under the Apache License, Version 2.0 <LICENSE-APACHE
 // or http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
@@ -11,10 +11,11 @@
 
 //! Descriptors DSL
 
+/// Top-level script hash descriptor constructor.
 #[doc(hidden)]
 #[macro_export]
 macro_rules! impl_top_level_sh {
-    // disallow `sortedmulti` in `bare()`
+    // Disallow `sortedmulti` in `bare()`
     ( Bare, new, new, Legacy, sortedmulti $( $inner:tt )* ) => {
         compile_error!("`bare()` descriptors can't contain any `sortedmulti()` operands");
     };
@@ -51,11 +52,12 @@ macro_rules! impl_top_level_sh {
         use $crate::miniscript::descriptor::{$inner_struct, Descriptor, DescriptorPublicKey};
 
         $crate::fragment!($( $minisc )*)
-            .and_then(|(minisc, keymap, networks)| Ok(($inner_struct::$constructor(minisc)?, keymap, networks)))
-            .and_then(|(inner, key_map, valid_networks)| Ok((Descriptor::<DescriptorPublicKey>::$inner_struct(inner), key_map, valid_networks)))
+            .and_then(|(minisc, keymap, network_kinds)| Ok(($inner_struct::$constructor(minisc)?, keymap, network_kinds)))
+            .and_then(|(inner, key_map, valid_network_kinds)| Ok((Descriptor::<DescriptorPublicKey>::$inner_struct(inner), key_map, valid_network_kinds)))
     }};
 }
 
+/// Top-level public key descriptor constructor.
 #[doc(hidden)]
 #[macro_export]
 macro_rules! impl_top_level_pk {
@@ -69,10 +71,13 @@ macro_rules! impl_top_level_pk {
         $key.into_descriptor_key()
             .and_then(|key: DescriptorKey<$ctx>| key.extract(&secp))
             .map_err($crate::descriptor::DescriptorError::Key)
-            .map(|(pk, key_map, valid_networks)| ($inner_type::new(pk), key_map, valid_networks))
+            .map(|(pk, key_map, valid_network_kinds)| {
+                ($inner_type::new(pk), key_map, valid_network_kinds)
+            })
     }};
 }
 
+/// Top-level Taproot descriptor constructor.
 #[doc(hidden)]
 #[macro_export]
 macro_rules! impl_top_level_tr {
@@ -83,7 +88,7 @@ macro_rules! impl_top_level_tr {
         use $crate::miniscript::Tap;
 
         #[allow(unused_imports)]
-        use $crate::keys::{DescriptorKey, IntoDescriptorKey, ValidNetworks};
+        use $crate::keys::{DescriptorKey, IntoDescriptorKey, ValidNetworkKinds};
 
         let secp = $crate::bitcoin::secp256k1::Secp256k1::new();
 
@@ -91,16 +96,18 @@ macro_rules! impl_top_level_tr {
             .into_descriptor_key()
             .and_then(|key: DescriptorKey<Tap>| key.extract(&secp))
             .map_err($crate::descriptor::DescriptorError::Key)
-            .and_then(|(pk, mut key_map, mut valid_networks)| {
+            .and_then(|(pk, mut key_map, mut valid_network_kinds)| {
                 let tap_tree = $tap_tree.map(
-                    |(tap_tree, tree_keymap, tree_networks): (
+                    |(tap_tree, tree_keymap, tree_network_kinds): (
                         TapTree<DescriptorPublicKey>,
                         KeyMap,
-                        ValidNetworks,
+                        ValidNetworkKinds,
                     )| {
                         key_map.extend(tree_keymap.into_iter());
-                        valid_networks =
-                            $crate::keys::merge_networks(&valid_networks, &tree_networks);
+                        valid_network_kinds = $crate::keys::intersect_network_kinds(
+                            &valid_network_kinds,
+                            &tree_network_kinds,
+                        );
 
                         tap_tree
                     },
@@ -109,12 +116,13 @@ macro_rules! impl_top_level_tr {
                 Ok((
                     Descriptor::<DescriptorPublicKey>::Tr(Tr::new(pk, tap_tree)?),
                     key_map,
-                    valid_networks,
+                    valid_network_kinds,
                 ))
             })
     }};
 }
 
+/// Leaf opcodes with no arguments (e.g., `true`, `false`) constructor.
 #[doc(hidden)]
 #[macro_export]
 macro_rules! impl_leaf_opcode {
@@ -133,12 +141,13 @@ macro_rules! impl_leaf_opcode {
             (
                 minisc,
                 $crate::miniscript::descriptor::KeyMap::default(),
-                $crate::keys::any_network(),
+                $crate::keys::any_network_kind(),
             )
         })
     }};
 }
 
+/// Leaf opcodes with one argument (e.g., `older(144)`, `after(144)`) constructor.
 #[doc(hidden)]
 #[macro_export]
 macro_rules! impl_leaf_opcode_value {
@@ -157,12 +166,13 @@ macro_rules! impl_leaf_opcode_value {
             (
                 minisc,
                 $crate::miniscript::descriptor::KeyMap::default(),
-                $crate::keys::any_network(),
+                $crate::keys::any_network_kind(),
             )
         })
     }};
 }
 
+/// Leaf opcodes with two arguments (e.g., `and_v(a, b)`) constructor.
 #[doc(hidden)]
 #[macro_export]
 macro_rules! impl_leaf_opcode_value_two {
@@ -181,12 +191,13 @@ macro_rules! impl_leaf_opcode_value_two {
             (
                 minisc,
                 $crate::miniscript::descriptor::KeyMap::default(),
-                $crate::keys::any_network(),
+                $crate::keys::any_network_kind(),
             )
         })
     }};
 }
 
+/// Node opcodes that take exactly two child expressions (e.g., `and_v`, `or_b`) constructor.
 #[doc(hidden)]
 #[macro_export]
 macro_rules! impl_node_opcode_two {
@@ -198,7 +209,7 @@ macro_rules! impl_node_opcode_two {
 
         a
             .and_then(|a| Ok((a, b?)))
-            .and_then(|((a_minisc, mut a_keymap, a_networks), (b_minisc, b_keymap, b_networks))| {
+            .and_then(|((a_minisc, mut a_keymap, a_network_kinds), (b_minisc, b_keymap, b_network_kinds))| {
                 // join key_maps
                 a_keymap.extend(b_keymap.into_iter());
 
@@ -209,11 +220,12 @@ macro_rules! impl_node_opcode_two {
 
                 minisc.check_miniscript()?;
 
-                Ok((minisc, a_keymap, $crate::keys::merge_networks(&a_networks, &b_networks)))
+                Ok((minisc, a_keymap, $crate::keys::intersect_network_kinds(&a_network_kinds, &b_network_kinds)))
             })
     });
 }
 
+/// Node opcodes that take exactly three child expressions (e.g., `and_or`) constructor.
 #[doc(hidden)]
 #[macro_export]
 macro_rules! impl_node_opcode_three {
@@ -225,13 +237,13 @@ macro_rules! impl_node_opcode_three {
 
         a
             .and_then(|a| Ok((a, b?, c?)))
-            .and_then(|((a_minisc, mut a_keymap, a_networks), (b_minisc, b_keymap, b_networks), (c_minisc, c_keymap, c_networks))| {
+            .and_then(|((a_minisc, mut a_keymap, a_network_kinds), (b_minisc, b_keymap, b_network_kinds), (c_minisc, c_keymap, c_network_kinds))| {
                 // join key_maps
                 a_keymap.extend(b_keymap.into_iter());
                 a_keymap.extend(c_keymap.into_iter());
 
-                let networks = $crate::keys::merge_networks(&a_networks, &b_networks);
-                let networks = $crate::keys::merge_networks(&networks, &c_networks);
+                let network_kinds = $crate::keys::intersect_network_kinds(&a_network_kinds, &b_network_kinds);
+                let network_kinds = $crate::keys::intersect_network_kinds(&network_kinds, &c_network_kinds);
 
                 let minisc = $crate::miniscript::Miniscript::from_ast($crate::miniscript::miniscript::decode::Terminal::$terminal_variant(
                     $crate::alloc::sync::Arc::new(a_minisc),
@@ -241,11 +253,12 @@ macro_rules! impl_node_opcode_three {
 
                 minisc.check_miniscript()?;
 
-                Ok((minisc, a_keymap, networks))
+                Ok((minisc, a_keymap, network_kinds))
             })
     });
 }
 
+/// `sortedmulti` and `sortedmulti_vec` operations constructor.
 #[doc(hidden)]
 #[macro_export]
 macro_rules! impl_sortedmulti {
@@ -270,6 +283,7 @@ macro_rules! impl_sortedmulti {
 
 }
 
+/// Parse Taproot script trees with nested braces syntax (e.g., `{ pk(key1), pk(key2) }`).
 #[doc(hidden)]
 #[macro_export]
 macro_rules! parse_tap_tree {
@@ -278,9 +292,9 @@ macro_rules! parse_tap_tree {
 
         $tree_a
             .and_then(|tree_a| Ok((tree_a, $tree_b?)))
-            .and_then(|((a_tree, mut a_keymap, a_networks), (b_tree, b_keymap, b_networks))| {
+            .and_then(|((a_tree, mut a_keymap, a_network_kinds), (b_tree, b_keymap, b_network_kinds))| {
                 a_keymap.extend(b_keymap.into_iter());
-                Ok((TapTree::combine(a_tree, b_tree), a_keymap, $crate::keys::merge_networks(&a_networks, &b_networks)))
+                Ok((TapTree::combine(a_tree, b_tree), a_keymap, $crate::keys::intersect_network_kinds(&a_network_kinds, &b_network_kinds)))
             })
 
     }};
@@ -321,10 +335,11 @@ macro_rules! parse_tap_tree {
         use $crate::miniscript::descriptor::TapTree;
 
         $crate::fragment!( $op ( $( $minisc )* ) )
-            .map(|(a_minisc, a_keymap, a_networks)| (TapTree::Leaf(Arc::new(a_minisc)), a_keymap, a_networks))
+            .map(|(a_minisc, a_keymap, a_network_kinds)| (TapTree::Leaf(Arc::new(a_minisc)), a_keymap, a_network_kinds))
     }};
 }
 
+/// Apply miniscript modifiers (e.g., `a:`, `s:`, `c:`, `d:`, `v:`, `j:`, `n:`, `t:`, `l:`, `u:`).
 #[doc(hidden)]
 #[macro_export]
 macro_rules! apply_modifier {
@@ -333,7 +348,7 @@ macro_rules! apply_modifier {
 
         $inner
             .map_err(|e| -> $crate::descriptor::DescriptorError { e.into() })
-            .and_then(|(minisc, keymap, networks)| {
+            .and_then(|(minisc, keymap, network_kinds)| {
                 let minisc = $crate::miniscript::Miniscript::from_ast(
                     $crate::miniscript::miniscript::decode::Terminal::$terminal_variant(
                         $crate::alloc::sync::Arc::new(minisc),
@@ -342,7 +357,7 @@ macro_rules! apply_modifier {
 
                 minisc.check_miniscript()?;
 
-                Ok((minisc, keymap, networks))
+                Ok((minisc, keymap, network_kinds))
             })
     }};
 
@@ -370,23 +385,23 @@ macro_rules! apply_modifier {
 
     // Modifiers expanded to other operators
     ( t: $inner:expr ) => {{
-        $inner.and_then(|(a_minisc, a_keymap, a_networks)| {
+        $inner.and_then(|(a_minisc, a_keymap, a_network_kinds)| {
             $crate::impl_leaf_opcode_value_two!(
                 AndV,
                 $crate::alloc::sync::Arc::new(a_minisc),
                 $crate::alloc::sync::Arc::new($crate::fragment!(true).unwrap().0)
             )
-            .map(|(minisc, _, _)| (minisc, a_keymap, a_networks))
+            .map(|(minisc, _, _)| (minisc, a_keymap, a_network_kinds))
         })
     }};
     ( l: $inner:expr ) => {{
-        $inner.and_then(|(a_minisc, a_keymap, a_networks)| {
+        $inner.and_then(|(a_minisc, a_keymap, a_networks_kinds)| {
             $crate::impl_leaf_opcode_value_two!(
                 OrI,
                 $crate::alloc::sync::Arc::new($crate::fragment!(false).unwrap().0),
                 $crate::alloc::sync::Arc::new(a_minisc)
             )
-            .map(|(minisc, _, _)| (minisc, a_keymap, a_networks))
+            .map(|(minisc, _, _)| (minisc, a_keymap, a_network_kinds))
         })
     }};
     ( u: $inner:expr ) => {{
@@ -396,7 +411,7 @@ macro_rules! apply_modifier {
                 $crate::alloc::sync::Arc::new(a_minisc),
                 $crate::alloc::sync::Arc::new($crate::fragment!(false).unwrap().0)
             )
-            .map(|(minisc, _, _)| (minisc, a_keymap, a_networks))
+            .map(|(minisc, _, _)| (minisc, a_keymap, a_network_kinds))
         })
     }};
 }
@@ -424,7 +439,7 @@ macro_rules! apply_modifier {
 ///
 /// ```
 /// # use std::str::FromStr;
-/// let (my_descriptor, my_keys_map, networks) = bdk_wallet::descriptor!(sh(wsh(and_v(v:pk("cVt4o7BGAig1UXywgGSmARhxMdzP5qvQsxKkSsc1XEkw3tDTQFpy"),older(50)))))?;
+/// let (my_descriptor, my_keys_map, network_kinds) = bdk_wallet::descriptor!(sh(wsh(and_v(v:pk("cVt4o7BGAig1UXywgGSmARhxMdzP5qvQsxKkSsc1XEkw3tDTQFpy"),older(50)))))?;
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 ///
@@ -446,7 +461,7 @@ macro_rules! apply_modifier {
 ///     bitcoin::PrivateKey::from_wif("cVt4o7BGAig1UXywgGSmARhxMdzP5qvQsxKkSsc1XEkw3tDTQFpy")?;
 /// let my_timelock = 50;
 ///
-/// let (descriptor_a, key_map_a, networks) = bdk_wallet::descriptor! {
+/// let (descriptor_a, key_map_a, networks_kinds) = bdk_wallet::descriptor! {
 ///     wsh (
 ///         thresh(2, pk(my_key_1), s:pk(my_key_2), s:n:d:v:older(my_timelock))
 ///     )
@@ -458,7 +473,7 @@ macro_rules! apply_modifier {
 ///     bdk_wallet::fragment!(s:pk(my_key_2))?,
 ///     bdk_wallet::fragment!(s:n:d:v:older(my_timelock))?,
 /// ];
-/// let (descriptor_b, mut key_map_b, networks) =
+/// let (descriptor_b, mut key_map_b, network_kinds) =
 ///     bdk_wallet::descriptor!(wsh(thresh_vec(2, b_items)))?;
 ///
 /// assert_eq!(descriptor_a, descriptor_b);
@@ -478,7 +493,7 @@ macro_rules! apply_modifier {
 /// let my_key_2 =
 ///     bitcoin::PrivateKey::from_wif("cVt4o7BGAig1UXywgGSmARhxMdzP5qvQsxKkSsc1XEkw3tDTQFpy")?;
 ///
-/// let (descriptor, key_map, networks) = bdk_wallet::descriptor! {
+/// let (descriptor, key_map, network_kinds) = bdk_wallet::descriptor! {
 ///     wsh (
 ///         multi(2, my_key_1, my_key_2)
 ///     )
@@ -494,7 +509,7 @@ macro_rules! apply_modifier {
 /// let my_key =
 ///     bitcoin::PrivateKey::from_wif("cVt4o7BGAig1UXywgGSmARhxMdzP5qvQsxKkSsc1XEkw3tDTQFpy")?;
 ///
-/// let (descriptor, key_map, networks) = bdk_wallet::descriptor!(wpkh(my_key))?;
+/// let (descriptor, key_map, networks_kinds) = bdk_wallet::descriptor!(wpkh(my_key))?;
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 ///
@@ -750,19 +765,19 @@ macro_rules! fragment {
     ( thresh_vec ( $thresh:expr, $items:expr ) ) => ({
         use $crate::miniscript::descriptor::KeyMap;
 
-        let (items, key_maps_networks): ($crate::alloc::vec::Vec<_>, $crate::alloc::vec::Vec<_>) = $items.into_iter().map(|(a, b, c)| (a, (b, c))).unzip();
+        let (items, key_maps_network_kinds): ($crate::alloc::vec::Vec<_>, $crate::alloc::vec::Vec<_>) = $items.into_iter().map(|(a, b, c)| (a, (b, c))).unzip();
         let items = items.into_iter().map($crate::alloc::sync::Arc::new).collect();
 
-        let (key_maps, valid_networks) = key_maps_networks.into_iter().fold((KeyMap::default(), $crate::keys::any_network()), |(mut keys_acc, net_acc), (key, net)| {
+        let (key_maps, valid_network_kinds) = key_maps_network_kinds.into_iter().fold((KeyMap::default(), $crate::keys::any_network_kind()), |(mut keys_acc, net_acc), (key, net)| {
             keys_acc.extend(key.into_iter());
-            let net_acc = $crate::keys::merge_networks(&net_acc, &net);
+            let net_acc = $crate::keys::intersect_network_kinds(&net_acc, &net);
 
             (keys_acc, net_acc)
         });
 
         let thresh = $crate::miniscript::Threshold::new($thresh, items).expect("valid threshold and pks collection");
         $crate::impl_leaf_opcode_value!(Thresh, thresh)
-            .map(|(minisc, _, _)| (minisc, key_maps, valid_networks))
+            .map(|(minisc, _, _)| (minisc, key_maps, valid_network_kinds))
     });
     ( thresh ( $thresh:expr, $( $inner:tt )* ) ) => ({
         let items = $crate::fragment_internal!( @v $( $inner )* );
@@ -811,35 +826,34 @@ macro_rules! fragment {
 #[cfg(test)]
 mod test {
     use alloc::string::ToString;
-    use bitcoin::secp256k1::Secp256k1;
-    use miniscript::descriptor::{DescriptorPublicKey, KeyMap};
-    use miniscript::{Descriptor, Legacy, Segwitv0};
-
     use core::str::FromStr;
 
+    use bitcoin::{bip32, secp256k1::Secp256k1, Network, NetworkKind, PrivateKey};
+    use miniscript::{
+        descriptor::{DescriptorPublicKey, KeyMap},
+        Descriptor, Legacy, Segwitv0,
+    };
+
     use crate::descriptor::{DescriptorError, DescriptorMeta};
-    use crate::keys::{DescriptorKey, IntoDescriptorKey, ValidNetworks};
-    use bitcoin::bip32;
-    use bitcoin::Network::{Bitcoin, Regtest, Signet, Testnet, Testnet4};
-    use bitcoin::PrivateKey;
+    use crate::keys::{DescriptorKey, IntoDescriptorKey, ValidNetworkKinds};
 
-    // test the descriptor!() macro
+    // Test the `descriptor!()` macro.
 
-    // verify descriptor generates expected script(s) (if bare or pk) or address(es)
+    // Verify descriptor generates expected script(s) (if bare or pk) or address(es).
     fn check(
-        desc: Result<(Descriptor<DescriptorPublicKey>, KeyMap, ValidNetworks), DescriptorError>,
+        desc: Result<(Descriptor<DescriptorPublicKey>, KeyMap, ValidNetworkKinds), DescriptorError>,
         is_witness: bool,
         is_fixed: bool,
         expected: &[&str],
     ) {
-        let (desc, _key_map, _networks) = desc.unwrap();
+        let (desc, _key_map, _network_kinds) = desc.unwrap();
         assert_eq!(desc.is_witness(), is_witness);
         assert_eq!(!desc.has_wildcard(), is_fixed);
         for i in 0..expected.len() {
             let child_desc = desc
                 .at_derivation_index(i as u32)
                 .expect("i is not hardened");
-            let address = child_desc.address(Regtest);
+            let address = child_desc.address(Network::Regtest);
             if let Ok(address) = address {
                 assert_eq!(address.to_string(), *expected.get(i).unwrap());
             } else {
@@ -849,13 +863,13 @@ mod test {
         }
     }
 
-    // - at least one of each "type" of operator; i.e. one modifier, one leaf_opcode, one
-    //   leaf_opcode_value, etc.
-    // - mixing up key types that implement IntoDescriptorKey in multi() or thresh()
+    // - At least one of each "type" of operator (one modifier, one leaf_opcode, one
+    // leaf_opcode_value, etc.). Mixing up key types that implement IntoDescriptorKey in
+    // `multi()` or `thresh()`.
 
-    // expected script for pk and bare manually created
-    // expected addresses created with `bitcoin-cli getdescriptorinfo` (for hash) and `bitcoin-cli
-    // deriveaddresses`
+    // - Expected script for pk and bare manually created.
+    // - Expected addresses created with `bitcoin-cli getdescriptorinfo` (for hash) and `bitcoin-cli
+    // deriveaddresses`.
 
     #[test]
     fn test_fixed_legacy_descriptors() {
@@ -1110,32 +1124,32 @@ mod test {
         );
     }
 
-    // - verify the valid_networks returned is correctly computed based on the keys present in the
-    //   descriptor
+    // Verify that the `valid_network_kinds` returned is correctly computed based on the keys
+    // present in the descriptor.
     #[test]
-    fn test_valid_networks() {
+    fn test_valid_network_kinds() {
         let xprv = bip32::Xpriv::from_str("tprv8ZgxMBicQKsPcx5nBGsR63Pe8KnRUqmbJNENAfGftF3yuXoMMoVJJcYeUw5eVkm9WBPjWYt6HMWYJNesB5HaNVBaFc1M6dRjWSYnmewUMYy").unwrap();
         let path = bip32::DerivationPath::from_str("m/0").unwrap();
         let desc_key = (xprv, path).into_descriptor_key().unwrap();
 
-        let (_desc, _key_map, valid_networks) = descriptor!(pkh(desc_key)).unwrap();
+        let (_desc, _key_map, valid_network_kinds) = descriptor!(pkh(desc_key)).unwrap();
         assert_eq!(
-            valid_networks,
-            [Testnet, Testnet4, Regtest, Signet]
-                .iter()
-                .cloned()
-                .collect()
+            valid_network_kinds,
+            [NetworkKind::Test].iter().cloned().collect()
         );
 
         let xprv = bip32::Xpriv::from_str("xprv9s21ZrQH143K3QTDL4LXw2F7HEK3wJUD2nW2nRk4stbPy6cq3jPPqjiChkVvvNKmPGJxWUtg6LnF5kejMRNNU3TGtRBeJgk33yuGBxrMPHi").unwrap();
         let path = bip32::DerivationPath::from_str("m/10/20/30/40").unwrap();
         let desc_key = (xprv, path).into_descriptor_key().unwrap();
 
-        let (_desc, _key_map, valid_networks) = descriptor!(wpkh(desc_key)).unwrap();
-        assert_eq!(valid_networks, [Bitcoin].iter().cloned().collect());
+        let (_desc, _key_map, valid_network_kinds) = descriptor!(wpkh(desc_key)).unwrap();
+        assert_eq!(
+            valid_network_kinds,
+            [NetworkKind::Main].iter().cloned().collect()
+        );
     }
 
-    // - verify the key_maps are correctly merged together
+    // Verify that the `key_maps` are correctly merged together.
     #[test]
     fn test_key_maps_merged() {
         let secp = Secp256k1::new();
@@ -1152,7 +1166,7 @@ mod test {
         let path3 = bip32::DerivationPath::from_str("m/10/20/30/40").unwrap();
         let desc_key3 = (xprv3, path3.clone()).into_descriptor_key().unwrap();
 
-        let (_desc, key_map, _valid_networks) =
+        let (_desc, key_map, _valid_network_kinds) =
             descriptor!(sh(wsh(multi(2, desc_key1, desc_key2, desc_key3)))).unwrap();
         assert_eq!(key_map.len(), 3);
 
@@ -1160,30 +1174,25 @@ mod test {
         let desc_key2: DescriptorKey<Segwitv0> = (xprv2, path2).into_descriptor_key().unwrap();
         let desc_key3: DescriptorKey<Segwitv0> = (xprv3, path3).into_descriptor_key().unwrap();
 
-        let (key1, _key_map, _valid_networks) = desc_key1.extract(&secp).unwrap();
-        let (key2, _key_map, _valid_networks) = desc_key2.extract(&secp).unwrap();
-        let (key3, _key_map, _valid_networks) = desc_key3.extract(&secp).unwrap();
+        let (key1, _key_map, _valid_network_kinds) = desc_key1.extract(&secp).unwrap();
+        let (key2, _key_map, _valid_network_kinds) = desc_key2.extract(&secp).unwrap();
+        let (key3, _key_map, _valid_network_kinds) = desc_key3.extract(&secp).unwrap();
         assert_eq!(key_map.get(&key1).unwrap().to_string(), "tprv8ZgxMBicQKsPcx5nBGsR63Pe8KnRUqmbJNENAfGftF3yuXoMMoVJJcYeUw5eVkm9WBPjWYt6HMWYJNesB5HaNVBaFc1M6dRjWSYnmewUMYy/0/*");
         assert_eq!(key_map.get(&key2).unwrap().to_string(), "tprv8ZgxMBicQKsPegBHHnq7YEgM815dG24M2Jk5RVqipgDxF1HJ1tsnT815X5Fd5FRfMVUs8NZs9XCb6y9an8hRPThnhfwfXJ36intaekySHGF/2147483647'/0/*");
         assert_eq!(key_map.get(&key3).unwrap().to_string(), "tprv8ZgxMBicQKsPdZXrcHNLf5JAJWFAoJ2TrstMRdSKtEggz6PddbuSkvHKM9oKJyFgZV1B7rw8oChspxyYbtmEXYyg1AjfWbL3ho3XHDpHRZf/10/20/30/40/*");
     }
 
-    // - verify the ScriptContext is correctly validated (i.e. passing a type that only impl
-    //   IntoDescriptorKey<Segwitv0> to a pkh() descriptor should throw a compilation error
+    // Verify that the `ScriptContext` is correctly validated (i.e. passing a type that only
+    // implements `IntoDescriptorKey<Segwitv0>` to a `pkh()` descriptor should throw a compilation
+    // error.
     #[test]
     fn test_script_context_validation() {
-        // this compiles
         let xprv = bip32::Xpriv::from_str("tprv8ZgxMBicQKsPcx5nBGsR63Pe8KnRUqmbJNENAfGftF3yuXoMMoVJJcYeUw5eVkm9WBPjWYt6HMWYJNesB5HaNVBaFc1M6dRjWSYnmewUMYy").unwrap();
         let path = bip32::DerivationPath::from_str("m/0").unwrap();
         let desc_key: DescriptorKey<Legacy> = (xprv, path).into_descriptor_key().unwrap();
 
-        let (desc, _key_map, _valid_networks) = descriptor!(pkh(desc_key)).unwrap();
+        let (desc, _key_map, _valid_network_kinds) = descriptor!(pkh(desc_key)).unwrap();
         assert_eq!(desc.to_string(), "pkh(tpubD6NzVbkrYhZ4WR7a4vY1VT3khMJMeAxVsfq9TBJyJWrNk247zCJtV7AWf6UJP7rAVsn8NNKdJi3gFyKPTmWZS9iukb91xbn2HbFSMQm2igY/0/*)#yrnz9pp2");
-
-        // as expected this does not compile due to invalid context
-        //let desc_key:DescriptorKey<Segwitv0> = (xprv,
-        // path.clone()).into_descriptor_key().unwrap(); let (desc, _key_map,
-        // _valid_networks) = descriptor!(pkh(desc_key)).unwrap();
     }
 
     #[test]
