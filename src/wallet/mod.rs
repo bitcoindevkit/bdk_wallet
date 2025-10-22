@@ -2968,7 +2968,9 @@ impl Wallet {
         let version = params.version.unwrap_or(transaction::Version::TWO);
         let fallback_locktime = params
             .locktime
-            .unwrap_or_else(|| absolute::LockTime::from_consensus(self.chain.tip().height()));
+            .unwrap_or(absolute::LockTime::from_consensus(
+                self.chain.tip().height(),
+            ));
         let fallback_sequence = params
             .fallback_sequence
             .unwrap_or(Sequence::ENABLE_LOCKTIME_NO_RBF);

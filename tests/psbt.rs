@@ -1,13 +1,13 @@
-use bdk_chain::BlockId;
-use bdk_chain::ConfirmationBlockTime;
+use bdk_chain::{BlockId, ConfirmationBlockTime};
 use bdk_wallet::bitcoin;
-use bdk_wallet::bitcoin::{
-    hashes::Hash, secp256k1, Address, Amount, FeeRate, Network, OutPoint, Psbt, ScriptBuf,
-    Transaction, TxIn, TxOut,
-};
 use bdk_wallet::test_utils::*;
-use bdk_wallet::{psbt, KeychainKind, SignOptions, Wallet};
+use bdk_wallet::{error::CreatePsbtError, psbt, KeychainKind, PsbtParams, SignOptions, Wallet};
+use bitcoin::{
+    absolute, hashes::Hash, secp256k1, Address, Amount, FeeRate, Network, OutPoint, Psbt,
+    ScriptBuf, Transaction, TxIn, TxOut,
+};
 use core::str::FromStr;
+use miniscript::plan::Assets;
 use std::sync::Arc;
 
 // from bip 174
@@ -40,7 +40,7 @@ fn test_create_psbt() {
             .unwrap();
 
     let addr = wallet.reveal_next_address(KeychainKind::External);
-    let mut params = psbt::PsbtParams::default();
+    let mut params = PsbtParams::default();
     params
         .add_recipients([(addr.script_pubkey(), Amount::from_btc(0.42).unwrap())])
         .change_descriptor(change_desc)
@@ -70,9 +70,7 @@ fn test_create_psbt() {
 
 #[test]
 fn test_create_psbt_cltv() {
-    use bdk_wallet::error::CreatePsbtError;
-    use bitcoin::absolute::LockTime;
-    use miniscript::plan::Assets;
+    use absolute::LockTime;
 
     let desc = get_test_single_sig_cltv();
     let mut wallet = Wallet::create_single(desc)
@@ -95,7 +93,7 @@ fn test_create_psbt_cltv() {
 
     // No assets fail
     {
-        let mut params = psbt::PsbtParams::default();
+        let mut params = PsbtParams::default();
         params
             .add_utxos(&[op])
             .add_recipients([(addr.script_pubkey(), Amount::from_btc(0.42).unwrap())]);
@@ -108,14 +106,13 @@ fn test_create_psbt_cltv() {
 
     // Add assets ok
     {
-        let mut params = psbt::PsbtParams::default();
+        let mut params = PsbtParams::default();
         params
             .add_utxos(&[op])
             .add_assets(Assets::new().after(LockTime::from_consensus(100_000)))
             .add_recipients([(addr.script_pubkey(), Amount::from_btc(0.42).unwrap())]);
-        let _ = wallet
-            .create_psbt(params)
-            .expect("Create psbt should succeed");
+        let (psbt, _) = wallet.create_psbt(params).unwrap();
+        assert_eq!(psbt.unsigned_tx.lock_time.to_consensus_u32(), 100_000);
     }
 
     // New chain tip (no assets) ok
@@ -126,13 +123,24 @@ fn test_create_psbt_cltv() {
         };
         insert_checkpoint(&mut wallet, block_id);
 
-        let mut params = psbt::PsbtParams::default();
+        let mut params = PsbtParams::default();
         params
             .add_utxos(&[op])
             .add_recipients([(addr.script_pubkey(), Amount::from_btc(0.42).unwrap())]);
-        let _ = wallet
-            .create_psbt(params)
-            .expect("Create psbt should succeed");
+        let (psbt, _) = wallet.create_psbt(params).unwrap();
+        assert_eq!(psbt.unsigned_tx.lock_time.to_consensus_u32(), 100_000);
+    }
+
+    // FIXME: Locktime greater than required
+    {
+        let mut params = PsbtParams::default();
+        params
+            .add_utxos(&[op])
+            .locktime(LockTime::from_consensus(200_000))
+            .add_recipients([(addr.script_pubkey(), Amount::from_btc(0.42).unwrap())]);
+
+        // let (psbt, _) = wallet.create_psbt(params).unwrap();
+        // assert_eq!(psbt.unsigned_tx.lock_time.to_consensus_u32(), 200_000);
     }
 }
 
@@ -196,7 +204,7 @@ fn test_replace_by_fee() {
     let recip =
         ScriptBuf::from_hex("5120e8f5c4dc2f5d6a7595e7b108cb063da9c7550312da1e22875d78b9db62b59cd5")
             .unwrap();
-    let mut params = psbt::PsbtParams::default();
+    let mut params = PsbtParams::default();
     params
         .add_utxos(&[op0])
         .add_recipients([(recip.clone(), Amount::from_sat(16_000))]);
@@ -204,7 +212,7 @@ fn test_replace_by_fee() {
     insert_tx(&mut wallet, txa.clone());
 
     // Create tx B (unconfirmed)
-    let mut params = psbt::PsbtParams::default();
+    let mut params = PsbtParams::default();
     params
         .add_utxos(&[op1])
         .add_recipients([(recip.clone(), Amount::from_sat(42_000))]);

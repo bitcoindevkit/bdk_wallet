@@ -129,6 +129,16 @@ impl PsbtParams {
         self
     }
 
+    /// Set the transaction `nLockTime`.
+    ///
+    /// This can be used as a fallback in case none of the inputs to the transaction require an
+    /// absolute locktime. If no locktime is required and nothing is specified here, then the
+    /// locktime is set to the last known chain tip.
+    pub fn locktime(&mut self, locktime: absolute::LockTime) -> &mut Self {
+        self.locktime = Some(locktime);
+        self
+    }
+
     /// Set the height to be used when evaluating the maturity of coinbase outputs during coin
     /// selection.
     pub fn maturity_height(&mut self, height: absolute::Height) -> &mut Self {
