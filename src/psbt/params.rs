@@ -36,6 +36,7 @@ pub struct PsbtParams {
     pub(crate) canonical_params: CanonicalizationParams,
     pub(crate) utxo_filter: UtxoFilter,
     pub(crate) maturity_height: Option<u32>,
+    pub(crate) manually_selected_only: bool,
 
     // PSBT
     pub(crate) version: Option<Version>,
@@ -60,6 +61,7 @@ impl Default for PsbtParams {
             canonical_params: Default::default(),
             utxo_filter: Default::default(),
             maturity_height: Default::default(),
+            manually_selected_only: Default::default(),
             version: Default::default(),
             locktime: Default::default(),
             fallback_sequence: Default::default(),
@@ -90,6 +92,19 @@ impl PsbtParams {
         if self.set.remove(outpoint) {
             self.utxos.retain(|op| op != outpoint);
         }
+        self
+    }
+
+    /// Only include inputs that are selected manually using [`add_utxos`] or [`add_planned_input`].
+    ///
+    /// Since the wallet will skip coin selection for additional candidates, the manually selected
+    /// inputs must be enough to fund the transaction or else an error will be thrown due to
+    /// insufficient funds.
+    ///
+    /// [`add_utxos`]: PsbtParams::add_utxos
+    /// [`add_planned_input`]: PsbtParams::add_planned_input
+    pub fn manually_selected_only(&mut self) -> &mut Self {
+        self.manually_selected_only = true;
         self
     }
 

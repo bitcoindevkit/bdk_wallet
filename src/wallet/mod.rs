@@ -2894,12 +2894,15 @@ impl Wallet {
             .collect::<Result<_, _>>()?;
 
         // Get input candidates
-        let mut may_spend: Vec<Input> = self
-            .filter_spendable(txouts.into_values(), &params, |txo| {
+        let mut may_spend: Vec<Input> = if params.manually_selected_only {
+            vec![]
+        } else {
+            self.filter_spendable(txouts.into_values(), &params, |txo| {
                 (params.utxo_filter.0)(txo)
             })
             .flat_map(|txo| self.plan_input(&txo, &assets))
-            .collect();
+            .collect()
+        };
 
         utils::shuffle_slice(&mut may_spend, rng);
 
@@ -3095,8 +3098,10 @@ impl Wallet {
             .collect::<Result<_, _>>()?;
 
         // Get input candidates
-        let mut may_spend: Vec<Input> = self
-            .filter_spendable(txouts.into_values(), &params, |txo| {
+        let mut may_spend: Vec<Input> = if params.manually_selected_only {
+            vec![]
+        } else {
+            self.filter_spendable(txouts.into_values(), &params, |txo| {
                 // Exlude outputs of txs to be replaced. Also exclude unconfirmed outputs
                 // per replacement policy Rule 2.
                 to_replace.contains(&txo.outpoint.txid)
@@ -3104,7 +3109,8 @@ impl Wallet {
                     || (params.utxo_filter.0)(txo)
             })
             .flat_map(|txo| self.plan_input(&txo, &assets))
-            .collect();
+            .collect()
+        };
 
         utils::shuffle_slice(&mut may_spend, rng);
 
