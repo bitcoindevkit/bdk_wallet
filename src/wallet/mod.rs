@@ -2993,9 +2993,7 @@ impl Wallet {
                 version,
                 fallback_locktime,
                 fallback_sequence,
-                mandate_full_tx_for_segwit_v0: true,
-                // TODO: Only witness utxo
-                // mandate_full_tx_for_segwit_v0: params.only_witness_utxo,
+                mandate_full_tx_for_segwit_v0: !params.only_witness_utxo,
             })
             .map_err(CreatePsbtError::Psbt)?;
 

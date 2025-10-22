@@ -43,6 +43,7 @@ pub struct PsbtParams {
     pub(crate) locktime: Option<absolute::LockTime>,
     pub(crate) fallback_sequence: Option<Sequence>,
     pub(crate) ordering: TxOrdering<Input, Output>,
+    pub(crate) only_witness_utxo: bool,
 }
 
 impl Default for PsbtParams {
@@ -66,6 +67,7 @@ impl Default for PsbtParams {
             locktime: Default::default(),
             fallback_sequence: Default::default(),
             ordering: Default::default(),
+            only_witness_utxo: Default::default(),
         }
     }
 }
@@ -237,6 +239,19 @@ impl PsbtParams {
         if self.set.insert(input.prev_outpoint()) {
             self.inputs.push(input);
         }
+        self
+    }
+
+    /// Only fill in the [`witness_utxo`] field of PSBT inputs which spends funds under segwit (v0).
+    ///
+    /// This allows opting out of including the [`non_witness_utxo`] for segwit spends. This reduces
+    /// the size of the PSBT, however be aware that some signers might require the presence of the
+    /// `non_witness_utxo`.
+    ///
+    /// [`witness_utxo`]: bitcoin::psbt::Input::witness_utxo
+    /// [`non_witness_utxo`]: bitcoin::psbt::Input::non_witness_utxo
+    pub fn only_witness_utxo(&mut self) -> &mut Self {
+        self.only_witness_utxo = true;
         self
     }
 }
