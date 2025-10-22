@@ -144,6 +144,72 @@ fn test_create_psbt_cltv() {
     }
 }
 
+#[test]
+fn test_create_psbt_csv() {
+    use bitcoin::relative;
+    use bitcoin::Sequence; 
+
+    let desc = get_test_single_sig_csv();
+    let mut wallet = Wallet::create_single(desc)
+        .network(Network::Regtest)
+        .create_wallet_no_persist()
+        .unwrap();
+
+    // Receive coins
+    let anchor = ConfirmationBlockTime {
+        block_id: BlockId {
+            height: 10_000,
+            hash: Hash::hash(b"abc"),
+        },
+        confirmation_time: 1234567000,
+    };
+    insert_checkpoint(&mut wallet, anchor.block_id);
+    let op = receive_output(&mut wallet, Amount::ONE_BTC, ReceiveTo::Block(anchor));
+
+    let addr = wallet.reveal_next_address(KeychainKind::External);
+
+    // No assets fail
+    {
+        let mut params = PsbtParams::default();
+        params
+            .add_utxos(&[op])
+            .add_recipients([(addr.script_pubkey(), Amount::from_btc(0.42).unwrap())]);
+        let res = wallet.create_psbt(params);
+        assert!(
+            matches!(res, Err(CreatePsbtError::Plan(err)) if err == op),
+            "UTXO requires CSV but the assets are insufficient",
+        );
+    }
+
+    // Add assets ok
+    {
+        let mut params = PsbtParams::default();
+        let rel_locktime = relative::LockTime::from_consensus(6).unwrap();
+        params
+            .add_utxos(&[op])
+            .add_assets(Assets::new().older(rel_locktime))
+            .add_recipients([(addr.script_pubkey(), Amount::from_btc(0.42).unwrap())]);
+        let (psbt, _) = wallet.create_psbt(params).unwrap();
+        assert_eq!(psbt.unsigned_tx.input[0].sequence, Sequence(6));
+    }
+
+    // Add 6 confirmations (no assets)
+    {
+        let anchor = ConfirmationBlockTime {
+            block_id: BlockId {
+                height: 10_005,
+                hash: Hash::hash(b"xyz"),
+            },
+            confirmation_time: 1234567000,
+        };
+        insert_checkpoint(&mut wallet, anchor.block_id);
+        let mut params = PsbtParams::default();
+        params.add_recipients([(addr.script_pubkey(), Amount::from_btc(0.42).unwrap())]);
+        let (psbt, _) = wallet.create_psbt(params).unwrap();
+        assert_eq!(psbt.unsigned_tx.input[0].sequence, Sequence(6));
+    }
+}
+
 // Test that replacing two unconfirmed txs A, B results in a transaction
 // that spends the inputs of both A and B.
 #[test]
