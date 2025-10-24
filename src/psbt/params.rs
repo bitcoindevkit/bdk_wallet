@@ -44,6 +44,7 @@ pub struct PsbtParams {
     pub(crate) fallback_sequence: Option<Sequence>,
     pub(crate) ordering: TxOrdering<Input, Output>,
     pub(crate) only_witness_utxo: bool,
+    pub(crate) add_global_xpubs: bool,
 }
 
 impl Default for PsbtParams {
@@ -68,6 +69,7 @@ impl Default for PsbtParams {
             fallback_sequence: Default::default(),
             ordering: Default::default(),
             only_witness_utxo: Default::default(),
+            add_global_xpubs: Default::default(),
         }
     }
 }
@@ -265,6 +267,17 @@ impl PsbtParams {
     /// [`non_witness_utxo`]: bitcoin::psbt::Input::non_witness_utxo
     pub fn only_witness_utxo(&mut self) -> &mut Self {
         self.only_witness_utxo = true;
+        self
+    }
+
+    /// Fill in the global [`Psbt::xpub`]s field with the extended keys of the wallet's
+    /// descriptors.
+    ///
+    /// Some offline signers and/or multisig wallets may require this.
+    ///
+    /// [`Psbt::xpub`]: bitcoin::Psbt::xpub
+    pub fn add_global_xpubs(&mut self) -> &mut Self {
+        self.add_global_xpubs = true;
         self
     }
 }

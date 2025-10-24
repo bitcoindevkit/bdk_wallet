@@ -2984,7 +2984,7 @@ impl Wallet {
             .unwrap_or(Sequence::ENABLE_LOCKTIME_NO_RBF);
 
         // Create psbt
-        let psbt = selection
+        let mut psbt = selection
             .create_psbt(bdk_tx::PsbtParams {
                 version,
                 fallback_locktime,
@@ -2992,6 +2992,24 @@ impl Wallet {
                 mandate_full_tx_for_segwit_v0: !params.only_witness_utxo,
             })
             .map_err(CreatePsbtError::Psbt)?;
+
+        // Add global xpubs.
+        if params.add_global_xpubs {
+            for xpub in self
+                .keychains()
+                .flat_map(|(_, desc)| desc.get_extended_keys())
+            {
+                let origin = match xpub.origin {
+                    Some(origin) => origin,
+                    None if xpub.xkey.depth == 0 => {
+                        (xpub.root_fingerprint(&self.secp), vec![].into())
+                    }
+                    _ => return Err(CreatePsbtError::MissingKeyOrigin(xpub.xkey)),
+                };
+
+                psbt.xpub.insert(xpub.xkey, origin);
+            }
+        }
 
         let finalizer = selection.into_finalizer();
 

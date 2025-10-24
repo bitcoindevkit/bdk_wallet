@@ -265,6 +265,11 @@ pub enum CreatePsbtError {
     Bnb(bdk_coin_select::NoBnbSolution),
     /// Non-sufficient funds
     InsufficientFunds(bdk_coin_select::InsufficientFunds),
+    /// In order to use the [`add_global_xpubs`] option, every extended key in the descriptor must
+    /// either be a master key itself, having a depth of 0, or have an explicit origin provided.
+    ///
+    /// [`add_global_xpubs`]: crate::psbt::PsbtParams::add_global_xpubs
+    MissingKeyOrigin(bitcoin::bip32::Xpub),
     /// Failed to create a spend [`Plan`] for a manually selected output
     Plan(OutPoint),
     /// Failed to create PSBT
@@ -280,6 +285,7 @@ impl fmt::Display for CreatePsbtError {
         match self {
             Self::Bnb(e) => write!(f, "{e}"),
             Self::InsufficientFunds(e) => write!(f, "{e}"),
+            Self::MissingKeyOrigin(e) => write!(f, "missing key origin: {e}"),
             Self::Plan(op) => write!(f, "failed to create a plan for txout with outpoint {op}"),
             Self::Psbt(e) => write!(f, "{e}"),
             Self::Selector(e) => write!(f, "{e}"),
