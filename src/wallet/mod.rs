@@ -134,11 +134,11 @@ pub struct Wallet<K: Ord> {
 /// An update to [`Wallet`].
 ///
 /// It updates [`KeychainTxOutIndex`], [`bdk_chain::TxGraph`] and [`LocalChain`] atomically.
-#[derive(Debug, Clone, Default)]
-pub struct Update {
+#[derive(Debug, Clone)]
+pub struct Update<K> {
     /// Contains the last active derivation indices per keychain (`K`), which is used to update the
     /// [`KeychainTxOutIndex`].
-    pub last_active_indices: BTreeMap<KeychainKind, u32>,
+    pub last_active_indices: BTreeMap<K, u32>,
 
     /// Update for the wallet's internal [`TxGraph`].
     pub tx_update: TxUpdate<ConfirmationBlockTime>,
@@ -147,8 +147,8 @@ pub struct Update {
     pub chain: Option<CheckPoint>,
 }
 
-impl From<FullScanResponse<KeychainKind>> for Update {
-    fn from(value: FullScanResponse<KeychainKind>) -> Self {
+impl<K> From<FullScanResponse<K>> for Update<K> {
+    fn from(value: FullScanResponse<K>) -> Self {
         Self {
             last_active_indices: value.last_active_indices,
             tx_update: value.tx_update,
@@ -157,12 +157,22 @@ impl From<FullScanResponse<KeychainKind>> for Update {
     }
 }
 
-impl From<SyncResponse> for Update {
+impl<K> From<SyncResponse> for Update<K> {
     fn from(value: SyncResponse) -> Self {
         Self {
             last_active_indices: BTreeMap::new(),
             tx_update: value.tx_update,
             chain: value.chain_update,
+        }
+    }
+}
+
+impl<K> Default for Update<K> {
+    fn default() -> Self {
+        Update {
+            last_active_indices: Default::default(),
+            tx_update: Default::default(),
+            chain: Default::default(),
         }
     }
 }
@@ -578,6 +588,43 @@ where
             }
             None => Ok(None),
         }
+    }
+}
+
+impl<K> Wallet<K>
+where
+    K: Ord + Clone + Debug,
+{
+    /// Apply update.
+    pub fn apply_update(&mut self, update: impl Into<Update<K>>) -> Result<(), CannotConnectError> {
+        let Update {
+            last_active_indices,
+            tx_update,
+            chain,
+        } = update.into();
+
+        let mut changeset = ChangeSet::default();
+
+        if let Some(tip) = chain {
+            changeset.merge(self.chain.apply_update(tip)?.into());
+        }
+
+        changeset.merge(
+            self.tx_graph
+                .index
+                .reveal_to_target_multi(&last_active_indices)
+                .into(),
+        );
+
+        changeset.merge(self.tx_graph.apply_update(tx_update).into());
+
+        self.stage(changeset);
+
+        Ok(())
+    }
+
+    fn stage(&mut self, changeset: impl Into<ChangeSet<K>>) {
+        self.stage.merge(changeset.into());
     }
 }
 
