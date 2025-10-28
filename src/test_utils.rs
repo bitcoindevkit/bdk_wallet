@@ -2,6 +2,7 @@
 #![allow(unused)]
 use alloc::string::ToString;
 use alloc::sync::Arc;
+use core::fmt;
 use core::str::FromStr;
 
 use bdk_chain::{BlockId, ConfirmationBlockTime, TxUpdate};
@@ -303,50 +304,57 @@ impl From<ConfirmationBlockTime> for ReceiveTo {
 //     OutPoint { txid, vout: 0 }
 // }
 
-// /// Insert a checkpoint into the wallet. This can be used to extend the wallet's local chain
-// /// or to insert a block that did not exist previously. Note that if replacing a block with
-// /// a different one at the same height, then all later blocks are evicted as well.
-// pub fn insert_checkpoint(wallet: &mut Wallet, block: BlockId) {
-//     let mut cp = wallet.latest_checkpoint();
-//     cp = cp.insert(block);
-//     wallet
-//         .apply_update(Update {
-//             chain: Some(cp),
-//             ..Default::default()
-//         })
-//         .unwrap();
-// }
+/// Insert a checkpoint into the wallet. This can be used to extend the wallet's local chain
+/// or to insert a block that did not exist previously. Note that if replacing a block with
+/// a different one at the same height, then all later blocks are evicted as well.
+pub fn insert_checkpoint<K: Ord + Clone + fmt::Debug>(wallet: &mut Wallet<K>, block: BlockId) {
+    let mut cp = wallet.latest_checkpoint();
+    cp = cp.insert(block);
+    wallet
+        .apply_update(Update {
+            chain: Some(cp),
+            ..Default::default()
+        })
+        .unwrap();
+}
 
-// /// Inserts a transaction into the local view, assuming it is currently present in the mempool.
-// ///
-// /// This can be used, for example, to track a transaction immediately after it is broadcast.
-// pub fn insert_tx(wallet: &mut Wallet, tx: Transaction) {
-//     let txid = tx.compute_txid();
-//     let seen_at = std::time::UNIX_EPOCH.elapsed().unwrap().as_secs();
-//     let mut tx_update = TxUpdate::default();
-//     tx_update.txs = vec![Arc::new(tx)];
-//     tx_update.seen_ats = [(txid, seen_at)].into();
-//     wallet
-//         .apply_update(Update {
-//             tx_update,
-//             ..Default::default()
-//         })
-//         .expect("failed to apply update");
-// }
+/// Inserts a transaction into the local view, assuming it is currently present in the mempool.
+///
+/// This can be used, for example, to track a transaction immediately after it is broadcast.
+pub fn insert_tx<K>(wallet: &mut Wallet<K>, tx: Transaction)
+where
+    K: Ord + fmt::Debug + Clone,
+{
+    let txid = tx.compute_txid();
+    let seen_at = std::time::UNIX_EPOCH.elapsed().unwrap().as_secs();
+    let mut tx_update = TxUpdate::default();
+    tx_update.txs = vec![Arc::new(tx)];
+    tx_update.seen_ats = [(txid, seen_at)].into();
+    wallet
+        .apply_update(Update {
+            tx_update,
+            ..Default::default()
+        })
+        .expect("failed to apply update");
+}
 
-// /// Simulates confirming a tx with `txid` by applying an update to the wallet containing
-// /// the given `anchor`. Note: to be considered confirmed the anchor block must exist in
-// /// the current active chain.
-// pub fn insert_anchor(wallet: &mut Wallet, txid: Txid, anchor: ConfirmationBlockTime) {
-//     let mut tx_update = TxUpdate::default();
-//     tx_update.anchors = [(anchor, txid)].into();
-//     wallet
-//         .apply_update(Update {
-//             tx_update,
-//             ..Default::default()
-//         })
-//         .expect("failed to apply update");
-// }
+/// Simulates confirming a tx with `txid` by applying an update to the wallet containing
+/// the given `anchor`. Note: to be considered confirmed the anchor block must exist in
+/// the current active chain.
+pub fn insert_anchor<K: Ord + fmt::Debug + Clone>(
+    wallet: &mut Wallet<K>,
+    txid: Txid,
+    anchor: ConfirmationBlockTime,
+) {
+    let mut tx_update = TxUpdate::default();
+    tx_update.anchors = [(anchor, txid)].into();
+    wallet
+        .apply_update(Update {
+            tx_update,
+            ..Default::default()
+        })
+        .expect("failed to apply update");
+}
 
 // /// Marks the given `txid` seen as unconfirmed at `seen_at`
 // pub fn insert_seen_at(wallet: &mut Wallet, txid: Txid, seen_at: u64) {
