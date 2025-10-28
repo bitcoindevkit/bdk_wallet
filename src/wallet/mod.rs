@@ -76,11 +76,12 @@ use crate::wallet::{
     tx_builder::{FeePolicy, TxBuilder, TxParams},
     utils::{check_nsequence_rbf, After, Older, SecpCtx},
 };
+use event::wallet_events;
 
 // re-exports
-use crate::event::{wallet_events, WalletEvent};
 pub use bdk_chain::Balance;
 pub use changeset::ChangeSet;
+pub use event::WalletEvent;
 pub use params::*;
 pub use persisted::*;
 pub use utils::IsDust;

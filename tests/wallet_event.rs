@@ -1,7 +1,7 @@
 use bdk_chain::{BlockId, CheckPoint, ConfirmationBlockTime};
 use bdk_wallet::event::WalletEvent;
 use bdk_wallet::test_utils::{get_test_wpkh_and_change_desc, new_wallet_and_funding_update};
-use bdk_wallet::{SignOptions, Update};
+use bdk_wallet::Update;
 use bitcoin::hashes::Hash;
 use bitcoin::{Address, Amount, BlockHash, FeeRate};
 use core::str::FromStr;
@@ -76,8 +76,7 @@ fn test_tx_replaced_event() {
             .assume_checked(),
         Amount::from_sat(10_000),
     );
-    let mut psbt = builder.finish().unwrap();
-    wallet.sign(&mut psbt, SignOptions::default()).unwrap();
+    let psbt = builder.finish().unwrap();
     let orig_tx = Arc::new(psbt.extract_tx().unwrap());
     let orig_txid = orig_tx.compute_txid();
 
@@ -95,8 +94,7 @@ fn test_tx_replaced_event() {
     // create rbf tx
     let mut builder = wallet.build_fee_bump(orig_txid).unwrap();
     builder.fee_rate(FeeRate::from_sat_per_vb(10).unwrap());
-    let mut psbt = builder.finish().unwrap();
-    wallet.sign(&mut psbt, SignOptions::default()).unwrap();
+    let psbt = builder.finish().unwrap();
     let rbf_tx = Arc::new(psbt.extract_tx().unwrap());
     let rbf_txid = rbf_tx.compute_txid();
 
@@ -131,8 +129,7 @@ fn test_tx_confirmed_event() {
             .assume_checked(),
         Amount::from_sat(10_000),
     );
-    let mut psbt = builder.finish().unwrap();
-    wallet.sign(&mut psbt, SignOptions::default()).unwrap();
+    let psbt = builder.finish().unwrap();
     let new_tx = Arc::new(psbt.extract_tx().unwrap());
     let new_txid = new_tx.compute_txid();
 
@@ -189,8 +186,7 @@ fn test_tx_confirmed_new_block_event() {
             .assume_checked(),
         Amount::from_sat(10_000),
     );
-    let mut psbt = builder.finish().unwrap();
-    wallet.sign(&mut psbt, SignOptions::default()).unwrap();
+    let psbt = builder.finish().unwrap();
     let new_tx = Arc::new(psbt.extract_tx().unwrap());
     let new_txid = new_tx.compute_txid();
 
@@ -274,8 +270,7 @@ fn test_tx_dropped_event() {
             .assume_checked(),
         Amount::from_sat(10_000),
     );
-    let mut psbt = builder.finish().unwrap();
-    wallet.sign(&mut psbt, SignOptions::default()).unwrap();
+    let psbt = builder.finish().unwrap();
     let new_tx = Arc::new(psbt.extract_tx().unwrap());
     let new_txid = new_tx.compute_txid();
 
