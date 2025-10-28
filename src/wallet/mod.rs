@@ -1305,34 +1305,22 @@ impl Wallet {
         }
     }
 
-    /// Get the combined KeyMap for all signers in the wallet.
+    /// Get KeyMap
     ///
-    /// This includes keys from both external and internal (change) signers.
-    /// The returned KeyMap can be used with `PsbtExt::sign` to sign PSBTs directly.
-    ///
-    /// # Example
+    /// ## Example
     ///
     /// ```rust,no_run
-    /// use bdk_wallet::{KeychainKind, Wallet};
-    /// use miniscript::psbt::PsbtExt;
-    /// use bdk_wallet::bitcoin::{Amount, Network};
+    /// # use bdk_wallet::{KeychainKind, Wallet};
+    /// # use bdk_wallet::bitcoin::Network;
     ///
     /// let descriptor = "wpkh(tprv8ZgxMBicQKsPe73PBRSmNbTfbcsZnwWhz5eVmhHpi31HW29Z7mc9B4cWGRQzopNUzZUT391DeDJxL2PefNunWyLgqCKRMDkU1s2s8bAfoSk/84'/1'/0'/0/*)";
     /// let change_descriptor = "wpkh(tprv8ZgxMBicQKsPe73PBRSmNbTfbcsZnwWhz5eVmhHpi31HW29Z7mc9B4cWGRQzopNUzZUT391DeDJxL2PefNunWyLgqCKRMDkU1s2s8bAfoSk/84'/1'/0'/1/*)";
     /// let wallet = Wallet::create(descriptor, change_descriptor)
-    ///    .network(Network::Testnet)
-    ///    .create_wallet_no_persist()?;
+    ///     .network(Network::Testnet)
+    ///     .create_wallet_no_persist()?;
     ///
-    /// let address = wallet.peek_address(KeychainKind::External, 0);
-    ///
-    /// // Build a PSBT using the wallet
-    /// let mut tx_builder = wallet.build_tx();
-    /// tx_builder.add_recipient(address.script_pubkey(), Amount::from_sat(50_000));
-    /// let mut psbt = tx_builder.finish().unwrap();
-    ///
-    /// // Sign the PSBT directly using PsbtExt::sign with the wallet's keymap
     /// let keymap = wallet.get_keymap();
-    /// psbt.sign(&keymap, &wallet.secp_ctx()).expect("Failed to sign PSBT");
+    /// // Use the keymap with miniscript's PSBT signing or other cryptographic operations
     ///
     /// Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
