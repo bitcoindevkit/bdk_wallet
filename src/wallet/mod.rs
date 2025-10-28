@@ -1305,6 +1305,43 @@ impl Wallet {
         }
     }
 
+    /// Get the combined KeyMap for all signers in the wallet.
+    ///
+    /// This includes keys from both external and internal (change) signers.
+    /// The returned KeyMap can be used with `PsbtExt::sign` to sign PSBTs directly.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use bdk_wallet::{KeychainKind, Wallet};
+    /// use miniscript::psbt::PsbtExt;
+    /// use bdk_wallet::bitcoin::{Amount, Network};
+    ///
+    /// let descriptor = "wpkh(tprv8ZgxMBicQKsPe73PBRSmNbTfbcsZnwWhz5eVmhHpi31HW29Z7mc9B4cWGRQzopNUzZUT391DeDJxL2PefNunWyLgqCKRMDkU1s2s8bAfoSk/84'/1'/0'/0/*)";
+    /// let change_descriptor = "wpkh(tprv8ZgxMBicQKsPe73PBRSmNbTfbcsZnwWhz5eVmhHpi31HW29Z7mc9B4cWGRQzopNUzZUT391DeDJxL2PefNunWyLgqCKRMDkU1s2s8bAfoSk/84'/1'/0'/1/*)";
+    /// let wallet = Wallet::create(descriptor, change_descriptor)
+    ///    .network(Network::Testnet)
+    ///    .create_wallet_no_persist()?;
+    ///
+    /// let address = wallet.peek_address(KeychainKind::External, 0);
+    ///
+    /// // Build a PSBT using the wallet
+    /// let mut tx_builder = wallet.build_tx();
+    /// tx_builder.add_recipient(address.script_pubkey(), Amount::from_sat(50_000));
+    /// let mut psbt = tx_builder.finish().unwrap();
+    ///
+    /// // Sign the PSBT directly using PsbtExt::sign with the wallet's keymap
+    /// let keymap = wallet.get_keymap();
+    /// psbt.sign(&keymap, &wallet.secp_ctx()).expect("Failed to sign PSBT");
+    ///
+    /// Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn get_keymap(&self) -> KeyMap {
+        let mut keymap = self.signers.as_key_map(&self.secp);
+        keymap.extend(self.change_signers.as_key_map(&self.secp));
+        keymap
+    }
+
     /// Start building a transaction.
     ///
     /// This returns a blank [`TxBuilder`] from which you can specify the parameters for the
@@ -2924,5 +2961,44 @@ mod test {
         let params = Wallet::create_from_two_path_descriptor(invalid_descriptor);
         let wallet = params.network(Network::Testnet).create_wallet_no_persist();
         assert!(wallet.is_err());
+    }
+
+    #[test]
+    fn test_get_keymap() {
+        use crate::test_utils::get_test_wpkh_and_change_desc;
+        let (external_desc, internal_desc) = get_test_wpkh_and_change_desc();
+
+        // Create wallet with private key descriptors
+        let wallet = Wallet::create(external_desc, internal_desc)
+            .network(Network::Testnet)
+            .create_wallet_no_persist()
+            .unwrap();
+
+        // Get the combined keymap
+        let keymap = wallet.get_keymap();
+
+        // Verify keymap is not empty
+        assert!(!keymap.is_empty());
+
+        // Get individual keymaps for comparison
+        let external_keymap = wallet
+            .get_signers(KeychainKind::External)
+            .as_key_map(wallet.secp_ctx());
+        let internal_keymap = wallet
+            .get_signers(KeychainKind::Internal)
+            .as_key_map(wallet.secp_ctx());
+
+        // Verify combined keymap contains all keys from both signers
+        assert!(keymap.len() >= external_keymap.len() + internal_keymap.len());
+
+        // Verify all external keys are present
+        for (pubkey, _) in external_keymap.iter() {
+            assert!(keymap.contains_key(pubkey));
+        }
+
+        // Verify all internal keys are present
+        for (pubkey, _) in internal_keymap.iter() {
+            assert!(keymap.contains_key(pubkey));
+        }
     }
 }
