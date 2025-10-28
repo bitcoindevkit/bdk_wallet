@@ -571,6 +571,157 @@ where
     }
 }
 
+impl<K> Wallet<K>
+where
+    K: Ord + Clone + Debug,
+{
+    /// Compute the wallet balance with canonical params, confirmation threshold, and trust
+    /// predicate.
+    ///
+    /// Panics if `conf_threshold` is equal to 0.
+    pub fn balance_with_params_conf_threshold(
+        &self,
+        params: CanonicalizationParams,
+        conf_threshold: u32,
+        trust_predicate: impl Fn(
+            &OutPoint,
+            &HashMap<Txid, CanonicalTx<Arc<Transaction>, ConfirmationBlockTime>>,
+        ) -> bool,
+    ) -> Balance {
+        use crate::chain::ChainOracle;
+        let mut confirmed = Amount::ZERO;
+        let mut trusted_pending = Amount::ZERO;
+        let mut untrusted_pending = Amount::ZERO;
+        let mut immature = Amount::ZERO;
+
+        let mut canon_txs = HashMap::new();
+        let mut canon_spends = HashMap::new();
+        let outpoints = self.tx_graph.index.outpoints().iter().cloned();
+
+        for res in self.tx_graph.graph().try_list_canonical_txs(
+            &self.chain,
+            self.chain.tip().block_id(),
+            params,
+        ) {
+            let canonical_tx = res.expect("oracle is infallible");
+            let txid = canonical_tx.tx_node.txid;
+
+            if !canonical_tx.tx_node.is_coinbase() {
+                for txin in &canonical_tx.tx_node.tx.input {
+                    let _res = canon_spends.insert(txin.previous_output, txid);
+                    assert!(_res.is_none(), "tried to replace {_res:?} with {txid:?} ")
+                }
+            }
+
+            canon_txs.insert(txid, canonical_tx);
+        }
+
+        let unspent_txouts = outpoints.into_iter().filter_map(|(_, outpoint)| {
+            if canon_spends.contains_key(&outpoint) {
+                return None;
+            }
+            let canon_tx = canon_txs.get(&outpoint.txid)?;
+            let txout = canon_tx
+                .tx_node
+                .tx
+                .output
+                .get(outpoint.vout as usize)
+                .cloned()
+                .expect("oracle is infallible");
+            let chain_position = canon_tx.chain_position;
+            let is_on_coinbase = canon_tx.tx_node.is_coinbase();
+            Some(FullTxOut {
+                chain_position,
+                outpoint,
+                is_on_coinbase,
+                spent_by: None,
+                txout,
+            })
+        });
+
+        let target_height = self.chain.tip().height().checked_sub(
+            conf_threshold
+                .checked_sub(1)
+                .expect("conf threshold should be positive integer"),
+        );
+        let curr_height = self.chain.tip().height();
+
+        for full_txout in unspent_txouts {
+            match full_txout.chain_position {
+                ChainPosition::Confirmed { .. } => match target_height {
+                    Some(ht) => {
+                        if full_txout.is_confirmed_and_spendable(ht) {
+                            confirmed += full_txout.txout.value;
+                        } else if full_txout.is_confirmed_and_spendable(curr_height) {
+                            if full_txout.is_on_coinbase {
+                                confirmed += full_txout.txout.value;
+                            } else if trust_predicate(&full_txout.outpoint, &canon_txs) {
+                                trusted_pending += full_txout.txout.value;
+                            } else {
+                                untrusted_pending += full_txout.txout.value;
+                            }
+                        } else if !full_txout.is_mature(curr_height) {
+                            immature += full_txout.txout.value;
+                        }
+                    }
+                    None => {
+                        if full_txout.is_confirmed_and_spendable(curr_height) {
+                            if full_txout.is_on_coinbase {
+                                confirmed += full_txout.txout.value;
+                            } else if trust_predicate(&full_txout.outpoint, &canon_txs) {
+                                trusted_pending += full_txout.txout.value;
+                            } else {
+                                untrusted_pending += full_txout.txout.value;
+                            }
+                        } else if !full_txout.is_mature(curr_height) {
+                            immature += full_txout.txout.value;
+                        }
+                    }
+                },
+                ChainPosition::Unconfirmed { .. } => {
+                    if trust_predicate(&full_txout.outpoint, &canon_txs) {
+                        trusted_pending += full_txout.txout.value;
+                    } else {
+                        untrusted_pending += full_txout.txout.value;
+                    }
+                }
+            }
+        }
+
+        Balance {
+            confirmed,
+            trusted_pending,
+            untrusted_pending,
+            immature,
+        }
+    }
+
+    /// Compute the wallet balance with the default parameters.
+    pub fn balance(&self) -> Balance {
+        self.balance_with_params_conf_threshold(
+            CanonicalizationParams::default(),
+            1,
+            |outpoint, canon_txs| {
+                let mut trusted = true;
+                let canon_tx = canon_txs.get(&outpoint.txid).expect("oracle is infallible");
+                for txin in &canon_tx.tx_node.tx.input {
+                    trusted = trusted
+                        && self
+                            .tx_graph
+                            .index
+                            .outpoints()
+                            .iter()
+                            .any(|(_, item)| *item == txin.previous_output);
+                }
+                if canon_tx.tx_node.tx.input.is_empty() {
+                    trusted = false;
+                }
+                trusted
+            },
+        )
+    }
+}
+
 // TODO: replace with `PersistedWallet`
 #[cfg(feature = "rusqlite")]
 impl<K> Wallet<K>
