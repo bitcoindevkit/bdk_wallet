@@ -4,7 +4,7 @@
 * Authors: @notmandatory
 * Date: 2025-09-21
 * Targeted modules: wallet
-* Associated tickets/PRs: #6, #310
+* Associated tickets/PRs: #6, #310, #319
 
 ## Context and Problem Statement
 
@@ -89,10 +89,30 @@ return the list of `WalletEvent` enums.
 * Could be confusing to users which function to use, the original or new one.
 * If in a future breaking release we decide to always return events we'll need to deprecate `Wallet::apply_update_events`.
 
+#### Option 4: Create events directly from Wallet::Update
+
+The `wallet::Update` structure passed into the `Wallet::apply_update` function contains any new transaction or 
+blockchain data found in a `FullScanResponse` or `SyncResponse`. Events could be generated from only this data.
+
+**Pros:**
+
+* No further wallet lookups is required to create events, it would be more efficient.
+* Could be implemented as a function directly on the `wallet::Update` structure, a non-breaking API change.
+
+**Cons:**
+
+* A `wallet::Update` only contains the blocks, tx, and anchors found during a sync or full scan. It does not show how 
+  this data changes the canonical status of already known blocks and tx.
+
 ## Decision Outcome
 
-Chosen option: "Option 3", because it can be delivered to users in the next minor release. This option also lets us 
-get user feedback and see how the events are used before forcing all users to generate them during an update.
+Chosen option: 
+
+"Option 3" for the 2.2 release because it can be delivered to users as a minor release. This option also 
+lets us get user feedback and see how the events are used before forcing all users to generate them during an update.
+
+"Option 2" for the 3.0 release to simplify the API by only using one function `apply_update` that will now return
+events. 
 
 ### Positive Consequences
 
