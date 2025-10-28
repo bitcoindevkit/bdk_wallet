@@ -554,6 +554,21 @@ where
             Some(&self.stage)
         }
     }
+
+    /// Get a reference to the inner [`TxGraph`].
+    pub fn tx_graph(&self) -> &TxGraph<ConfirmationBlockTime> {
+        self.tx_graph.graph()
+    }
+
+    /// Get a reference to the inner [`KeychainTxOutIndex`].
+    pub fn index(&self) -> &KeychainTxOutIndex<K> {
+        &self.tx_graph.index
+    }
+
+    /// Get a reference to the inner [`LocalChain`].
+    pub fn local_chain(&self) -> &LocalChain {
+        &self.chain
+    }
 }
 
 // TODO: replace with `PersistedWallet`
