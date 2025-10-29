@@ -2550,6 +2550,41 @@ impl Wallet {
             })
     }
 
+    /// Introduces a `block` of `height` to the wallet, and tries to connect it to the
+    /// `prev_blockhash` of the block's header.
+    ///
+    /// This is a convenience method that is equivalent to calling
+    /// [`apply_block_connected_to_events`] with `prev_blockhash` and `height-1` as the
+    /// `connected_to` parameter.
+    ///
+    /// See [`apply_update_events`] for more information on the returned [`WalletEvent`]s.
+    ///
+    /// [`apply_block_connected_to_events`]: Self::apply_block_connected_to_events
+    /// [`apply_update_events`]: Self::apply_update_events
+    pub fn apply_block_events(
+        &mut self,
+        block: &Block,
+        height: u32,
+    ) -> Result<Vec<WalletEvent>, CannotConnectError> {
+        let connected_to = match height.checked_sub(1) {
+            Some(prev_height) => BlockId {
+                height: prev_height,
+                hash: block.header.prev_blockhash,
+            },
+            None => BlockId {
+                height,
+                hash: block.block_hash(),
+            },
+        };
+        self.apply_block_connected_to_events(block, height, connected_to)
+            .map_err(|err| match err {
+                ApplyHeaderError::InconsistentBlocks => {
+                    unreachable!("connected_to is derived from the block so must be consistent")
+                }
+                ApplyHeaderError::CannotConnect(err) => err,
+            })
+    }
+
     /// Applies relevant transactions from `block` of `height` to the wallet, and connects the
     /// block to the internal chain.
     ///
@@ -2579,6 +2614,56 @@ impl Wallet {
         );
         self.stage.merge(changeset);
         Ok(())
+    }
+
+    /// Applies relevant transactions from `block` of `height` to the wallet, and connects the
+    /// block to the internal chain.
+    ///
+    /// See [`apply_block_connected_to`] for more information.
+    ///
+    /// See [`apply_update_events`] for more information on the returned [`WalletEvent`]s.
+    ///
+    /// [`apply_block_connected_to`]: Self::apply_block_connected_to
+    /// [`apply_update_events`]: Self::apply_update_events
+    pub fn apply_block_connected_to_events(
+        &mut self,
+        block: &Block,
+        height: u32,
+        connected_to: BlockId,
+    ) -> Result<Vec<WalletEvent>, ApplyHeaderError> {
+        // snapshot of chain tip and transactions before update
+        let chain_tip1 = self.chain.tip().block_id();
+        let wallet_txs1 = self
+            .transactions()
+            .map(|wtx| {
+                (
+                    wtx.tx_node.txid,
+                    (wtx.tx_node.tx.clone(), wtx.chain_position),
+                )
+            })
+            .collect::<BTreeMap<Txid, (Arc<Transaction>, ChainPosition<ConfirmationBlockTime>)>>();
+
+        self.apply_block_connected_to(block, height, connected_to)?;
+
+        // chain tip and transactions after update
+        let chain_tip2 = self.chain.tip().block_id();
+        let wallet_txs2 = self
+            .transactions()
+            .map(|wtx| {
+                (
+                    wtx.tx_node.txid,
+                    (wtx.tx_node.tx.clone(), wtx.chain_position),
+                )
+            })
+            .collect::<BTreeMap<Txid, (Arc<Transaction>, ChainPosition<ConfirmationBlockTime>)>>();
+
+        Ok(wallet_events(
+            self,
+            chain_tip1,
+            chain_tip2,
+            wallet_txs1,
+            wallet_txs2,
+        ))
     }
 
     /// Apply relevant unconfirmed transactions to the wallet.
