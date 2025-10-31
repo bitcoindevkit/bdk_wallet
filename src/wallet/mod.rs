@@ -2578,23 +2578,39 @@ impl Wallet {
         block: &Block,
         height: u32,
     ) -> Result<Vec<WalletEvent>, CannotConnectError> {
-        let connected_to = match height.checked_sub(1) {
-            Some(prev_height) => BlockId {
-                height: prev_height,
-                hash: block.header.prev_blockhash,
-            },
-            None => BlockId {
-                height,
-                hash: block.block_hash(),
-            },
-        };
-        self.apply_block_connected_to_events(block, height, connected_to)
-            .map_err(|err| match err {
-                ApplyHeaderError::InconsistentBlocks => {
-                    unreachable!("connected_to is derived from the block so must be consistent")
-                }
-                ApplyHeaderError::CannotConnect(err) => err,
+        // snapshot of chain tip and transactions before update
+        let chain_tip1 = self.chain.tip().block_id();
+        let wallet_txs1 = self
+            .transactions()
+            .map(|wtx| {
+                (
+                    wtx.tx_node.txid,
+                    (wtx.tx_node.tx.clone(), wtx.chain_position),
+                )
             })
+            .collect::<BTreeMap<Txid, (Arc<Transaction>, ChainPosition<ConfirmationBlockTime>)>>();
+
+        self.apply_block(block, height)?;
+
+        // chain tip and transactions after update
+        let chain_tip2 = self.chain.tip().block_id();
+        let wallet_txs2 = self
+            .transactions()
+            .map(|wtx| {
+                (
+                    wtx.tx_node.txid,
+                    (wtx.tx_node.tx.clone(), wtx.chain_position),
+                )
+            })
+            .collect::<BTreeMap<Txid, (Arc<Transaction>, ChainPosition<ConfirmationBlockTime>)>>();
+
+        Ok(wallet_events(
+            self,
+            chain_tip1,
+            chain_tip2,
+            wallet_txs1,
+            wallet_txs2,
+        ))
     }
 
     /// Applies relevant transactions from `block` of `height` to the wallet, and connects the
