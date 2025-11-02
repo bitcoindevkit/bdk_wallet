@@ -263,20 +263,20 @@ impl std::error::Error for BuildFeeBumpError {}
 pub enum CreatePsbtError {
     /// No Bnb solution.
     Bnb(bdk_coin_select::NoBnbSolution),
-    /// Non-sufficient funds
+    /// Non-sufficient funds.
     InsufficientFunds(bdk_coin_select::InsufficientFunds),
     /// In order to use the [`add_global_xpubs`] option, every extended key in the descriptor must
     /// either be a master key itself, having a depth of 0, or have an explicit origin provided.
     ///
     /// [`add_global_xpubs`]: crate::psbt::PsbtParams::add_global_xpubs
     MissingKeyOrigin(bitcoin::bip32::Xpub),
-    /// Failed to create a spend [`Plan`] for a manually selected output
+    /// Failed to create a spending plan for a manually selected output.
     Plan(OutPoint),
-    /// Failed to create PSBT
+    /// Failed to create PSBT.
     Psbt(bdk_tx::CreatePsbtError),
-    /// Selector error
+    /// Selector error.
     Selector(bdk_tx::SelectorError),
-    /// The UTXO of outpoint could not be found
+    /// The UTXO of outpoint could not be found.
     UnknownUtxo(OutPoint),
 }
 

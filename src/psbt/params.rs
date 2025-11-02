@@ -1,4 +1,4 @@
-//! Parameters for PSBT building.
+//! Parameters for creating a PSBT.
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -78,8 +78,17 @@ impl PsbtParams {
     /// Add UTXOs by outpoint to fund the transaction.
     ///
     /// A single outpoint may appear at most once in the list of UTXOs to spend. The caller is
-    /// responsible for ensuring that elements of `outpoints` correspond to outputs of previous
+    /// responsible for ensuring that items of `outpoints` correspond to outputs of previous
     /// transactions and are currently unspent.
+    ///
+    /// If an outpoint doesn't correspond to an indexed script pubkey, a [`UnknownUtxo`]
+    /// will occur. See [`Wallet::create_psbt`] for more.
+    ///
+    /// To add a UTXO that did not originate from this wallet (i.e. a "foreign" UTXO), see
+    /// [`PsbtParams::add_planned_input`].
+    ///
+    /// [`UnknownUtxo`]: crate::wallet::error::CreatePsbtError::UnknownUtxo
+    /// [`Wallet::create_psbt`]: crate::Wallet::create_psbt
     pub fn add_utxos(&mut self, outpoints: &[OutPoint]) -> &mut Self {
         self.utxos
             .extend(outpoints.iter().copied().filter(|&op| self.set.insert(op)));
@@ -134,10 +143,10 @@ impl PsbtParams {
         self
     }
 
-    /// Add recipients.
+    /// Add outgoing recipients to the transaction.
     ///
-    /// - `recipients`: An iterator of `(S, Amount)` tuples where `S` can be a bitcoin [`Address`],
-    ///   a scriptPubKey, or anything that can be converted straight into a [`ScriptBuf`].
+    /// - `recipients`: An iterator of `(S, Amount)` tuples where `S` can be a [`bitcoin::Address`],
+    ///   a script pubkey, or anything that can be converted straight into a [`ScriptBuf`].
     pub fn add_recipients<I, S>(&mut self, recipients: I) -> &mut Self
     where
         I: IntoIterator<Item = (S, Amount)>,
@@ -201,7 +210,7 @@ impl PsbtParams {
     ///
     /// This merges all of the spends into a single transaction while retaining the parameters
     /// of `self`. Note however that any previously added UTXOs are removed. Call
-    /// [`replace_by_fee_with_aux_rand`](crate::Wallet::replace_by_fee_with_aux_rand) to finish
+    /// [`replace_by_fee_with_rng`](crate::Wallet::replace_by_fee_with_rng) to finish
     /// building the PSBT.
     ///
     /// ## Note
@@ -247,6 +256,35 @@ impl PsbtParams {
     /// Add a planned input.
     ///
     /// This can be used to add inputs that come with a [`Plan`] or [`psbt::Input`] provided.
+    /// See [`Input`] for more on how to create inputs manually. Be aware that creating inputs
+    /// in this manner relies on certain assumptions, like the UTXO validity, the satisfaction
+    /// weight, and so on. As such you should only use this method to add inputs you definitely
+    /// trust the values for.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use bdk_tx::Input;
+    /// # use bdk_wallet::psbt::PsbtParams;
+    /// # use bitcoin::{psbt, OutPoint, Sequence, TxOut};
+    /// # let outpoint = OutPoint::null();
+    /// # let sequence = Sequence::ENABLE_LOCKTIME_NO_RBF;
+    /// # let psbt_input = psbt::Input::default();
+    /// # let satisfaction_weight = 0;
+    /// # let tx_status = None;
+    /// # let is_coinbase = false;
+    /// let mut params = PsbtParams::default();
+    /// let input = Input::from_psbt_input(
+    ///     outpoint,
+    ///     sequence,
+    ///     psbt_input,
+    ///     satisfaction_weight,
+    ///     tx_status,
+    ///     is_coinbase,
+    /// )?;
+    /// params.add_planned_input(input);
+    /// # Ok::<_, anyhow::Error>(())
+    /// ```
     ///
     /// [`Plan`]: miniscript::plan::Plan
     /// [`psbt::Input`]: bitcoin::psbt::Input
@@ -346,8 +384,8 @@ impl ReplaceParams {
         params
     }
 
-    /// Replace spends of the provided `txs`. This will internally set the internal list
-    /// of UTXOs to be spent.
+    /// Replace spends of the provided `txs`. This will internally set the list of UTXOs
+    /// to be spent.
     pub fn replace(&mut self, txs: &[Arc<Transaction>]) {
         self.inner.utxos.clear();
         let mut utxos = vec![];

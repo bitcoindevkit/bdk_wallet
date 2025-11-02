@@ -2837,6 +2837,9 @@ impl Wallet {
     /// Creates a PSBT with the given `params` and returns the updated [`Psbt`] and
     /// [`Finalizer`].
     ///
+    /// This function uses the thread-local random number generator (RNG) to generate
+    /// randomness. To supply your own source of entropy see [`Wallet::create_psbt_with_rng`].
+    ///
     /// # Example
     ///
     /// ```rust,no_run
@@ -2857,21 +2860,31 @@ impl Wallet {
     /// let (psbt, finalizer) = wallet.create_psbt(params)?;
     /// # Ok::<_, anyhow::Error>(())
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// A [`CreatePsbtError`] will be thrown if any of the following occurs
+    ///
+    /// - A manually selected input is missing from the wallet, or could not be planned
+    /// - The input value is insufficient to fund the outputs
+    /// - Failure to complete coin selection
+    /// - Failure to create or update the PSBT.
     #[cfg(feature = "std")]
     #[cfg_attr(docsrs, doc(cfg(feature = "std")))]
     pub fn create_psbt(&self, params: PsbtParams) -> Result<(Psbt, Finalizer), CreatePsbtError> {
-        self.create_psbt_with_aux_rand(params, &mut rand::thread_rng())
+        self.create_psbt_with_rng(params, &mut rand::thread_rng())
     }
 
-    /// Creates a PSBT with the given `params` and auxiliary randomness.
+    /// Creates a PSBT with the given `params` and random number generator (RNG).
     ///
-    /// ### Parameters:
+    /// Return the updated [`Psbt`] and [`Finalizer`].
+    ///
+    /// ## Parameters:
     ///
     /// - `params`: [`PsbtParams`]
-    /// - `rng`: Source of entropy, may be used during coin selection.
-    ///
-    /// Returns the updated [`Psbt`] and [`Finalizer`].
-    pub fn create_psbt_with_aux_rand(
+    /// - `rng`: Source of entropy, may be used during coin selection and to sort inputs and outputs
+    ///   by the [`TxOrdering`](crate::wallet::tx_builder::TxOrdering).
+    pub fn create_psbt_with_rng(
         &self,
         params: PsbtParams,
         rng: &mut impl RngCore,
@@ -3020,7 +3033,7 @@ impl Wallet {
     /// [`Finalizer`].
     ///
     /// This is a convenience for getting a new [`ReplaceParams`], and updating the recipients
-    /// and feerate before calling [`replace_by_fee_with_aux_rand`]. If further configuration is
+    /// and feerate before calling [`Wallet::replace_by_fee_with_rng`]. If further configuration is
     /// desired, consider using [`PsbtParams::replace`] instead.
     ///
     /// # Example
@@ -3053,7 +3066,7 @@ impl Wallet {
         feerate: FeeRate,
         recipients: Vec<(ScriptBuf, Amount)>,
     ) -> Result<(Psbt, Finalizer), ReplaceByFeeError> {
-        self.replace_by_fee_with_aux_rand(
+        self.replace_by_fee_with_rng(
             ReplaceParams::new(
                 txs,
                 PsbtParams {
@@ -3069,25 +3082,35 @@ impl Wallet {
     /// Creates a Replace-By-Fee transaction (RBF) and returns the updated [`Psbt`] and
     /// [`Finalizer`].
     ///
-    /// ### Parameters:
+    /// This function uses the thread-local random number generator (RNG) to generate
+    /// randomness. To supply your own source of entropy see [`Wallet::replace_by_fee_with_rng`].
     ///
-    /// - `params`: [`ReplaceParams`]
+    /// # Errors
+    ///
+    /// A [`ReplaceByFeeError`] will be thrown if any of the following occurs
+    ///
+    /// - An original transaction is missing from the wallet
+    /// - Failure to calculate the [fee](Wallet::calculate_fee) of an original transaction
+    /// - Failure to complete coin selection
+    /// - Failure to create or update the PSBT.
     #[cfg(feature = "std")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "std")))]
     pub fn replace_by_fee(
         &self,
         params: ReplaceParams,
     ) -> Result<(Psbt, Finalizer), ReplaceByFeeError> {
-        self.replace_by_fee_with_aux_rand(params, &mut rand::thread_rng())
+        self.replace_by_fee_with_rng(params, &mut rand::thread_rng())
     }
 
     /// Creates a Replace-By-Fee transaction (RBF) and returns the updated [`Psbt`] and
     /// [`Finalizer`].
     ///
-    /// ### Parameters:
+    /// ## Parameters:
     ///
     /// - `params`: [`ReplaceParams`]
-    /// - `rng`: Source of entropy, may be used during coin selection.
-    pub fn replace_by_fee_with_aux_rand(
+    /// - `rng`: Source of entropy, may be used during coin selection and to sort inputs and outputs
+    ///   by the [`TxOrdering`](crate::wallet::tx_builder::TxOrdering).
+    pub fn replace_by_fee_with_rng(
         &self,
         params: ReplaceParams,
         rng: &mut impl RngCore,
