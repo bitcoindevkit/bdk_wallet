@@ -5,7 +5,7 @@ use bdk_wallet::signer::SignOptions;
 use bdk_wallet::test_utils::*;
 use bdk_wallet::tx_builder::AddForeignUtxoError;
 use bdk_wallet::KeychainKind;
-use bitcoin::{psbt, Address, Amount};
+use bitcoin::{hashes::Hash, psbt, Address, Amount, FeeRate, OutPoint, ScriptBuf, TxIn, TxOut};
 
 mod common;
 
@@ -289,4 +289,49 @@ fn test_taproot_foreign_utxo() {
             .any(|input| input.previous_output == utxo.outpoint),
         "foreign_utxo should be in there"
     );
+}
+
+#[test]
+fn test_add_foreign_utxo_bump_fee() {
+    // Create tx spending a p2a output
+    let (mut wallet, _) = get_funded_wallet_wpkh();
+
+    let drain_spk = wallet
+        .next_unused_address(KeychainKind::External)
+        .script_pubkey();
+    let witness_utxo = TxOut {
+        value: Amount::ZERO,
+        script_pubkey: ScriptBuf::new_p2a(),
+    };
+    let outpoint = OutPoint::new(Hash::hash(b"prev"), 1);
+    // Remember to include this as a "floating" txout in the wallet.
+    wallet.insert_txout(outpoint, witness_utxo.clone());
+    let satisfaction_weight = TxIn::default().segwit_weight();
+    let psbt_input = psbt::Input {
+        witness_utxo: Some(witness_utxo),
+        ..Default::default()
+    };
+
+    let mut tx_builder = wallet.build_tx();
+    tx_builder
+        .add_foreign_utxo(outpoint, psbt_input, satisfaction_weight)
+        .unwrap()
+        .only_witness_utxo()
+        .drain_to(drain_spk.clone());
+    let psbt = tx_builder.finish().unwrap();
+    let tx = psbt.unsigned_tx.clone();
+    assert!(tx.input.iter().any(|txin| txin.previous_output == outpoint));
+    let txid1 = tx.compute_txid();
+    insert_tx(&mut wallet, tx);
+
+    // Now build fee bump
+    let mut tx_builder = wallet.build_fee_bump(txid1).unwrap();
+    tx_builder
+        .set_recipients(vec![])
+        .drain_to(drain_spk)
+        .only_witness_utxo()
+        .fee_rate(FeeRate::from_sat_per_vb_unchecked(5));
+    let psbt = tx_builder.finish().unwrap();
+    let tx = &psbt.unsigned_tx;
+    assert!(tx.input.iter().any(|txin| txin.previous_output == outpoint));
 }
