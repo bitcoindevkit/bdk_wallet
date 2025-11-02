@@ -317,6 +317,21 @@ impl PsbtParams {
         self
     }
 
+    /// Set the transaction [`Version`].
+    pub fn version(&mut self, version: Version) -> &mut Self {
+        self.version = Some(version);
+        self
+    }
+
+    /// Set the [`Sequence`] value to be used as a fallback if not specified by the input.
+    pub fn fallback_sequence(&mut self, sequence: Sequence) -> &mut Self {
+        self.fallback_sequence = Some(sequence);
+        self
+    }
+
+    // TODO(@valuedmammal): Should we expose an option to set the `longterm_feerate`, and/or
+    // set the coin-select `ChangePolicy`?
+
     /// Fill in the global [`Psbt::xpub`]s field with the extended keys of the wallet's
     /// descriptors.
     ///
