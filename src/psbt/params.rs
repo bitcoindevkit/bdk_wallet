@@ -214,17 +214,17 @@ impl PsbtParams {
 
     /// Filter [`FullTxOut`]s by the provided closure.
     ///
-    /// This option can be used to mark specific outputs unspendable or apply any sort of custom
-    /// UTXO filter.
+    /// This option can be used to mark specific outputs unspendable or apply custom UTXO
+    /// filtering logic.
     ///
-    /// Note that returning `true` from the `exclude` function will exclude the output from coin
-    /// selection, otherwise any coin in the wallet that is mature and spendable will be
-    /// eligible for selection.
-    pub fn filter_utxos<F>(&mut self, exclude: F) -> &mut Self
+    /// Any txouts for which the `predicate` returns `false` will be excluded from coin selection,
+    /// otherwise any coin in the wallet that is mature and spendable will be eligible for
+    /// selection.
+    pub fn filter_utxos<F>(&mut self, predicate: F) -> &mut Self
     where
         F: Fn(&FullTxOut<ConfirmationBlockTime>) -> bool + Send + Sync + 'static,
     {
-        self.utxo_filter = UtxoFilter(Arc::new(exclude));
+        self.utxo_filter = UtxoFilter(Arc::new(predicate));
         self
     }
 
@@ -306,7 +306,7 @@ pub(crate) struct UtxoFilter(
 
 impl Default for UtxoFilter {
     fn default() -> Self {
-        Self(Arc::new(|_| false))
+        Self(Arc::new(|_| true))
     }
 }
 

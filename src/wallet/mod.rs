@@ -2780,13 +2780,13 @@ impl Wallet {
 
     /// Filters wallet `txos` by the spending criteria.
     ///
-    /// - `exclude`: Closure indicating whether the output should be excluded, used by some callers
-    ///   to apply additional filters as in the case of RBF.
+    /// - `policy`: Closure indicating whether the output should be kept, used by some callers to
+    ///   apply additional filters as in the case of RBF.
     fn filter_spendable<'a, I, F>(
         &'a self,
         txos: I,
         params: &'a PsbtParams,
-        exclude: F,
+        policy: F,
     ) -> impl Iterator<Item = FullTxOut<ConfirmationBlockTime>> + 'a
     where
         I: IntoIterator<Item = FullTxOut<ConfirmationBlockTime>> + 'a,
@@ -2798,8 +2798,8 @@ impl Wallet {
             if params.utxos.contains(&txo.outpoint) {
                 return false;
             }
-            // Exclude outputs according to `exclude` fn.
-            if exclude(txo) {
+            // Filter outputs according to `policy` fn.
+            if !policy(txo) {
                 return false;
             }
             // Exclude outputs that are immature or already spent.
@@ -3125,11 +3125,13 @@ impl Wallet {
             vec![]
         } else {
             self.filter_spendable(txouts.into_values(), &params, |txo| {
-                // Exlude outputs of txs to be replaced. Also exclude unconfirmed outputs
-                // per replacement policy Rule 2.
-                to_replace.contains(&txo.outpoint.txid)
-                    || txo.chain_position.is_unconfirmed()
-                    || (params.utxo_filter.0)(txo)
+                // To be included for coin selection the UTXO
+                // - must not exist in `to_replace`
+                // - must be confirmed (per replacement policy Rule 2)
+                // - must pass a user-defined filter
+                !to_replace.contains(&txo.outpoint.txid)
+                    && txo.chain_position.is_confirmed()
+                    && (params.utxo_filter.0)(txo)
             })
             .flat_map(|txo| self.plan_input(&txo, &assets))
             .collect()
