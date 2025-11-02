@@ -315,6 +315,55 @@ fn test_replace_by_fee() {
 }
 
 #[test]
+fn test_create_psbt_utxo_filter() {
+    let (desc, change_desc) = get_test_tr_single_sig_xprv_and_change_desc();
+    let mut wallet = Wallet::create(desc, change_desc)
+        .network(Network::Regtest)
+        .create_wallet_no_persist()
+        .unwrap();
+
+    let anchor = ConfirmationBlockTime {
+        block_id: BlockId {
+            height: 1000,
+            hash: Hash::hash(b"1000"),
+        },
+        confirmation_time: 1234567,
+    };
+    insert_checkpoint(&mut wallet, anchor.block_id);
+
+    for value in [200, 300, 600, 1000] {
+        let _ = receive_output(
+            &mut wallet,
+            Amount::from_sat(value),
+            ReceiveTo::Block(anchor),
+        );
+    }
+    assert_eq!(wallet.list_unspent().count(), 4);
+    assert_eq!(wallet.balance().total().to_sat(), 2100);
+
+    let mut params = PsbtParams::default();
+    params.feerate(FeeRate::ZERO);
+    // Avoid selection of dust utxos
+    params.filter_utxos(|txo| {
+        let min_non_dust = txo.txout.script_pubkey.minimal_non_dust(); // 330
+        txo.txout.value >= min_non_dust
+    });
+    params.change_descriptor({
+        let internal_desc = wallet.public_descriptor(KeychainKind::Internal);
+        internal_desc.at_derivation_index(0).unwrap()
+    });
+    params.drain_wallet();
+    let (psbt, _) = wallet.create_psbt(params).unwrap();
+    assert_eq!(psbt.unsigned_tx.input.len(), 2);
+    assert_eq!(psbt.unsigned_tx.output.len(), 1);
+    assert_eq!(
+        psbt.unsigned_tx.output[0].value.to_sat(),
+        1600,
+        "We should have selected 2 non-dust utxos"
+    );
+}
+
+#[test]
 #[should_panic(expected = "InputIndexOutOfRange")]
 fn test_psbt_malformed_psbt_input_legacy() {
     let psbt_bip = Psbt::from_str(PSBT_STR).unwrap();
