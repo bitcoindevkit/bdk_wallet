@@ -1754,13 +1754,14 @@ impl Wallet {
             .drain(..)
             .map(|txin| -> Result<_, BuildFeeBumpError> {
                 let outpoint = txin.previous_output;
-                let prev_txout = tx_graph.get_txout(outpoint).cloned();
-                match prev_txout.as_ref().and_then(|prev_txout| {
-                    txout_index.index_of_spk(prev_txout.script_pubkey.clone())
-                }) {
+                let prev_txout = tx_graph
+                    .get_txout(outpoint)
+                    .cloned()
+                    .ok_or(BuildFeeBumpError::UnknownUtxo(outpoint))?;
+                match txout_index.index_of_spk(prev_txout.script_pubkey.clone()) {
                     // This is a local utxo.
                     Some(&(keychain, derivation_index)) => {
-                        let txout = prev_txout.ok_or(BuildFeeBumpError::UnknownUtxo(outpoint))?;
+                        let txout = prev_txout;
                         let chain_position = chain_positions
                             .get(&outpoint.txid)
                             .cloned()
@@ -1790,9 +1791,9 @@ impl Wallet {
                             sequence: txin.sequence,
                             psbt_input: Box::new(psbt::Input {
                                 witness_utxo: prev_txout
-                                    .as_ref()
-                                    .and_then(|txout| txout.script_pubkey.witness_version())
-                                    .and(prev_txout),
+                                    .script_pubkey
+                                    .witness_version()
+                                    .map(|_| prev_txout),
                                 non_witness_utxo: tx_graph
                                     .get_tx(outpoint.txid)
                                     .map(|tx| tx.as_ref().clone()),
