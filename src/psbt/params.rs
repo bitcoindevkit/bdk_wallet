@@ -270,6 +270,15 @@ impl PsbtParams {
         self
     }
 
+    /// Drain wallet.
+    ///
+    /// This will force selection of the available input candidates. As such, the option is only
+    /// applied to inputs that meet the spending criteria.
+    pub fn drain_wallet(&mut self) -> &mut Self {
+        self.drain_wallet = true;
+        self
+    }
+
     /// Fill in the global [`Psbt::xpub`]s field with the extended keys of the wallet's
     /// descriptors.
     ///
