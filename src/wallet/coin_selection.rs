@@ -20,86 +20,85 @@
 //!
 //! [`TxBuilder`]: super::tx_builder::TxBuilder
 //! [`coin_selection`]: super::tx_builder::TxBuilder::coin_selection
-//!
-//! ## Example
-//!
-//! ```
-//! # use std::str::FromStr;
-//! # use bitcoin::*;
-//! # use bdk_wallet::{self, ChangeSet, coin_selection::*, coin_selection};
-//! # use bdk_wallet::error::CreateTxError;
-//! # use bdk_wallet::*;
-//! # use bdk_wallet::coin_selection::decide_change;
-//! # use anyhow::Error;
-//! # use rand_core::RngCore;
-//! #[derive(Debug)]
-//! struct AlwaysSpendEverything;
-//!
-//! impl CoinSelectionAlgorithm for AlwaysSpendEverything {
-//!     fn coin_select<R: RngCore>(
-//!         &self,
-//!         required_utxos: Vec<WeightedUtxo>,
-//!         optional_utxos: Vec<WeightedUtxo>,
-//!         fee_rate: FeeRate,
-//!         target_amount: Amount,
-//!         drain_script: &Script,
-//!         rand: &mut R,
-//!     ) -> Result<CoinSelectionResult, coin_selection::InsufficientFunds> {
-//!         let mut selected_amount = Amount::ZERO;
-//!         let mut additional_weight = Weight::ZERO;
-//!         let all_utxos_selected = required_utxos
-//!             .into_iter()
-//!             .chain(optional_utxos)
-//!             .scan(
-//!                 (&mut selected_amount, &mut additional_weight),
-//!                 |(selected_amount, additional_weight), weighted_utxo| {
-//!                     **selected_amount += weighted_utxo.utxo.txout().value;
-//!                     **additional_weight += TxIn::default()
-//!                         .segwit_weight()
-//!                         .checked_add(weighted_utxo.satisfaction_weight)
-//!                         .expect("`Weight` addition should not cause an integer overflow");
-//!                     Some(weighted_utxo.utxo)
-//!                 },
-//!             )
-//!             .collect::<Vec<_>>();
-//!         let additional_fees = fee_rate * additional_weight;
-//!         let amount_needed_with_fees = additional_fees + target_amount;
-//!         if selected_amount < amount_needed_with_fees {
-//!             return Err(coin_selection::InsufficientFunds {
-//!                 needed: amount_needed_with_fees,
-//!                 available: selected_amount,
-//!             });
-//!         }
-//!
-//!         let remaining_amount = selected_amount - amount_needed_with_fees;
-//!
-//!         let excess = decide_change(remaining_amount, fee_rate, drain_script);
-//!
-//!         Ok(CoinSelectionResult {
-//!             selected: all_utxos_selected,
-//!             fee_amount: additional_fees,
-//!             excess,
-//!         })
-//!     }
-//! }
-//!
-//! # let mut wallet = doctest_wallet!();
-//! // create wallet, sync, ...
-//!
-//! let to_address = Address::from_str("2N4eQYCbKUHCCTUjBJeHcJp9ok6J2GZsTDt")
-//!     .unwrap()
-//!     .require_network(Network::Testnet)
-//!     .unwrap();
-//! let psbt = {
-//!     let mut builder = wallet.build_tx().coin_selection(AlwaysSpendEverything);
-//!     builder.add_recipient(to_address.script_pubkey(), Amount::from_sat(50_000));
-//!     builder.finish()?
-//! };
-//!
-//! // inspect, sign, broadcast, ...
-//!
-//! # Ok::<(), anyhow::Error>(())
-//! ```
+// //! ## Example
+// //!
+// //! ```
+// //! # use std::str::FromStr;
+// //! # use bitcoin::*;
+// //! # use bdk_wallet::{self, ChangeSet, coin_selection::*, coin_selection};
+// //! # use bdk_wallet::error::CreateTxError;
+// //! # use bdk_wallet::*;
+// //! # use bdk_wallet::coin_selection::decide_change;
+// //! # use anyhow::Error;
+// //! # use rand_core::RngCore;
+// //! #[derive(Debug)]
+// //! struct AlwaysSpendEverything;
+// //!
+// //! impl CoinSelectionAlgorithm for AlwaysSpendEverything {
+// //!     fn coin_select<R: RngCore>(
+// //!         &self,
+// //!         required_utxos: Vec<WeightedUtxo>,
+// //!         optional_utxos: Vec<WeightedUtxo>,
+// //!         fee_rate: FeeRate,
+// //!         target_amount: Amount,
+// //!         drain_script: &Script,
+// //!         rand: &mut R,
+// //!     ) -> Result<CoinSelectionResult, coin_selection::InsufficientFunds> {
+// //!         let mut selected_amount = Amount::ZERO;
+// //!         let mut additional_weight = Weight::ZERO;
+// //!         let all_utxos_selected = required_utxos
+// //!             .into_iter()
+// //!             .chain(optional_utxos)
+// //!             .scan(
+// //!                 (&mut selected_amount, &mut additional_weight),
+// //!                 |(selected_amount, additional_weight), weighted_utxo| {
+// //!                     **selected_amount += weighted_utxo.utxo.txout().value;
+// //!                     **additional_weight += TxIn::default()
+// //!                         .segwit_weight()
+// //!                         .checked_add(weighted_utxo.satisfaction_weight)
+// //!                         .expect("`Weight` addition should not cause an integer overflow");
+// //!                     Some(weighted_utxo.utxo)
+// //!                 },
+// //!             )
+// //!             .collect::<Vec<_>>();
+// //!         let additional_fees = fee_rate * additional_weight;
+// //!         let amount_needed_with_fees = additional_fees + target_amount;
+// //!         if selected_amount < amount_needed_with_fees {
+// //!             return Err(coin_selection::InsufficientFunds {
+// //!                 needed: amount_needed_with_fees,
+// //!                 available: selected_amount,
+// //!             });
+// //!         }
+// //!
+// //!         let remaining_amount = selected_amount - amount_needed_with_fees;
+// //!
+// //!         let excess = decide_change(remaining_amount, fee_rate, drain_script);
+// //!
+// //!         Ok(CoinSelectionResult {
+// //!             selected: all_utxos_selected,
+// //!             fee_amount: additional_fees,
+// //!             excess,
+// //!         })
+// //!     }
+// //! }
+// //!
+// //! # let mut wallet = doctest_wallet!();
+// //! // create wallet, sync, ...
+// //!
+// //! let to_address = Address::from_str("2N4eQYCbKUHCCTUjBJeHcJp9ok6J2GZsTDt")
+// //!     .unwrap()
+// //!     .require_network(Network::Testnet)
+// //!     .unwrap();
+// //! let psbt = {
+// //!     let mut builder = wallet.build_tx().coin_selection(AlwaysSpendEverything);
+// //!     builder.add_recipient(to_address.script_pubkey(), Amount::from_sat(50_000));
+// //!     builder.finish()?
+// //! };
+// //!
+// //! // inspect, sign, broadcast, ...
+// //!
+// //! # Ok::<(), anyhow::Error>(())
+// //! ```
 
 use crate::wallet::utils::IsDust;
 use crate::Utxo;
