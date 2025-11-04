@@ -36,8 +36,209 @@ use bdk_wallet::test_utils::insert_anchor;
 
 mod common;
 
+// ```
+// #[test]
+// fn check_balance() {
+//     let mut keyring = KeyRing::new(Network::Regtest, KeychainKind::External, "tr(tprv8ZgxMBicQKsPdWAHbugK2tjtVtRjKGixYVZUdL7xLHMgXZS6BFbFi1UDb1CHT25Z5PU1F9j7wGxwUiRhqz9E3nZRztikGUV6HoRDYcqPhM4/86'/1'/0'/0/*)").unwrap();
+//     keyring.add_descriptor(KeychainKind::Internal, "tr(tprv8ZgxMBicQKsPdWAHbugK2tjtVtRjKGixYVZUdL7xLHMgXZS6BFbFi1UDb1CHT25Z5PU1F9j7wGxwUiRhqz9E3nZRztikGUV6HoRDYcqPhM4/86'/1'/0'/5/*)", false);
+//     let mut wallet = Wallet::new(keyring);
+//     let receive_address = wallet
+//         .reveal_next_address(KeychainKind::External)
+//         .unwrap()
+//         .address;
+//     let internal_address = wallet
+//         .reveal_next_address(KeychainKind::Internal)
+//         .unwrap()
+//         .address;
+//     let sendto_address = Address::from_str("bcrt1q3qtze4ys45tgdvguj66zrk4fu6hq3a3v9pfly5")
+//         .unwrap()
+//         .require_network(Network::Regtest)
+//         .unwrap();
+
+//     let tx0 = Transaction {
+//         output: vec![TxOut {
+//             value: Amount::from_sat(76_000),
+//             script_pubkey: receive_address.script_pubkey(),
+//         }],
+//         ..new_tx(0)
+//     };
+
+//     // This should not add to trusted_pending
+//     let tx1 = Transaction {
+//         output: vec![TxOut {
+//             value: Amount::from_sat(10_000),
+//             script_pubkey: internal_address.script_pubkey(),
+//         }],
+//         ..new_tx(0)
+//     };
+
+//     let tx2 = Transaction {
+//         output: vec![TxOut {
+//             value: Amount::from_sat(5_000),
+//             script_pubkey: receive_address.script_pubkey(),
+//         }],
+//         ..new_tx(0)
+//     };
+
+//     let tx3 = Transaction {
+//         input: vec![TxIn {
+//             previous_output: OutPoint {
+//                 txid: tx0.compute_txid(),
+//                 vout: 0,
+//             },
+//             ..Default::default()
+//         }],
+//         output: vec![
+//             TxOut {
+//                 value: Amount::from_sat(50_000),
+//                 script_pubkey: internal_address.script_pubkey(),
+//             },
+//             TxOut {
+//                 value: Amount::from_sat(25_000),
+//                 script_pubkey: sendto_address.script_pubkey(),
+//             },
+//         ],
+//         ..new_tx(0)
+//     };
+
+//     // This should still be trusted_pending even though sending to external keychain.
+//     let tx4 = Transaction {
+//         input: vec![TxIn {
+//             previous_output: OutPoint {
+//                 txid: tx2.compute_txid(),
+//                 vout: 0,
+//             },
+//             ..Default::default()
+//         }],
+//         output: vec![TxOut {
+//             value: Amount::from_sat(4_000),
+//             script_pubkey: receive_address.script_pubkey(),
+//         }],
+//         ..new_tx(0)
+//     };
+
+//     insert_checkpoint(
+//         &mut wallet,
+//         BlockId {
+//             height: 1_000,
+//             hash: BlockHash::all_zeros(),
+//         },
+//     );
+//     insert_checkpoint(
+//         &mut wallet,
+//         BlockId {
+//             height: 2_000,
+//             hash: BlockHash::all_zeros(),
+//         },
+//     );
+
+//     insert_tx(&mut wallet, tx0.clone());
+//     insert_tx(&mut wallet, tx2.clone());
+//     insert_anchor(
+//         &mut wallet,
+//         tx0.compute_txid(),
+//         ConfirmationBlockTime {
+//             block_id: BlockId {
+//                 height: 1_000,
+//                 hash: BlockHash::all_zeros(),
+//             },
+//             confirmation_time: 100,
+//         },
+//     );
+
+//     insert_anchor(
+//         &mut wallet,
+//         tx2.compute_txid(),
+//         ConfirmationBlockTime {
+//             block_id: BlockId {
+//                 height: 1_000,
+//                 hash: BlockHash::all_zeros(),
+//             },
+//             confirmation_time: 100,
+//         },
+//     );
+
+//     insert_tx(&mut wallet, tx1.clone());
+//     insert_tx(&mut wallet, tx3.clone());
+//     insert_tx(&mut wallet, tx4.clone());
+//     insert_anchor(
+//         &mut wallet,
+//         tx3.compute_txid(),
+//         ConfirmationBlockTime {
+//             block_id: BlockId {
+//                 height: 2_000,
+//                 hash: BlockHash::all_zeros(),
+//             },
+//             confirmation_time: 200,
+//         },
+//     );
+
+//     assert_eq!(wallet.balance().confirmed.to_sat(), 50_000);
+//     assert_eq!(wallet.balance().untrusted_pending.to_sat(), 10_000);
+//     assert_eq!(wallet.balance().trusted_pending.to_sat(), 4_000);
+
+//     let min_3_conf_balance = wallet.balance_with_params_conf_threshold(
+//         CanonicalizationParams::default(),
+//         3,
+//         |outpoint, canon_txs| {
+//             let mut trusted = true;
+//             let canon_tx = canon_txs.get(&outpoint.txid).expect("oracle is infallible");
+//             for txin in &canon_tx.tx_node.tx.input {
+//                 trusted = trusted
+//                     && wallet
+//                         .index()
+//                         .outpoints()
+//                         .iter()
+//                         .any(|(_, item)| *item == txin.previous_output);
+//             }
+//             if canon_tx.tx_node.tx.input.is_empty() {
+//                 trusted = false;
+//             }
+//             trusted
+//         },
+//     );
+
+//     assert_eq!(min_3_conf_balance.confirmed.to_sat(), 0);
+//     assert_eq!(min_3_conf_balance.untrusted_pending.to_sat(), 10_000);
+//     assert_eq!(min_3_conf_balance.trusted_pending.to_sat(), 54_000);
+
+//     insert_checkpoint(
+//         &mut wallet,
+//         BlockId {
+//             height: 2_002,
+//             hash: BlockHash::all_zeros(),
+//         },
+//     );
+
+//     let min_3_conf_balance = wallet.balance_with_params_conf_threshold(
+//         CanonicalizationParams::default(),
+//         3,
+//         |outpoint, canon_txs| {
+//             let mut trusted = true;
+//             let canon_tx = canon_txs.get(&outpoint.txid).expect("oracle is infallible");
+//             for txin in &canon_tx.tx_node.tx.input {
+//                 trusted = trusted
+//                     && wallet
+//                         .index()
+//                         .outpoints()
+//                         .iter()
+//                         .any(|(_, item)| *item == txin.previous_output);
+//             }
+//             if canon_tx.tx_node.tx.input.is_empty() {
+//                 trusted = false;
+//             }
+//             trusted
+//         },
+//     );
+
+//     assert_eq!(min_3_conf_balance.confirmed.to_sat(), 50_000);
+//     assert_eq!(min_3_conf_balance.untrusted_pending.to_sat(), 10_000);
+//     assert_eq!(min_3_conf_balance.trusted_pending.to_sat(), 4_000);
+// }
+// ```
+
 #[test]
-fn check_balance() {
+fn check_balance_two() {
     let mut keyring = KeyRing::new(Network::Regtest, KeychainKind::External, "tr(tprv8ZgxMBicQKsPdWAHbugK2tjtVtRjKGixYVZUdL7xLHMgXZS6BFbFi1UDb1CHT25Z5PU1F9j7wGxwUiRhqz9E3nZRztikGUV6HoRDYcqPhM4/86'/1'/0'/0/*)").unwrap();
     keyring.add_descriptor(KeychainKind::Internal, "tr(tprv8ZgxMBicQKsPdWAHbugK2tjtVtRjKGixYVZUdL7xLHMgXZS6BFbFi1UDb1CHT25Z5PU1F9j7wGxwUiRhqz9E3nZRztikGUV6HoRDYcqPhM4/86'/1'/0'/5/*)", false);
     let mut wallet = Wallet::new(keyring);
@@ -62,6 +263,7 @@ fn check_balance() {
         ..new_tx(0)
     };
 
+    // tx1 is a receive to internal and is in mempool
     // This should not add to trusted_pending
     let tx1 = Transaction {
         output: vec![TxOut {
@@ -79,6 +281,7 @@ fn check_balance() {
         ..new_tx(0)
     };
 
+    // tx3 spends tx0 and is confirmed
     let tx3 = Transaction {
         input: vec![TxIn {
             previous_output: OutPoint {
@@ -100,6 +303,7 @@ fn check_balance() {
         ..new_tx(0)
     };
 
+    // tx4 spends tx2 and is in mempool
     // This should still be trusted_pending even though sending to external keychain.
     let tx4 = Transaction {
         input: vec![TxIn {
@@ -178,23 +382,9 @@ fn check_balance() {
 
     let min_3_conf_balance = wallet.balance_with_params_conf_threshold(
         CanonicalizationParams::default(),
+        wallet.index().outpoints().iter().cloned(),
         3,
-        |outpoint, canon_txs| {
-            let mut trusted = true;
-            let canon_tx = canon_txs.get(&outpoint.txid).expect("oracle is infallible");
-            for txin in &canon_tx.tx_node.tx.input {
-                trusted = trusted
-                    && wallet
-                        .index()
-                        .outpoints()
-                        .iter()
-                        .any(|(_, item)| *item == txin.previous_output);
-            }
-            if canon_tx.tx_node.tx.input.is_empty() {
-                trusted = false;
-            }
-            trusted
-        },
+        |txo| wallet.is_tx_trusted(txo.outpoint.txid),
     );
 
     assert_eq!(min_3_conf_balance.confirmed.to_sat(), 0);
@@ -211,23 +401,9 @@ fn check_balance() {
 
     let min_3_conf_balance = wallet.balance_with_params_conf_threshold(
         CanonicalizationParams::default(),
+        wallet.index().outpoints().iter().cloned(),
         3,
-        |outpoint, canon_txs| {
-            let mut trusted = true;
-            let canon_tx = canon_txs.get(&outpoint.txid).expect("oracle is infallible");
-            for txin in &canon_tx.tx_node.tx.input {
-                trusted = trusted
-                    && wallet
-                        .index()
-                        .outpoints()
-                        .iter()
-                        .any(|(_, item)| *item == txin.previous_output);
-            }
-            if canon_tx.tx_node.tx.input.is_empty() {
-                trusted = false;
-            }
-            trusted
-        },
+        |txo| wallet.is_tx_trusted(txo.outpoint.txid),
     );
 
     assert_eq!(min_3_conf_balance.confirmed.to_sat(), 50_000);
