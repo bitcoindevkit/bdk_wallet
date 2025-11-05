@@ -7,7 +7,9 @@ use bdk_chain::DescriptorId;
 use bdk_chain::{
     keychain_txout::DEFAULT_LOOKAHEAD, ChainPosition, ConfirmationBlockTime, DescriptorExt,
 };
+use bdk_wallet::coin_selection::InsufficientFunds;
 use bdk_wallet::descriptor::IntoWalletDescriptor;
+use bdk_wallet::error::CreateTxError;
 use bdk_wallet::test_utils::*;
 use bdk_wallet::{
     ChangeSet, KeychainKind, LoadError, LoadMismatch, LoadWithPersistError, Wallet, WalletPersister,
@@ -420,7 +422,7 @@ fn single_descriptor_wallet_persist_and_recover() {
     assert_matches!(
         err,
         Err(LoadWithPersistError::InvalidChangeSet(LoadError::Mismatch(LoadMismatch::Descriptor { keychain, loaded, expected })))
-        if keychain == KeychainKind::Internal && loaded.is_none() && expected == Some(exp_desc),
+        if keychain == KeychainKind::Internal && loaded.is_none() && expected == Some(Box::new(exp_desc)),
         "single descriptor wallet should refuse change descriptor param"
     );
 }
@@ -463,4 +465,88 @@ fn network_is_persisted() {
     persist_network::<bdk_chain::rusqlite::Connection, _>("store.sqlite", |path| {
         Ok(bdk_chain::rusqlite::Connection::open(path)?)
     });
+}
+
+#[test]
+fn test_lock_outpoint_persist() -> anyhow::Result<()> {
+    use bdk_chain::rusqlite;
+    let mut conn = rusqlite::Connection::open_in_memory()?;
+
+    let (desc, change_desc) = get_test_tr_single_sig_xprv_and_change_desc();
+    let mut wallet = Wallet::create(desc, change_desc)
+        .network(Network::Signet)
+        .create_wallet(&mut conn)?;
+
+    // Receive coins.
+    let mut outpoints = vec![];
+    for i in 0..3 {
+        let op = receive_output(&mut wallet, Amount::from_sat(10_000), ReceiveTo::Mempool(i));
+        outpoints.push(op);
+    }
+
+    // Test: lock outpoints
+    let unspent = wallet.list_unspent().collect::<Vec<_>>();
+    assert!(!unspent.is_empty());
+    for utxo in unspent {
+        wallet.lock_outpoint(utxo.outpoint);
+        assert!(
+            wallet.is_outpoint_locked(utxo.outpoint),
+            "Expect outpoint is locked"
+        );
+    }
+    wallet.persist(&mut conn)?;
+
+    // Test: The lock value is persistent
+    {
+        wallet = Wallet::load()
+            .load_wallet(&mut conn)?
+            .expect("wallet is persisted");
+
+        let unspent = wallet.list_unspent().collect::<Vec<_>>();
+        assert!(!unspent.is_empty());
+        for utxo in unspent {
+            assert!(
+                wallet.is_outpoint_locked(utxo.outpoint),
+                "Expect recover lock value"
+            );
+        }
+        let locked_unspent = wallet.list_locked_unspent().collect::<Vec<_>>();
+        assert_eq!(locked_unspent, outpoints);
+
+        // Test: Locked outpoints are excluded from coin selection
+        let addr = wallet.next_unused_address(KeychainKind::External).address;
+        let mut tx_builder = wallet.build_tx();
+        tx_builder.add_recipient(addr, Amount::from_sat(10_000));
+        let res = tx_builder.finish();
+        assert!(
+            matches!(
+                res,
+                Err(CreateTxError::CoinSelection(InsufficientFunds {
+                    available: Amount::ZERO,
+                    ..
+                })),
+            ),
+            "Locked outpoints should not be selected",
+        );
+    }
+
+    // Test: Unlock outpoints
+    {
+        wallet = Wallet::load()
+            .load_wallet(&mut conn)?
+            .expect("wallet is persisted");
+
+        let unspent = wallet.list_unspent().collect::<Vec<_>>();
+        for utxo in &unspent {
+            wallet.unlock_outpoint(utxo.outpoint);
+            assert!(
+                !wallet.is_outpoint_locked(utxo.outpoint),
+                "Expect outpoint is not locked"
+            );
+        }
+        assert!(wallet.list_locked_outpoints().next().is_none());
+        assert!(wallet.list_locked_unspent().next().is_none());
+    }
+
+    Ok(())
 }
