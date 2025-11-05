@@ -9,6 +9,7 @@ use crate::{
         keychain_txout::{self},
         local_chain, tx_graph, ConfirmationBlockTime, DescriptorExt, Merge, SpkIterator,
     },
+    locked_outpoints,
     miniscript::descriptor::{Descriptor, DescriptorPublicKey},
     ChangeSet, WalletPersister,
 };
@@ -113,11 +114,13 @@ where
         confirmation_time: 1755317160,
     };
 
+    let outpoint = OutPoint::new(hash!("Rust"), 0);
+
     let tx_graph_changeset = tx_graph::ChangeSet::<ConfirmationBlockTime> {
         txs: [tx1.clone()].into(),
         txouts: [
             (
-                OutPoint::new(hash!("Rust"), 0),
+                outpoint,
                 TxOut {
                     value: Amount::from_sat(1300),
                     script_pubkey: spk_at_index(&descriptor, 4),
@@ -157,6 +160,10 @@ where
         .into(),
     };
 
+    let locked_outpoints_changeset = locked_outpoints::ChangeSet {
+        outpoints: [(outpoint, true)].into(),
+    };
+
     let mut changeset = ChangeSet {
         descriptor: Some(descriptor.clone()),
         change_descriptor: Some(change_descriptor.clone()),
@@ -164,7 +171,7 @@ where
         local_chain: local_chain_changeset,
         tx_graph: tx_graph_changeset,
         indexer: keychain_txout_changeset,
-        locked_outpoints: Default::default(),
+        locked_outpoints: locked_outpoints_changeset,
     };
 
     // persist and load
@@ -185,10 +192,12 @@ where
         confirmation_time: 1755317760,
     };
 
+    let outpoint = OutPoint::new(hash!("Bitcoin_fixes_things"), 1);
+
     let tx_graph_changeset = tx_graph::ChangeSet::<ConfirmationBlockTime> {
         txs: [tx2.clone()].into(),
         txouts: [(
-            OutPoint::new(hash!("Bitcoin_fixes_things"), 0),
+            outpoint,
             TxOut {
                 value: Amount::from_sat(10000),
                 script_pubkey: spk_at_index(&descriptor, 21),
@@ -210,6 +219,10 @@ where
         .into(),
     };
 
+    let locked_outpoints_changeset = locked_outpoints::ChangeSet {
+        outpoints: [(outpoint, true)].into(),
+    };
+
     let changeset_new = ChangeSet {
         descriptor: None,
         change_descriptor: None,
@@ -217,7 +230,7 @@ where
         local_chain: local_chain_changeset,
         tx_graph: tx_graph_changeset,
         indexer: keychain_txout_changeset,
-        locked_outpoints: Default::default(),
+        locked_outpoints: locked_outpoints_changeset,
     };
 
     // persist, load and check if same as merged
