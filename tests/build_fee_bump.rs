@@ -8,8 +8,8 @@ use bdk_wallet::psbt::PsbtUtils;
 use bdk_wallet::test_utils::*;
 use bdk_wallet::KeychainKind;
 use bitcoin::{
-    absolute, transaction, Address, Amount, FeeRate, OutPoint, ScriptBuf, Sequence, Transaction,
-    TxOut,
+    absolute, hashes::Hash, psbt, transaction, Address, Amount, FeeRate, OutPoint, ScriptBuf,
+    Sequence, Transaction, TxOut, Weight,
 };
 
 mod common;
@@ -943,4 +943,52 @@ fn test_legacy_bump_fee_absolute_add_input() {
     );
 
     assert_eq!(fee, Amount::from_sat(6_000));
+}
+
+// Test that we can fee-bump a tx containing a foreign (p2a) utxo.
+#[test]
+fn test_bump_fee_pay_to_anchor_foreign_utxo() {
+    let (mut wallet, _) = get_funded_wallet_wpkh();
+    let drain_spk = wallet
+        .next_unused_address(KeychainKind::External)
+        .script_pubkey();
+
+    let witness_utxo = TxOut {
+        value: Amount::ONE_SAT,
+        script_pubkey: bitcoin::ScriptBuf::new_p2a(),
+    };
+    // Remember to include this as a "floating" txout in the wallet.
+    let outpoint = OutPoint::new(Hash::hash(b"prev"), 1);
+    wallet.insert_txout(outpoint, witness_utxo.clone());
+    let satisfaction_weight = Weight::from_wu(71);
+    let psbt_input = psbt::Input {
+        witness_utxo: Some(witness_utxo),
+        ..Default::default()
+    };
+
+    let mut tx_builder = wallet.build_tx();
+    tx_builder
+        .add_foreign_utxo(outpoint, psbt_input, satisfaction_weight)
+        .unwrap()
+        .only_witness_utxo()
+        .fee_rate(FeeRate::from_sat_per_vb_unchecked(2))
+        .drain_to(drain_spk.clone());
+    let psbt = tx_builder.finish().unwrap();
+    let tx = psbt.unsigned_tx.clone();
+    assert!(tx.input.iter().any(|txin| txin.previous_output == outpoint));
+    let txid1 = tx.compute_txid();
+    wallet.apply_unconfirmed_txs([(tx, 123456)]);
+
+    // Now build fee bump.
+    let mut tx_builder = wallet
+        .build_fee_bump(txid1)
+        .expect("`build_fee_bump` should succeed");
+    tx_builder
+        .set_recipients(vec![])
+        .drain_to(drain_spk)
+        .only_witness_utxo()
+        .fee_rate(FeeRate::from_sat_per_vb_unchecked(5));
+    let psbt = tx_builder.finish().unwrap();
+    let tx = &psbt.unsigned_tx;
+    assert!(tx.input.iter().any(|txin| txin.previous_output == outpoint));
 }
