@@ -19,6 +19,12 @@ use bitcoin::{psbt, Weight};
 
 use serde::{Deserialize, Serialize};
 
+#[cfg(feature = "rusqlite")]
+use chain::rusqlite::{
+    self,
+    types::{FromSql, FromSqlResult, ToSql, ToSqlOutput, ValueRef},
+};
+
 /// Types of keychains
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd)]
 pub enum KeychainKind {
@@ -53,6 +59,27 @@ impl AsRef<[u8]> for KeychainKind {
             KeychainKind::External => b"e",
             KeychainKind::Internal => b"i",
         }
+    }
+}
+
+#[cfg(feature = "rusqlite")]
+impl FromSql for KeychainKind {
+    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
+        Ok(match value.as_str()? {
+            "0" => KeychainKind::External,
+            "1" => KeychainKind::Internal,
+            _ => panic!("KeychainKind cannot be anything other than External(0) and Internal(1)"),
+        })
+    }
+}
+
+#[cfg(feature = "rusqlite")]
+impl ToSql for KeychainKind {
+    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
+        Ok(match *self {
+            KeychainKind::External => "0".into(),
+            KeychainKind::Internal => "1".into(),
+        })
     }
 }
 
