@@ -19,9 +19,6 @@ use chain::{
     Impl,
 };
 
-#[cfg(feature = "rusqlite")]
-use crate::CanBePersisted;
-
 /// A change set for [`Wallet`]
 ///
 /// ## Definition
@@ -164,7 +161,7 @@ where
 #[cfg(feature = "rusqlite")]
 impl<K> ChangeSet<K>
 where
-    K: Ord + Clone + CanBePersisted,
+    K: Ord + Clone + FromSql + ToSql,
 {
     /// Initialize sqlite tables for wallet tables.
     pub fn init_sqlite_tables(db_tx: &chain::rusqlite::Transaction) -> chain::rusqlite::Result<()> {

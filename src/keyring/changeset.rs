@@ -48,17 +48,14 @@ impl<K: Ord> Merge for ChangeSet<K> {
 
 #[cfg(feature = "rusqlite")]
 use chain::{
-    rusqlite::{self, OptionalExtension},
+    rusqlite::{self, types::FromSql, OptionalExtension, ToSql},
     Impl,
 };
 
 #[cfg(feature = "rusqlite")]
-use crate::CanBePersisted;
-
-#[cfg(feature = "rusqlite")]
 impl<K> ChangeSet<K>
 where
-    K: Ord + Clone + CanBePersisted,
+    K: Ord + Clone + ToSql + FromSql,
 {
     /// Schema name for `KeyRing`
     pub const SCHEMA_NAME: &str = "bdk_keyring";
@@ -114,15 +111,14 @@ where
 
         let rows = descriptor_stmt.query_map([], |row| {
             Ok((
-                row.get::<_, K::Persistable>("keychain")?,
+                row.get::<_, K>("keychain")?,
                 row.get::<_, Impl<Descriptor<DescriptorPublicKey>>>("descriptor")?,
                 row.get::<_, u8>("is_default")?,
             ))
         })?;
 
         for row in rows {
-            let (keychain_persisted, Impl(descriptor), is_default) = row?;
-            let keychain = K::from_persistable(keychain_persisted);
+            let (keychain, Impl(descriptor), is_default) = row?;
             changeset.descriptors.insert(keychain.clone(), descriptor);
 
             if is_default == 1 {
@@ -156,7 +152,7 @@ where
 
         for (keychain, desc) in &self.descriptors {
             descriptor_stmt.execute(named_params! {
-                ":keychain": keychain.clone().to_persistable(),
+                ":keychain": keychain.clone(),
                 ":desc": Impl(desc.clone()),
                 ":is_default": 0,
             })?;
@@ -174,8 +170,7 @@ where
 
         if let Some(keychain) = &self.default_keychain {
             remove_old_default_stmt.execute(())?;
-            add_default_stmt
-                .execute(named_params! { ":keychain": keychain.clone().to_persistable(),})?;
+            add_default_stmt.execute(named_params! { ":keychain": keychain.clone(),})?;
         }
 
         Ok(())

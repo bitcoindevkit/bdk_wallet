@@ -1,7 +1,7 @@
+use bdk_wallet::chain::DescriptorExt;
 use bdk_wallet::descriptor::DescriptorError;
-use bdk_wallet::keyring::KeyRing;
+use bdk_wallet::keyring::{self, KeyRing};
 use bdk_wallet::KeychainKind;
-use bdk_wallet::{chain::DescriptorExt, keyring};
 use bitcoin::secp256k1::Secp256k1;
 use bitcoin::Network;
 use miniscript::{Descriptor, DescriptorPublicKey};
@@ -101,40 +101,49 @@ fn duplicate_desc_keychain() {
 
 #[test]
 fn test_persist() {
-    use bdk_chain::{rusqlite, DescriptorId};
+    use bdk_chain::rusqlite;
+    use bdk_wallet::KeychainKind;
     use keyring::ChangeSet;
     use tempfile::tempdir;
-    let desc1 = get_descriptor(DESC_1);
-    let did = desc1.descriptor_id();
-    let mut keyring = KeyRing::new(Network::Regtest, did, desc1.clone()).unwrap();
-    let changeset = keyring::changeset::ChangeSet {
-        network: Some(Network::Regtest),
-        descriptors: [(did, desc1)].into(),
-        default_keychain: Some(did),
-    };
     let dir = tempdir().unwrap();
     let file_path = dir.path().join(".bdk_example_keyring.sqlite");
+
+    // create a keyring and persist it
+    let desc1 = get_descriptor(DESC_1);
+    let keychain1 = KeychainKind::External;
+    let mut keyring = KeyRing::new(Network::Regtest, keychain1, desc1.clone()).unwrap();
+    let changeset = keyring::changeset::ChangeSet {
+        network: Some(Network::Regtest),
+        descriptors: [(keychain1, desc1)].into(),
+        default_keychain: Some(keychain1),
+    };
+
     let mut conn = rusqlite::Connection::open(file_path).unwrap();
     let db_tx = conn.transaction().unwrap();
-    keyring::changeset::ChangeSet::<DescriptorId>::init_sqlite_tables(&db_tx).unwrap();
+
+    keyring::changeset::ChangeSet::<KeychainKind>::init_sqlite_tables(&db_tx).unwrap();
     changeset.persist_to_sqlite(&db_tx).unwrap();
     db_tx.commit().unwrap();
+
+    // add a descriptor to the keyring and persist again
     let desc2 = get_descriptor("tr(tprv8ZgxMBicQKsPdWAHbugK2tjtVtRjKGixYVZUdL7xLHMgXZS6BFbFi1UDb1CHT25Z5PU1F9j7wGxwUiRhqz9E3nZRztikGUV6HoRDYcqPhM4/86'/1'/0'/1/*)");
-    let changeset2 = keyring
-        .add_descriptor(desc2.descriptor_id(), desc2, true)
-        .unwrap();
+    let keychain2 = KeychainKind::Internal;
+    let changeset2 = keyring.add_descriptor(keychain2, desc2, true).unwrap();
+
     let db_tx = conn.transaction().unwrap();
     changeset2.persist_to_sqlite(&db_tx).unwrap();
     db_tx.commit().unwrap();
+
     let db_tx = conn.transaction().unwrap();
     let keyring_read = KeyRing::from_changeset(
-        ChangeSet::<DescriptorId>::from_sqlite(&db_tx).unwrap(),
+        ChangeSet::<KeychainKind>::from_sqlite(&db_tx).unwrap(),
         None,
         [].into(),
         None,
     )
     .unwrap()
     .unwrap();
+
     assert_eq!(keyring.list_keychains(), keyring_read.list_keychains());
     assert_eq!(keyring.network(), keyring_read.network());
     assert_eq!(keyring.default_keychain(), keyring_read.default_keychain());

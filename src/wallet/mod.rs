@@ -311,28 +311,6 @@ impl<K> From<crate::keyring::error::LoadError<K>> for LoadError<K> {
     }
 }
 
-/// Type implementing this trait can be persisted by the Sqlite backend
-#[cfg(feature = "rusqlite")]
-pub trait CanBePersisted: Clone {
-    /// The type implementing `FromSql` and `ToSql` to which our original type can be converted.
-    type Persistable: FromSql + ToSql;
-    /// converts to [`Self::Persistable`] type
-    fn to_persistable(self) -> Self::Persistable;
-    /// recover [`Self`] from [`Self::Persistable`]
-    fn from_persistable(persisted: Self::Persistable) -> Self;
-}
-
-#[cfg(feature = "rusqlite")]
-impl CanBePersisted for DescriptorId {
-    type Persistable = Impl<DescriptorId>;
-    fn to_persistable(self) -> Impl<DescriptorId> {
-        Impl(self)
-    }
-    fn from_persistable(persisted: Impl<DescriptorId>) -> DescriptorId {
-        persisted.0
-    }
-}
-
 /// An error that may occur when applying a block to [`Wallet`].
 #[derive(Debug)]
 pub enum ApplyBlockError {
@@ -676,7 +654,7 @@ where
 #[cfg(feature = "rusqlite")]
 impl<K> Wallet<K>
 where
-    K: Ord + Clone + Debug + CanBePersisted,
+    K: Ord + Clone + Debug + FromSql + ToSql,
 {
     /// Load a wallet from SQLite.
     pub fn from_sqlite(

@@ -83,20 +83,6 @@ impl ToSql for KeychainKind {
     }
 }
 
-#[cfg(feature = "rusqlite")]
-use crate::CanBePersisted;
-
-#[cfg(feature = "rusqlite")]
-impl CanBePersisted for KeychainKind {
-    type Persistable = KeychainKind;
-    fn to_persistable(self) -> KeychainKind {
-        self
-    }
-    fn from_persistable(persisted: KeychainKind) -> KeychainKind {
-        persisted
-    }
-}
-
 /// An unspent output owned by a [`Wallet`].
 ///
 /// [`Wallet`]: crate::Wallet
