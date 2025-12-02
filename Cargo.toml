@@ -24,6 +24,8 @@ bdk_chain = { version = "0.23.2", features = ["miniscript", "serde"], default-fe
 bitcoin = { version = "0.32.8", features = ["serde", "base64"], default-features = false }
 miniscript = { version = "12.3.5", features = ["serde"], default-features = false }
 rand_core = { version = "0.6.4" }
+bdk_coin_select = { version = "0.4.1" }
+bdk_tx = { version = "0.1.0" }
 serde_json = { version = "1" }
 serde = { version = "1", features = ["derive"] }
 
