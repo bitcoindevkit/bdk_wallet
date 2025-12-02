@@ -27,6 +27,7 @@ pub extern crate serde;
 pub extern crate serde_json;
 
 pub mod descriptor;
+pub mod keyring;
 pub mod keys;
 pub mod psbt;
 #[cfg(feature = "test-utils")]
