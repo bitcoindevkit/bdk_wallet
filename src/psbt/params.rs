@@ -500,6 +500,46 @@ mod test {
     use bitcoin::hashes::Hash;
     use bitcoin::{TxIn, TxOut};
 
+    // Test that `replace_txs` maintains the expected params.
+    #[test]
+    fn test_replace_params() {
+        use crate::KeychainKind::Internal;
+        let (wallet, txid0) = crate::test_utils::get_funded_wallet_wpkh();
+        let outpoint_0 = OutPoint::new(txid0, 0);
+        let change_desc = wallet
+            .public_descriptor(Internal)
+            .at_derivation_index(0)
+            .unwrap();
+
+        // Create psbt
+        let mut params = PsbtParams::default();
+        params.change_descriptor(change_desc);
+        params.drain_wallet();
+        let (psbt, _) = wallet.create_psbt(params).unwrap();
+        let tx = psbt.unsigned_tx;
+        let txid1 = tx.compute_txid();
+
+        // Replace tx
+        let mut params = PsbtParams::default().replace_txs(&[Arc::new(tx)]);
+        params.add_recipients([(ScriptBuf::new_op_return([0xb1, 0x0c]), Amount::ZERO)]);
+        params.feerate(FeeRate::from_sat_per_vb_unchecked(8));
+
+        // Get utxos
+        assert_eq!(params.utxos(), &[outpoint_0].into());
+
+        assert_eq!(params.replace, [txid1].into());
+        assert_eq!(params.feerate, FeeRate::from_sat_per_vb_unchecked(8));
+        assert_eq!(
+            params.recipients,
+            [(ScriptBuf::new_op_return([0xb1, 0x0c]), Amount::ZERO)]
+        );
+
+        // Remove utxo
+        params.remove_utxo(&outpoint_0);
+        assert!(params.utxos().is_empty());
+        assert!(params.utxos.is_empty());
+    }
+
     #[test]
     fn test_sanitize_rbf_set() {
         // To replace the set { [A, B], [C] }, where B is a descendant of A:

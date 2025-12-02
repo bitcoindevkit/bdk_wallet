@@ -1,10 +1,478 @@
-use bdk_wallet::bitcoin::{Amount, FeeRate, Psbt, TxIn};
+use bdk_chain::{BlockId, ConfirmationBlockTime};
+use bdk_wallet::bitcoin;
 use bdk_wallet::test_utils::*;
-use bdk_wallet::{psbt, KeychainKind, SignOptions};
+use bdk_wallet::{error::CreatePsbtError, psbt, KeychainKind, PsbtParams, SignOptions, Wallet};
+use bitcoin::{
+    absolute, hashes::Hash, secp256k1, Address, Amount, FeeRate, Network, OutPoint, Psbt,
+    ScriptBuf, Transaction, TxIn, TxOut,
+};
 use core::str::FromStr;
+use miniscript::plan::Assets;
+use std::sync::Arc;
 
 // from bip 174
 const PSBT_STR: &str = "cHNidP8BAKACAAAAAqsJSaCMWvfEm4IS9Bfi8Vqz9cM9zxU4IagTn4d6W3vkAAAAAAD+////qwlJoIxa98SbghL0F+LxWrP1wz3PFTghqBOfh3pbe+QBAAAAAP7///8CYDvqCwAAAAAZdqkUdopAu9dAy+gdmI5x3ipNXHE5ax2IrI4kAAAAAAAAGXapFG9GILVT+glechue4O/p+gOcykWXiKwAAAAAAAEHakcwRAIgR1lmF5fAGwNrJZKJSGhiGDR9iYZLcZ4ff89X0eURZYcCIFMJ6r9Wqk2Ikf/REf3xM286KdqGbX+EhtdVRs7tr5MZASEDXNxh/HupccC1AaZGoqg7ECy0OIEhfKaC3Ibi1z+ogpIAAQEgAOH1BQAAAAAXqRQ1RebjO4MsRwUPJNPuuTycA5SLx4cBBBYAFIXRNTfy4mVAWjTbr6nj3aAfuCMIAAAA";
+
+// Test that `create_psbt` results in the expected PSBT.
+#[test]
+fn test_create_psbt() {
+    let (desc, change_desc) = get_test_tr_single_sig_xprv_and_change_desc();
+    let mut wallet = Wallet::create(desc, change_desc)
+        .network(Network::Regtest)
+        .create_wallet_no_persist()
+        .unwrap();
+    let expected_xpub = match wallet.public_descriptor(KeychainKind::External) {
+        miniscript::Descriptor::Tr(tr) => match tr.internal_key() {
+            miniscript::DescriptorPublicKey::XPub(desc) => desc.xkey,
+            _ => unreachable!(),
+        },
+        _ => unreachable!(),
+    };
+
+    // Receive coins
+    let anchor = ConfirmationBlockTime {
+        block_id: BlockId {
+            height: 100,
+            hash: Hash::hash(b"100"),
+        },
+        confirmation_time: 1234567000,
+    };
+    insert_checkpoint(&mut wallet, anchor.block_id);
+    receive_output(&mut wallet, Amount::ONE_BTC, ReceiveTo::Block(anchor));
+
+    let change_desc =
+        miniscript::Descriptor::parse_descriptor(&secp256k1::Secp256k1::new(), change_desc)
+            .unwrap()
+            .0
+            .at_derivation_index(0)
+            .unwrap();
+
+    let addr = wallet.reveal_next_address(KeychainKind::External);
+    let mut params = PsbtParams::default();
+    params
+        .version(bitcoin::transaction::Version(3))
+        .coin_selection(psbt::SelectionStrategy::LowestFee)
+        .add_recipients([(addr.script_pubkey(), Amount::from_btc(0.42).unwrap())])
+        .change_descriptor(change_desc)
+        .feerate(FeeRate::from_sat_per_vb_unchecked(4))
+        .fallback_sequence(bitcoin::Sequence::MAX)
+        .ordering(bdk_wallet::TxOrdering::Shuffle)
+        .add_global_xpubs();
+
+    let (psbt, _) = wallet.create_psbt(params).unwrap();
+    let tx = &psbt.unsigned_tx;
+    assert_eq!(tx.version.0, 3);
+    assert_eq!(tx.lock_time.to_consensus_u32(), anchor.block_id.height);
+    assert_eq!(tx.input.len(), 1);
+    assert_eq!(tx.output.len(), 2);
+
+    // global xpubs
+    assert_eq!(
+        psbt.xpub,
+        [(expected_xpub, ("f6a5cb8b".parse().unwrap(), vec![].into()))].into(),
+    );
+    // witness utxo
+    let psbt_input = &psbt.inputs[0];
+    assert_eq!(
+        psbt_input.witness_utxo.as_ref().map(|txo| txo.value),
+        Some(Amount::ONE_BTC),
+    );
+    // input internal key
+    assert!(psbt_input.tap_internal_key.is_some());
+    // input key origins
+    assert!(psbt_input
+        .tap_key_origins
+        .values()
+        .any(|(_, (fp, _))| fp.to_string() == "f6a5cb8b"));
+    // output internal key
+    assert!(psbt
+        .outputs
+        .iter()
+        .any(|output| output.tap_internal_key.is_some()));
+    // output key origins
+    assert!(psbt.outputs.iter().any(|output| output
+        .tap_key_origins
+        .values()
+        .any(|(_, (fp, _))| fp.to_string() == "f6a5cb8b")));
+}
+
+#[test]
+fn test_create_psbt_insufficient_funds_error() {
+    let (desc, change_desc) = get_test_tr_single_sig_xprv_and_change_desc();
+    let mut wallet = Wallet::create(desc, change_desc)
+        .network(Network::Regtest)
+        .create_wallet_no_persist()
+        .unwrap();
+
+    let addr = wallet.reveal_next_address(KeychainKind::External);
+
+    let mut params = PsbtParams::default();
+    params.add_recipients([(addr.script_pubkey(), Amount::from_sat(10_000))]);
+
+    let result = wallet.create_psbt(params);
+    assert!(matches!(
+        result,
+        Err(CreatePsbtError::InsufficientFunds(
+            bdk_coin_select::InsufficientFunds { missing: 10_000 }
+        )),
+    ));
+}
+
+#[test]
+fn test_create_psbt_maturity_height() {
+    let (desc, change_desc) = get_test_tr_single_sig_xprv_and_change_desc();
+    let mut wallet = Wallet::create(desc, change_desc)
+        .network(Network::Regtest)
+        .create_wallet_no_persist()
+        .unwrap();
+    let receive_address = wallet.reveal_next_address(KeychainKind::External);
+    let send_to_address = wallet.reveal_next_address(KeychainKind::External).address;
+
+    let block_1 = BlockId {
+        height: 1,
+        hash: Hash::hash(b"1"),
+    };
+    insert_checkpoint(&mut wallet, block_1);
+
+    // Receive coinbase output at height = 1.
+    // maturity height = (1 + 100) = 101
+    let tx = Transaction {
+        input: vec![TxIn::default()],
+        output: vec![TxOut {
+            value: Amount::ONE_BTC,
+            script_pubkey: receive_address.script_pubkey(),
+        }],
+        ..new_tx(0)
+    };
+    insert_tx_anchor(&mut wallet, tx, block_1);
+
+    // The output is still immature at height = 99.
+    let mut p = PsbtParams::default();
+    p.add_recipients([(send_to_address.clone(), Amount::from_sat(58_000))])
+        .maturity_height(bitcoin::absolute::Height::from_consensus(99).unwrap());
+
+    let _ = wallet
+        .create_psbt(p)
+        .expect_err("immature output must not be selected");
+
+    // We can use the params to coerce the coinbase maturity.
+    let mut p = PsbtParams::default();
+    p.add_recipients([(send_to_address.clone(), Amount::from_sat(58_000))])
+        .maturity_height(bitcoin::absolute::Height::from_consensus(100).unwrap());
+
+    let _ = wallet
+        .create_psbt(p)
+        .expect("`maturity_height` should enable selection");
+
+    // The output is eligible for selection once the wallet tip reaches maturity height minus 1
+    // (100), as it can be confirmed in the next block (101).
+    let block_100 = BlockId {
+        height: 100,
+        hash: Hash::hash(b"100"),
+    };
+    insert_checkpoint(&mut wallet, block_100);
+    let mut p = PsbtParams::default();
+    p.add_recipients([(send_to_address.clone(), Amount::from_sat(58_000))]);
+
+    let _ = wallet
+        .create_psbt(p)
+        .expect("mature coinbase should be selected");
+}
+
+#[test]
+fn test_create_psbt_cltv() {
+    use absolute::LockTime;
+
+    let desc = get_test_single_sig_cltv();
+    let mut wallet = Wallet::create_single(desc)
+        .network(Network::Regtest)
+        .create_wallet_no_persist()
+        .unwrap();
+
+    // Receive coins
+    let anchor = ConfirmationBlockTime {
+        block_id: BlockId {
+            height: 99_999,
+            hash: Hash::hash(b"abc"),
+        },
+        confirmation_time: 1234567000,
+    };
+    insert_checkpoint(&mut wallet, anchor.block_id);
+    let op = receive_output(&mut wallet, Amount::ONE_BTC, ReceiveTo::Block(anchor));
+
+    let addr = wallet.reveal_next_address(KeychainKind::External);
+
+    // No assets fail
+    {
+        let mut params = PsbtParams::default();
+        params
+            .add_utxos(&[op])
+            .add_recipients([(addr.script_pubkey(), Amount::from_btc(0.42).unwrap())]);
+        let res = wallet.create_psbt(params);
+        assert!(
+            matches!(res, Err(CreatePsbtError::Plan(err)) if err == op),
+            "UTXO requires CLTV but the assets are insufficient",
+        );
+    }
+
+    // Add assets ok
+    {
+        let mut params = PsbtParams::default();
+        params
+            .add_utxos(&[op])
+            .add_assets(Assets::new().after(LockTime::from_consensus(100_000)))
+            .add_recipients([(addr.script_pubkey(), Amount::from_btc(0.42).unwrap())]);
+        let (psbt, _) = wallet.create_psbt(params).unwrap();
+        assert_eq!(psbt.unsigned_tx.lock_time.to_consensus_u32(), 100_000);
+    }
+
+    // New chain tip (no assets) ok
+    {
+        let block_id = BlockId {
+            height: 100_000,
+            hash: Hash::hash(b"123"),
+        };
+        insert_checkpoint(&mut wallet, block_id);
+
+        let mut params = PsbtParams::default();
+        params
+            .add_utxos(&[op])
+            .add_recipients([(addr.script_pubkey(), Amount::from_btc(0.42).unwrap())]);
+        let (psbt, _) = wallet.create_psbt(params).unwrap();
+        assert_eq!(psbt.unsigned_tx.lock_time.to_consensus_u32(), 100_000);
+    }
+
+    // FIXME: Locktime greater than required
+    {
+        let mut params = PsbtParams::default();
+        params
+            .add_utxos(&[op])
+            .locktime(LockTime::from_consensus(200_000))
+            .add_recipients([(addr.script_pubkey(), Amount::from_btc(0.42).unwrap())]);
+
+        // let (psbt, _) = wallet.create_psbt(params).unwrap();
+        // assert_eq!(psbt.unsigned_tx.lock_time.to_consensus_u32(), 200_000);
+    }
+}
+
+#[test]
+fn test_create_psbt_csv() {
+    use bitcoin::relative;
+    use bitcoin::Sequence;
+
+    let desc = get_test_single_sig_csv();
+    let mut wallet = Wallet::create_single(desc)
+        .network(Network::Regtest)
+        .create_wallet_no_persist()
+        .unwrap();
+
+    // Receive coins
+    let anchor = ConfirmationBlockTime {
+        block_id: BlockId {
+            height: 10_000,
+            hash: Hash::hash(b"abc"),
+        },
+        confirmation_time: 1234567000,
+    };
+    insert_checkpoint(&mut wallet, anchor.block_id);
+    let op = receive_output(&mut wallet, Amount::ONE_BTC, ReceiveTo::Block(anchor));
+
+    let addr = wallet.reveal_next_address(KeychainKind::External);
+
+    // No assets fail
+    {
+        let mut params = PsbtParams::default();
+        params
+            .add_utxos(&[op])
+            .add_recipients([(addr.script_pubkey(), Amount::from_btc(0.42).unwrap())]);
+        let res = wallet.create_psbt(params);
+        assert!(
+            matches!(res, Err(CreatePsbtError::Plan(err)) if err == op),
+            "UTXO requires CSV but the assets are insufficient",
+        );
+    }
+
+    // Add assets ok
+    {
+        let mut params = PsbtParams::default();
+        let rel_locktime = relative::LockTime::from_consensus(6).unwrap();
+        params
+            .add_utxos(&[op])
+            .add_assets(Assets::new().older(rel_locktime))
+            .add_recipients([(addr.script_pubkey(), Amount::from_btc(0.42).unwrap())]);
+        let (psbt, _) = wallet.create_psbt(params).unwrap();
+        assert_eq!(psbt.unsigned_tx.input[0].sequence, Sequence(6));
+    }
+
+    // Add 6 confirmations (no assets)
+    {
+        let anchor = ConfirmationBlockTime {
+            block_id: BlockId {
+                height: 10_005,
+                hash: Hash::hash(b"xyz"),
+            },
+            confirmation_time: 1234567000,
+        };
+        insert_checkpoint(&mut wallet, anchor.block_id);
+        let mut params = PsbtParams::default();
+        params
+            .add_utxos(&[op])
+            .add_recipients([(addr.script_pubkey(), Amount::from_btc(0.42).unwrap())]);
+        let (psbt, _) = wallet.create_psbt(params).unwrap();
+        assert_eq!(psbt.unsigned_tx.input[0].sequence, Sequence(6));
+    }
+}
+
+// Test that replacing two unconfirmed txs A, B results in a transaction
+// that spends the inputs of both A and B.
+#[test]
+fn test_replace_by_fee_and_recpients() {
+    use KeychainKind::*;
+    let (desc, change_desc) = get_test_wpkh_and_change_desc();
+    let mut wallet = Wallet::create(desc, change_desc)
+        .network(Network::Regtest)
+        .create_wallet_no_persist()
+        .unwrap();
+
+    // The anchor block
+    let block = BlockId {
+        height: 100,
+        hash: Hash::hash(b"100"),
+    };
+
+    let mut addrs: Vec<Address> = vec![];
+    for _ in 0..3 {
+        let addr = wallet.reveal_next_address(External);
+        addrs.push(addr.address);
+    }
+
+    // Insert parent 0 (coinbase)
+    let p0 = Transaction {
+        input: vec![TxIn::default()],
+        output: vec![TxOut {
+            value: Amount::ONE_BTC,
+            script_pubkey: addrs[0].script_pubkey(),
+        }],
+        ..new_tx(1)
+    };
+    let op0 = OutPoint::new(p0.compute_txid(), 0);
+
+    insert_tx_anchor(&mut wallet, p0.clone(), block);
+
+    // Insert parent 1 (coinbase)
+    let p1 = Transaction {
+        input: vec![TxIn::default()],
+        output: vec![TxOut {
+            value: Amount::ONE_BTC,
+            script_pubkey: addrs[1].script_pubkey(),
+        }],
+        ..new_tx(1)
+    };
+    let op1 = OutPoint::new(p1.compute_txid(), 0);
+
+    insert_tx_anchor(&mut wallet, p1.clone(), block);
+
+    // Add new tip, for maturity
+    let block = BlockId {
+        height: 1000,
+        hash: Hash::hash(b"1000"),
+    };
+    insert_checkpoint(&mut wallet, block);
+
+    // Create tx A (unconfirmed)
+    let recip =
+        ScriptBuf::from_hex("5120e8f5c4dc2f5d6a7595e7b108cb063da9c7550312da1e22875d78b9db62b59cd5")
+            .unwrap();
+    let mut params = PsbtParams::default();
+    params
+        .add_utxos(&[op0])
+        .add_recipients([(recip.clone(), Amount::from_sat(16_000))]);
+    let txa = wallet.create_psbt(params).unwrap().0.unsigned_tx;
+    insert_tx(&mut wallet, txa.clone());
+
+    // Create tx B (unconfirmed)
+    let mut params = PsbtParams::default();
+    params
+        .add_utxos(&[op1])
+        .add_recipients([(recip.clone(), Amount::from_sat(42_000))]);
+    let txb = wallet.create_psbt(params).unwrap().0.unsigned_tx;
+    insert_tx(&mut wallet, txb.clone());
+
+    // Now create RBF tx
+    let psbt = wallet
+        .replace_by_fee_and_recipients(
+            &[Arc::new(txa), Arc::new(txb)],
+            FeeRate::from_sat_per_vb_unchecked(4),
+            vec![(recip, Amount::from_btc(1.99).unwrap())],
+        )
+        .unwrap()
+        .0;
+
+    // Expect replace inputs of A, B
+    assert_eq!(
+        psbt.unsigned_tx.input.len(),
+        2,
+        "We should have selected two inputs"
+    );
+    for op in [op0, op1] {
+        assert!(
+            psbt.unsigned_tx
+                .input
+                .iter()
+                .any(|txin| txin.previous_output == op),
+            "We should have replaced the original spends"
+        );
+    }
+}
+
+#[test]
+fn test_create_psbt_utxo_filter() {
+    let (desc, change_desc) = get_test_tr_single_sig_xprv_and_change_desc();
+    let mut wallet = Wallet::create(desc, change_desc)
+        .network(Network::Regtest)
+        .create_wallet_no_persist()
+        .unwrap();
+
+    let anchor = ConfirmationBlockTime {
+        block_id: BlockId {
+            height: 1000,
+            hash: Hash::hash(b"1000"),
+        },
+        confirmation_time: 1234567,
+    };
+    insert_checkpoint(&mut wallet, anchor.block_id);
+
+    for value in [200, 300, 600, 1000] {
+        let _ = receive_output(
+            &mut wallet,
+            Amount::from_sat(value),
+            ReceiveTo::Block(anchor),
+        );
+    }
+    assert_eq!(wallet.list_unspent().count(), 4);
+    assert_eq!(wallet.balance().total().to_sat(), 2100);
+
+    let mut params = PsbtParams::default();
+    params.feerate(FeeRate::ZERO);
+    // Avoid selection of dust utxos
+    params.filter_utxos(|txo| {
+        let min_non_dust = txo.txout.script_pubkey.minimal_non_dust(); // 330
+        txo.txout.value >= min_non_dust
+    });
+    params.change_descriptor({
+        let internal_desc = wallet.public_descriptor(KeychainKind::Internal);
+        internal_desc.at_derivation_index(0).unwrap()
+    });
+    params.drain_wallet();
+    let (psbt, _) = wallet.create_psbt(params).unwrap();
+    assert_eq!(psbt.unsigned_tx.input.len(), 2);
+    assert_eq!(psbt.unsigned_tx.output.len(), 1);
+    assert_eq!(
+        psbt.unsigned_tx.output[0].value.to_sat(),
+        1600,
+        "We should have selected 2 non-dust utxos"
+    );
+}
 
 #[test]
 #[should_panic(expected = "InputIndexOutOfRange")]
