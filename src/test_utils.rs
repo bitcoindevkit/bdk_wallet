@@ -314,6 +314,31 @@ pub fn insert_checkpoint(wallet: &mut Wallet, block: BlockId) {
         .unwrap();
 }
 
+/// Inserts a transaction to be anchored by `block_id`. This is particularly useful for
+/// adding a coinbase tx to the wallet for testing, since transactions of this kind
+/// must always appear confirmed.
+///
+/// This will also insert the anchor `block_id`. See [`insert_anchor`] for more.
+pub fn insert_tx_anchor(wallet: &mut Wallet, tx: Transaction, block_id: BlockId) {
+    insert_checkpoint(wallet, block_id);
+    let anchor = ConfirmationBlockTime {
+        block_id,
+        confirmation_time: 1234567000,
+    };
+    let txid = tx.compute_txid();
+
+    let mut tx_update = TxUpdate::default();
+    tx_update.txs = vec![Arc::new(tx)];
+    tx_update.anchors = [(anchor, txid)].into();
+
+    wallet
+        .apply_update(Update {
+            tx_update,
+            ..Default::default()
+        })
+        .expect("failed to apply update");
+}
+
 /// Inserts a transaction into the local view, assuming it is currently present in the mempool.
 ///
 /// This can be used, for example, to track a transaction immediately after it is broadcast.

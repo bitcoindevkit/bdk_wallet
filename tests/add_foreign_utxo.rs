@@ -5,7 +5,7 @@ use bdk_wallet::signer::SignOptions;
 use bdk_wallet::test_utils::*;
 use bdk_wallet::tx_builder::AddForeignUtxoError;
 use bdk_wallet::KeychainKind;
-use bitcoin::{psbt, Address, Amount};
+use bitcoin::{hashes::Hash, psbt, Address, Amount, OutPoint, ScriptBuf, Sequence, TxOut};
 
 mod common;
 
@@ -289,4 +289,56 @@ fn test_taproot_foreign_utxo() {
             .any(|input| input.previous_output == utxo.outpoint),
         "foreign_utxo should be in there"
     );
+}
+
+#[test]
+fn test_add_planned_psbt_input() -> anyhow::Result<()> {
+    let (mut wallet, _) = get_funded_wallet_wpkh();
+    let op1 = wallet.list_unspent().next().unwrap().outpoint;
+
+    // We'll use `PsbtParams` to sweep a foreign anchor output.
+    let op2 = OutPoint::new(Hash::hash(b"txid"), 2);
+    let txout = TxOut {
+        value: Amount::ZERO,
+        script_pubkey: ScriptBuf::new_p2a(),
+    };
+    let psbt_input = psbt::Input {
+        witness_utxo: Some(txout),
+        ..Default::default()
+    };
+    let input = bdk_tx::Input::from_psbt_input(
+        op2,
+        Sequence::ENABLE_LOCKTIME_NO_RBF,
+        psbt_input,
+        /* satisfaction_weight: */ 0,
+        /* status: */ None,
+        /* is_coinbase: */ false,
+    )?;
+
+    let send_to = wallet.reveal_next_address(KeychainKind::External).address;
+
+    // Build tx: 2-in / 2-out
+    let mut params = bdk_wallet::PsbtParams::default();
+    params.add_utxos(&[op1]);
+    params.add_planned_input(input);
+    params.add_recipients([(send_to, Amount::from_sat(20_000))]);
+
+    let (psbt, _) = wallet.create_psbt(params)?;
+
+    assert!(
+        psbt.unsigned_tx
+            .input
+            .iter()
+            .any(|input| input.previous_output == op1),
+        "Psbt should contain the wallet spend"
+    );
+    assert!(
+        psbt.unsigned_tx
+            .input
+            .iter()
+            .any(|input| input.previous_output == op2),
+        "Psbt should contain the planned input"
+    );
+
+    Ok(())
 }
