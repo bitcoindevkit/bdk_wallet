@@ -1,6 +1,6 @@
 use alloc::boxed::Box;
 
-use bdk_chain::keychain_txout::DEFAULT_LOOKAHEAD;
+use bdk_chain::{keychain_txout::DEFAULT_LOOKAHEAD, BlockId};
 use bitcoin::{BlockHash, Network, NetworkKind};
 use miniscript::descriptor::KeyMap;
 
@@ -65,6 +65,7 @@ pub struct CreateParams {
     pub(crate) change_descriptor_keymap: KeyMap,
     pub(crate) network: Network,
     pub(crate) genesis_hash: Option<BlockHash>,
+    pub(crate) birthday: Option<BlockId>,
     pub(crate) lookahead: u32,
     pub(crate) use_spk_cache: bool,
 }
@@ -88,6 +89,7 @@ impl CreateParams {
             change_descriptor_keymap: KeyMap::default(),
             network: Network::Bitcoin,
             genesis_hash: None,
+            birthday: None,
             lookahead: DEFAULT_LOOKAHEAD,
             use_spk_cache: false,
         }
@@ -110,6 +112,7 @@ impl CreateParams {
             change_descriptor_keymap: KeyMap::default(),
             network: Network::Bitcoin,
             genesis_hash: None,
+            birthday: None,
             lookahead: DEFAULT_LOOKAHEAD,
             use_spk_cache: false,
         }
@@ -135,6 +138,7 @@ impl CreateParams {
             change_descriptor_keymap: KeyMap::default(),
             network: Network::Bitcoin,
             genesis_hash: None,
+            birthday: None,
             lookahead: DEFAULT_LOOKAHEAD,
             use_spk_cache: false,
         }
@@ -159,6 +163,13 @@ impl CreateParams {
     /// Use a custom `genesis_hash`.
     pub fn genesis_hash(mut self, genesis_hash: BlockHash) -> Self {
         self.genesis_hash = Some(genesis_hash);
+        self
+    }
+
+    /// Begin wallet scanning from the specified birthday. Particularly useful for block-based
+    /// scanning sources.
+    pub fn birthday(mut self, birthday: BlockId) -> Self {
+        self.birthday = Some(birthday);
         self
     }
 

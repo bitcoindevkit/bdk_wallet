@@ -447,7 +447,12 @@ impl Wallet {
         let genesis_hash = params
             .genesis_hash
             .unwrap_or(genesis_block(network).block_hash());
-        let (chain, chain_changeset) = LocalChain::from_genesis_hash(genesis_hash);
+        let (mut chain, chain_changeset) = LocalChain::from_genesis_hash(genesis_hash);
+        if let Some(birthday) = params.birthday {
+            chain
+                .apply_update(CheckPoint::new(birthday))
+                .expect("wallet birthday overrides genesis hash.");
+        }
 
         let (descriptor, mut descriptor_keymap) = (params.descriptor)(&secp, network_kind)?;
         check_wallet_descriptor(&descriptor)?;
