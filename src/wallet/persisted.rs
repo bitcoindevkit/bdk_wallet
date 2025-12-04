@@ -55,7 +55,10 @@ pub trait WalletPersister {
     fn persist(persister: &mut Self, changeset: &ChangeSet) -> Result<(), Self::Error>;
 }
 
+#[cfg(feature = "std")]
 type FutureResult<'a, T, E> = Pin<Box<dyn Future<Output = Result<T, E>> + Send + 'a>>;
+#[cfg(not(feature = "std"))]
+type FutureResult<'a, T, E> = Pin<Box<dyn Future<Output = Result<T, E>> + 'a>>;
 
 /// Async trait that persists [`PersistedWallet`].
 ///
