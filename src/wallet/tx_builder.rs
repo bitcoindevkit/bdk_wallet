@@ -141,6 +141,8 @@ pub(crate) struct TxParams {
     pub(crate) bumping_fee: Option<PreviousFee>,
     pub(crate) current_height: Option<absolute::LockTime>,
     pub(crate) allow_dust: bool,
+    #[cfg(feature = "bip353")]
+    pub(crate) supports_proof_of_payment_callbacks: bool
 }
 
 #[derive(Clone, Copy, Debug)]
