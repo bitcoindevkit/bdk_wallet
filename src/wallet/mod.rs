@@ -57,9 +57,19 @@ mod params;
 mod persisted;
 pub mod signer;
 pub mod tx_builder;
+
+#[cfg(feature = "bip353")]
+pub mod dns_tx_builder;
+#[cfg(feature = "bip353")]
+use core::{net::SocketAddr, str::FromStr};
+#[cfg(feature = "bip353")]
+use bitcoin_payment_instructions::dns_resolver::DNSHrnResolver;
+
 pub(crate) mod utils;
 
-use crate::collections::{BTreeMap, HashMap, HashSet};
+#[cfg(feature = "bip353")]
+use crate::dns_tx_builder::TxBuilderDns;
+use crate::{collections::{BTreeMap, HashMap, HashSet}};
 use crate::descriptor::{
     check_wallet_descriptor, error::Error as DescriptorError, policy::BuildSatisfaction,
     DerivedDescriptor, DescriptorMeta, ExtendedDescriptor, ExtractPolicy, IntoWalletDescriptor,
@@ -1339,6 +1349,15 @@ impl Wallet {
             wallet: self,
             params: TxParams::default(),
             coin_selection: DefaultCoinSelectionAlgorithm::default(),
+        }
+    }
+
+    #[cfg(feature = "bip353")]
+    /// Build tx with default dns resolver
+    pub fn build_tx_with_dns(&mut self) -> TxBuilderDns<'_, DefaultCoinSelectionAlgorithm, DNSHrnResolver> {
+        TxBuilderDns {
+            tx_builder: self.build_tx(),
+            resolver: DNSHrnResolver(SocketAddr::from_str("8.8.8.8:53").unwrap())
         }
     }
 
