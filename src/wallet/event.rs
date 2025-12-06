@@ -59,7 +59,7 @@ pub enum WalletEvent {
     /// This can happen after an RBF is broadcast or if a third party double spends an input of
     /// a received payment transaction before it is confirmed.
     ///
-    /// The conflicts field contains the txid and vin (in which it conflicts) of the conflicting
+    /// The 'conflicts' field contains the txid and vin (in which it conflicts) of the conflicting
     /// transactions.
     TxReplaced {
         /// Transaction id.
@@ -83,7 +83,8 @@ pub enum WalletEvent {
 }
 
 /// Generate events by comparing the chain tip and wallet transactions before and after applying
-/// `wallet::Update` to `Wallet`. Any changes are added to the list of returned `WalletEvent`s.
+/// `wallet::Update` or a `bitcoin::Block` to `Wallet`. Any changes are added to the list of
+/// returned `WalletEvent`s.
 pub(crate) fn wallet_events(
     wallet: &mut Wallet,
     chain_tip1: BlockId,
@@ -92,7 +93,6 @@ pub(crate) fn wallet_events(
     wallet_txs2: BTreeMap<Txid, (Arc<Transaction>, ChainPosition<ConfirmationBlockTime>)>,
 ) -> Vec<WalletEvent> {
     let mut events: Vec<WalletEvent> = Vec::new();
-
     // find chain tip change
     if chain_tip1 != chain_tip2 {
         events.push(WalletEvent::ChainTipChanged {

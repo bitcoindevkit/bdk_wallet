@@ -2341,37 +2341,13 @@ impl Wallet {
             .to_string()
     }
 
-    /// Applies an update to the wallet and stages the changes (but does not persist them).
-    ///
-    /// Usually you create an `update` by interacting with some blockchain data source and inserting
-    /// transactions related to your wallet into it.
-    ///
-    /// After applying updates you should persist the staged wallet changes. For an example of how
-    /// to persist staged wallet changes see [`Wallet::reveal_next_address`].
-    pub fn apply_update(&mut self, update: impl Into<Update>) -> Result<(), CannotConnectError> {
-        let update = update.into();
-        let mut changeset = match update.chain {
-            Some(chain_update) => ChangeSet::from(self.chain.apply_update(chain_update)?),
-            None => ChangeSet::default(),
-        };
-
-        let index_changeset = self
-            .indexed_graph
-            .index
-            .reveal_to_target_multi(&update.last_active_indices);
-        changeset.merge(index_changeset.into());
-        changeset.merge(self.indexed_graph.apply_update(update.tx_update).into());
-        self.stage.merge(changeset);
-        Ok(())
-    }
-
     /// Applies an update to the wallet, stages the changes, and returns events.
     ///
     /// Usually you create an `update` by interacting with some blockchain data source and inserting
     /// transactions related to your wallet into it. Staged changes are NOT persisted.
     ///
-    /// After applying updates you should process the events in your app before persisting the
-    /// staged wallet changes. For an example of how to persist staged wallet changes see
+    /// After applying updates, you should process the events in your app before persisting the
+    /// staged wallet changes. For an example of how to persist staged wallet changes, see
     /// [`Wallet::reveal_next_address`].
     ///
     /// ```rust,no_run
@@ -2380,7 +2356,7 @@ impl Wallet {
     /// use bdk_wallet::event::WalletEvent;
     /// # let wallet_update = Update::default();
     /// # let mut wallet = doctest_wallet!();
-    /// let events = wallet.apply_update_events(wallet_update)?;
+    /// let events = wallet.apply_update(wallet_update)?;
     /// // Handle wallet relevant events from this update.
     /// events.iter().for_each(|event| {
     ///     match event {
@@ -2445,7 +2421,7 @@ impl Wallet {
     /// # Ok::<(), anyhow::Error>(())
     /// ```
     /// [`TxBuilder`]: crate::TxBuilder
-    pub fn apply_update_events(
+    pub fn apply_update(
         &mut self,
         update: impl Into<Update>,
     ) -> Result<Vec<WalletEvent>, CannotConnectError> {
@@ -2462,7 +2438,19 @@ impl Wallet {
             .collect::<BTreeMap<Txid, (Arc<Transaction>, ChainPosition<ConfirmationBlockTime>)>>();
 
         // apply update
-        self.apply_update(update)?;
+        let update = update.into();
+        let mut changeset = match update.chain {
+            Some(chain_update) => ChangeSet::from(self.chain.apply_update(chain_update)?),
+            None => ChangeSet::default(),
+        };
+
+        let index_changeset = self
+            .indexed_graph
+            .index
+            .reveal_to_target_multi(&update.last_active_indices);
+        changeset.merge(index_changeset.into());
+        changeset.merge(self.indexed_graph.apply_update(update.tx_update).into());
+        self.stage.merge(changeset);
 
         // chain tip and transactions after update
         let chain_tip2 = self.chain.tip().block_id();
@@ -2523,14 +2511,22 @@ impl Wallet {
         &self.chain
     }
 
-    /// Introduces a `block` of `height` to the wallet, and tries to connect it to the
+    /// Introduces a `block` of `height` to the wallet and tries to connect it to the
     /// `prev_blockhash` of the block's header.
     ///
-    /// This is a convenience method that is equivalent to calling [`apply_block_connected_to`]
-    /// with `prev_blockhash` and `height-1` as the `connected_to` parameter.
+    /// This is a convenience method that is equivalent to calling
+    /// [`apply_block_connected_to`] with `prev_blockhash` and `height-1` as the
+    /// `connected_to` parameter.
+    ///
+    /// See [`apply_update`] for more information on the returned [`WalletEvent`]s.
     ///
     /// [`apply_block_connected_to`]: Self::apply_block_connected_to
-    pub fn apply_block(&mut self, block: &Block, height: u32) -> Result<(), CannotConnectError> {
+    /// [`apply_update`]: Self::apply_update
+    pub fn apply_block(
+        &mut self,
+        block: &Block,
+        height: u32,
+    ) -> Result<Vec<WalletEvent>, CannotConnectError> {
         let connected_to = match height.checked_sub(1) {
             Some(prev_height) => BlockId {
                 height: prev_height,
@@ -2550,58 +2546,7 @@ impl Wallet {
             })
     }
 
-    /// Introduces a `block` of `height` to the wallet, and tries to connect it to the
-    /// `prev_blockhash` of the block's header.
-    ///
-    /// This is a convenience method that is equivalent to calling
-    /// [`apply_block_connected_to_events`] with `prev_blockhash` and `height-1` as the
-    /// `connected_to` parameter.
-    ///
-    /// See [`apply_update_events`] for more information on the returned [`WalletEvent`]s.
-    ///
-    /// [`apply_block_connected_to_events`]: Self::apply_block_connected_to_events
-    /// [`apply_update_events`]: Self::apply_update_events
-    pub fn apply_block_events(
-        &mut self,
-        block: &Block,
-        height: u32,
-    ) -> Result<Vec<WalletEvent>, CannotConnectError> {
-        // snapshot of chain tip and transactions before update
-        let chain_tip1 = self.chain.tip().block_id();
-        let wallet_txs1 = self
-            .transactions()
-            .map(|wtx| {
-                (
-                    wtx.tx_node.txid,
-                    (wtx.tx_node.tx.clone(), wtx.chain_position),
-                )
-            })
-            .collect::<BTreeMap<Txid, (Arc<Transaction>, ChainPosition<ConfirmationBlockTime>)>>();
-
-        self.apply_block(block, height)?;
-
-        // chain tip and transactions after update
-        let chain_tip2 = self.chain.tip().block_id();
-        let wallet_txs2 = self
-            .transactions()
-            .map(|wtx| {
-                (
-                    wtx.tx_node.txid,
-                    (wtx.tx_node.tx.clone(), wtx.chain_position),
-                )
-            })
-            .collect::<BTreeMap<Txid, (Arc<Transaction>, ChainPosition<ConfirmationBlockTime>)>>();
-
-        Ok(wallet_events(
-            self,
-            chain_tip1,
-            chain_tip2,
-            wallet_txs1,
-            wallet_txs2,
-        ))
-    }
-
-    /// Applies relevant transactions from `block` of `height` to the wallet, and connects the
+    /// Applies relevant transactions from `block` of `height` to the wallet and connects the
     /// block to the internal chain.
     ///
     /// The `connected_to` parameter informs the wallet how this block connects to the internal
@@ -2611,37 +2556,9 @@ impl Wallet {
     /// **WARNING**: You must persist the changes resulting from one or more calls to this method
     /// if you need the inserted block data to be reloaded after closing the wallet.
     /// See [`Wallet::reveal_next_address`].
-    pub fn apply_block_connected_to(
-        &mut self,
-        block: &Block,
-        height: u32,
-        connected_to: BlockId,
-    ) -> Result<(), ApplyHeaderError> {
-        let mut changeset = ChangeSet::default();
-        changeset.merge(
-            self.chain
-                .apply_header_connected_to(&block.header, height, connected_to)?
-                .into(),
-        );
-        changeset.merge(
-            self.indexed_graph
-                .apply_block_relevant(block, height)
-                .into(),
-        );
-        self.stage.merge(changeset);
-        Ok(())
-    }
-
-    /// Applies relevant transactions from `block` of `height` to the wallet, and connects the
-    /// block to the internal chain.
-    ///
-    /// See [`apply_block_connected_to`] for more information.
     ///
     /// See [`apply_update_events`] for more information on the returned [`WalletEvent`]s.
-    ///
-    /// [`apply_block_connected_to`]: Self::apply_block_connected_to
-    /// [`apply_update_events`]: Self::apply_update_events
-    pub fn apply_block_connected_to_events(
+    pub fn apply_block_connected_to(
         &mut self,
         block: &Block,
         height: u32,
@@ -2659,7 +2576,19 @@ impl Wallet {
             })
             .collect::<BTreeMap<Txid, (Arc<Transaction>, ChainPosition<ConfirmationBlockTime>)>>();
 
-        self.apply_block_connected_to(block, height, connected_to)?;
+        // apply block to wallet
+        let mut changeset = ChangeSet::default();
+        changeset.merge(
+            self.chain
+                .apply_header_connected_to(&block.header, height, connected_to)?
+                .into(),
+        );
+        changeset.merge(
+            self.indexed_graph
+                .apply_block_relevant(block, height)
+                .into(),
+        );
+        self.stage.merge(changeset);
 
         // chain tip and transactions after update
         let chain_tip2 = self.chain.tip().block_id();

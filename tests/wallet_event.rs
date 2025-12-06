@@ -18,7 +18,7 @@ fn test_new_confirmed_tx_event() {
         height: 0,
         hash: wallet.local_chain().genesis_hash(),
     };
-    let events = wallet.apply_update_events(update).unwrap();
+    let events = wallet.apply_update(update).unwrap();
     let new_tip1 = wallet.local_chain().tip().block_id();
     assert_eq!(events.len(), 3);
     assert!(
@@ -38,7 +38,7 @@ fn test_tx_unconfirmed_event() {
     let (desc, change_desc) = get_test_wpkh_and_change_desc();
     let (mut wallet, _, update) = new_wallet_and_funding_update(desc, Some(change_desc));
     // ignore funding events
-    let _events = wallet.apply_update_events(update).unwrap();
+    let _events = wallet.apply_update(update).unwrap();
 
     let reorg_block = BlockId {
         height: 2_000,
@@ -51,7 +51,7 @@ fn test_tx_unconfirmed_event() {
         ..Default::default()
     };
     let old_tip1 = wallet.local_chain().tip().block_id();
-    let events = wallet.apply_update_events(reorg_update).unwrap();
+    let events = wallet.apply_update(reorg_update).unwrap();
     let new_tip1 = wallet.local_chain().tip().block_id();
     assert_eq!(events.len(), 2);
     assert!(
@@ -67,7 +67,7 @@ fn test_tx_replaced_event() {
     let (desc, change_desc) = get_test_wpkh_and_change_desc();
     let (mut wallet, _, update) = new_wallet_and_funding_update(desc, Some(change_desc));
     // ignore funding events
-    let _events = wallet.apply_update_events(update).unwrap();
+    let _events = wallet.apply_update(update).unwrap();
 
     // create original tx
     let mut builder = wallet.build_tx();
@@ -85,7 +85,7 @@ fn test_tx_replaced_event() {
     let mut update = Update::default();
     update.tx_update.txs = vec![orig_tx.clone()];
     update.tx_update.seen_ats = [(orig_txid, 210)].into();
-    let events = wallet.apply_update_events(update).unwrap();
+    let events = wallet.apply_update(update).unwrap();
     assert_eq!(events.len(), 1);
     assert!(
         matches!(&events[0], WalletEvent::TxUnconfirmed {tx, ..} if tx.compute_txid() == orig_txid)
@@ -104,7 +104,7 @@ fn test_tx_replaced_event() {
     update.tx_update.evicted_ats = [(orig_txid, 220)].into();
     update.tx_update.seen_ats = [(rbf_txid, 220)].into();
 
-    let events = wallet.apply_update_events(update).unwrap();
+    let events = wallet.apply_update(update).unwrap();
     assert_eq!(events.len(), 2);
     assert!(matches!(events[0], WalletEvent::TxUnconfirmed { txid, .. } if txid == rbf_txid));
     assert!(
@@ -118,7 +118,7 @@ fn test_tx_confirmed_event() {
     let (desc, change_desc) = get_test_wpkh_and_change_desc();
     let (mut wallet, _, update) = new_wallet_and_funding_update(desc, Some(change_desc));
     // ignore funding events
-    let _events = wallet.apply_update_events(update).unwrap();
+    let _events = wallet.apply_update(update).unwrap();
 
     // create new tx
     let mut builder = wallet.build_tx();
@@ -136,7 +136,7 @@ fn test_tx_confirmed_event() {
     let mut update = Update::default();
     update.tx_update.txs = vec![new_tx.clone()];
     update.tx_update.seen_ats = [(new_txid, 210)].into();
-    let events = wallet.apply_update_events(update).unwrap();
+    let events = wallet.apply_update(update).unwrap();
     assert_eq!(events.len(), 1);
     assert!(
         matches!(&events[0], WalletEvent::TxUnconfirmed {tx, ..} if tx.compute_txid() == new_txid)
@@ -161,7 +161,7 @@ fn test_tx_confirmed_event() {
     update.tx_update.anchors = [(new_anchor, new_txid)].into();
 
     let orig_tip = wallet.local_chain().tip().block_id();
-    let events = wallet.apply_update_events(update).unwrap();
+    let events = wallet.apply_update(update).unwrap();
     assert_eq!(events.len(), 2);
     assert!(
         matches!(events[0], WalletEvent::ChainTipChanged { old_tip, new_tip } if old_tip == orig_tip && new_tip == new_block)
@@ -174,7 +174,7 @@ fn test_tx_confirmed_new_block_event() {
     let (desc, change_desc) = get_test_wpkh_and_change_desc();
     let (mut wallet, _, update) = new_wallet_and_funding_update(desc, Some(change_desc));
     // ignore funding events
-    let _events = wallet.apply_update_events(update).unwrap();
+    let _events = wallet.apply_update(update).unwrap();
 
     // create new tx
     let mut builder = wallet.build_tx();
@@ -192,7 +192,7 @@ fn test_tx_confirmed_new_block_event() {
     let mut update = Update::default();
     update.tx_update.txs = vec![new_tx.clone()];
     update.tx_update.seen_ats = [(new_txid, 210)].into();
-    let events = wallet.apply_update_events(update).unwrap();
+    let events = wallet.apply_update(update).unwrap();
     assert_eq!(events.len(), 1);
     assert!(
         matches!(&events[0], WalletEvent::TxUnconfirmed {tx, ..} if tx.compute_txid() == new_txid)
@@ -217,7 +217,7 @@ fn test_tx_confirmed_new_block_event() {
     update.tx_update.anchors = [(new_anchor, new_txid)].into();
 
     let orig_tip = wallet.local_chain().tip().block_id();
-    let events = wallet.apply_update_events(update).unwrap();
+    let events = wallet.apply_update(update).unwrap();
     assert_eq!(events.len(), 2);
     assert!(
         matches!(events[0], WalletEvent::ChainTipChanged { old_tip, new_tip } if old_tip == orig_tip && new_tip == new_block)
@@ -242,7 +242,7 @@ fn test_tx_confirmed_new_block_event() {
     update.chain = CheckPoint::from_block_ids([parent_block, reorg_block]).ok();
     update.tx_update.anchors = [(reorg_anchor, new_txid)].into();
 
-    let events = wallet.apply_update_events(update).unwrap();
+    let events = wallet.apply_update(update).unwrap();
     assert_eq!(events.len(), 2);
     assert!(
         matches!(events[0], WalletEvent::ChainTipChanged { old_tip, new_tip } if old_tip == new_block && new_tip == reorg_block)
@@ -257,7 +257,7 @@ fn test_tx_dropped_event() {
     let (desc, change_desc) = get_test_wpkh_and_change_desc();
     let (mut wallet, _, update) = new_wallet_and_funding_update(desc, Some(change_desc));
     // ignore funding events
-    let _events = wallet.apply_update_events(update).unwrap();
+    let _events = wallet.apply_update(update).unwrap();
 
     // create new tx
     let mut builder = wallet.build_tx();
@@ -275,7 +275,7 @@ fn test_tx_dropped_event() {
     let mut update = Update::default();
     update.tx_update.txs = vec![new_tx.clone()];
     update.tx_update.seen_ats = [(new_txid, 210)].into();
-    let events = wallet.apply_update_events(update).unwrap();
+    let events = wallet.apply_update(update).unwrap();
     assert_eq!(events.len(), 1);
     assert!(
         matches!(&events[0], WalletEvent::TxUnconfirmed {tx, ..} if tx.compute_txid() == new_txid)
@@ -284,7 +284,7 @@ fn test_tx_dropped_event() {
     // drop tx
     let mut update = Update::default();
     update.tx_update.evicted_ats = [(new_txid, 220)].into();
-    let events = wallet.apply_update_events(update).unwrap();
+    let events = wallet.apply_update(update).unwrap();
 
     assert_eq!(events.len(), 1);
     assert!(matches!(events[0], WalletEvent::TxDropped { txid, .. } if txid == new_txid));
@@ -317,7 +317,7 @@ fn test_apply_block_new_confirmed_tx_event() {
     };
     // apply empty block
     let block1 = test_block(genesis.hash, 1000, vec![]);
-    let events = wallet.apply_block_events(&block1, 1).unwrap();
+    let events = wallet.apply_block(&block1, 1).unwrap();
     assert_eq!(events.len(), 1);
 
     // apply funding block
@@ -329,7 +329,7 @@ fn test_apply_block_new_confirmed_tx_event() {
             .map(|tx| (**tx).clone())
             .collect(),
     );
-    let events = wallet.apply_block_events(&block2, 2).unwrap();
+    let events = wallet.apply_block(&block2, 2).unwrap();
     assert_eq!(events.len(), 2);
     let new_tip2 = wallet.local_chain().tip().block_id();
     assert!(
@@ -341,7 +341,7 @@ fn test_apply_block_new_confirmed_tx_event() {
 
     // apply empty block
     let block3 = test_block(block2.block_hash(), 3000, vec![]);
-    let events = wallet.apply_block_events(&block3, 3).unwrap();
+    let events = wallet.apply_block(&block3, 3).unwrap();
     assert_eq!(events.len(), 1);
 
     // apply spending block
@@ -353,7 +353,7 @@ fn test_apply_block_new_confirmed_tx_event() {
             .map(|tx| (**tx).clone())
             .collect(),
     );
-    let events = wallet.apply_block_events(&block4, 4).unwrap();
+    let events = wallet.apply_block(&block4, 4).unwrap();
     let new_tip3 = wallet.local_chain().tip().block_id();
     assert_eq!(events.len(), 2);
     assert!(
@@ -381,7 +381,7 @@ fn test_apply_block_tx_unconfirmed_event() {
             .map(|tx| (**tx).clone())
             .collect(),
     );
-    let events = wallet.apply_block_events(&block1, 1).unwrap();
+    let events = wallet.apply_block(&block1, 1).unwrap();
     assert_eq!(events.len(), 2);
 
     // apply spending block
@@ -393,7 +393,7 @@ fn test_apply_block_tx_unconfirmed_event() {
             .map(|tx| (**tx).clone())
             .collect(),
     );
-    let events = wallet.apply_block_events(&block2, 2).unwrap();
+    let events = wallet.apply_block(&block2, 2).unwrap();
     assert_eq!(events.len(), 2);
     let new_tip2 = wallet.local_chain().tip().block_id();
     assert!(
@@ -405,7 +405,7 @@ fn test_apply_block_tx_unconfirmed_event() {
 
     // apply reorg of spending block without previously confirmed tx
     let reorg_block2 = test_block(block1.block_hash(), 2100, vec![]);
-    let events = wallet.apply_block_events(&reorg_block2, 2).unwrap();
+    let events = wallet.apply_block(&reorg_block2, 2).unwrap();
     assert_eq!(events.len(), 2);
     assert!(
         matches!(events[0], WalletEvent::ChainTipChanged { old_tip, new_tip } if old_tip ==
@@ -434,13 +434,13 @@ fn test_apply_block_tx_confirmed_new_block_event() {
             .map(|tx| (**tx).clone())
             .collect(),
     );
-    let events = wallet.apply_block_events(&block1, 1).unwrap();
+    let events = wallet.apply_block(&block1, 1).unwrap();
     assert_eq!(events.len(), 2);
 
     // apply spending block
     let spending_tx: Transaction = (*update.tx_update.txs[1].clone()).clone();
     let block2 = test_block(block1.block_hash(), 2000, vec![spending_tx.clone()]);
-    let events = wallet.apply_block_events(&block2, 2).unwrap();
+    let events = wallet.apply_block(&block2, 2).unwrap();
     assert_eq!(events.len(), 2);
     let new_tip2 = wallet.local_chain().tip().block_id();
     assert!(
@@ -453,7 +453,7 @@ fn test_apply_block_tx_confirmed_new_block_event() {
 
     // apply reorg of spending block including the original spending tx
     let reorg_block2 = test_block(block1.block_hash(), 2100, vec![spending_tx.clone()]);
-    let events = wallet.apply_block_events(&reorg_block2, 2).unwrap();
+    let events = wallet.apply_block(&reorg_block2, 2).unwrap();
     assert_eq!(events.len(), 2);
     assert!(
         matches!(events[0], WalletEvent::ChainTipChanged { old_tip, new_tip } if old_tip ==
