@@ -52,6 +52,7 @@ use rand_core::RngCore;
 mod changeset;
 pub mod coin_selection;
 pub mod error;
+pub mod event;
 pub mod export;
 mod params;
 mod persisted;
@@ -74,10 +75,12 @@ use crate::wallet::{
     tx_builder::{FeePolicy, TxBuilder, TxParams},
     utils::{check_nsequence_rbf, After, Older, SecpCtx},
 };
+use event::wallet_events;
 
 // re-exports
 pub use bdk_chain::Balance;
 pub use changeset::ChangeSet;
+pub use event::WalletEvent;
 pub use params::*;
 pub use persisted::*;
 pub use utils::IsDust;
@@ -2338,14 +2341,103 @@ impl Wallet {
             .to_string()
     }
 
-    /// Applies an update to the wallet and stages the changes (but does not persist them).
+    /// Applies an update to the wallet, stages the changes, and returns events.
     ///
     /// Usually you create an `update` by interacting with some blockchain data source and inserting
-    /// transactions related to your wallet into it.
+    /// transactions related to your wallet into it. Staged changes are NOT persisted.
     ///
-    /// After applying updates you should persist the staged wallet changes. For an example of how
-    /// to persist staged wallet changes see [`Wallet::reveal_next_address`].
-    pub fn apply_update(&mut self, update: impl Into<Update>) -> Result<(), CannotConnectError> {
+    /// After applying updates, you should process the events in your app before persisting the
+    /// staged wallet changes. For an example of how to persist staged wallet changes, see
+    /// [`Wallet::reveal_next_address`].
+    ///
+    /// ```rust,no_run
+    /// # use bitcoin::*;
+    /// # use bdk_wallet::*;
+    /// use bdk_wallet::event::WalletEvent;
+    /// # let wallet_update = Update::default();
+    /// # let mut wallet = doctest_wallet!();
+    /// let events = wallet.apply_update(wallet_update)?;
+    /// // Handle wallet relevant events from this update.
+    /// events.iter().for_each(|event| {
+    ///     match event {
+    ///         // The chain tip changed.
+    ///         WalletEvent::ChainTipChanged { old_tip, new_tip } => {
+    ///             todo!() // handle event
+    ///         }
+    ///         // An unconfirmed tx is now confirmed in a block.
+    ///         WalletEvent::TxConfirmed {
+    ///             txid,
+    ///             tx,
+    ///             block_time,
+    ///             old_block_time: None,
+    ///         } => {
+    ///             todo!() // handle event
+    ///         }
+    ///         // A confirmed tx is now confirmed in a new block (reorg).
+    ///         WalletEvent::TxConfirmed {
+    ///             txid,
+    ///             tx,
+    ///             block_time,
+    ///             old_block_time: Some(old_block_time),
+    ///         } => {
+    ///             todo!() // handle event
+    ///         }
+    ///         // A new unconfirmed tx was seen in the mempool.
+    ///         WalletEvent::TxUnconfirmed {
+    ///             txid,
+    ///             tx,
+    ///             old_block_time: None,
+    ///         } => {
+    ///             todo!() // handle event
+    ///         }
+    ///         // A previously confirmed tx in now unconfirmed in the mempool (reorg).
+    ///         WalletEvent::TxUnconfirmed {
+    ///             txid,
+    ///             tx,
+    ///             old_block_time: Some(old_block_time),
+    ///         } => {
+    ///             todo!() // handle event
+    ///         }
+    ///         // An unconfirmed tx was replaced in the mempool (RBF or double spent input).
+    ///         WalletEvent::TxReplaced {
+    ///             txid,
+    ///             tx,
+    ///             conflicts,
+    ///         } => {
+    ///             todo!() // handle event
+    ///         }
+    ///         // An unconfirmed tx was dropped from the mempool (fee too low).
+    ///         WalletEvent::TxDropped { txid, tx } => {
+    ///             todo!() // handle event
+    ///         }
+    ///         _ => {
+    ///             // unexpected event, do nothing
+    ///         }
+    ///     }
+    ///     // take staged wallet changes
+    ///     let staged = wallet.take_staged();
+    ///     // persist staged changes
+    /// });
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
+    /// [`TxBuilder`]: crate::TxBuilder
+    pub fn apply_update(
+        &mut self,
+        update: impl Into<Update>,
+    ) -> Result<Vec<WalletEvent>, CannotConnectError> {
+        // snapshot of chain tip and transactions before update
+        let chain_tip1 = self.chain.tip().block_id();
+        let wallet_txs1 = self
+            .transactions()
+            .map(|wtx| {
+                (
+                    wtx.tx_node.txid,
+                    (wtx.tx_node.tx.clone(), wtx.chain_position),
+                )
+            })
+            .collect::<BTreeMap<Txid, (Arc<Transaction>, ChainPosition<ConfirmationBlockTime>)>>();
+
+        // apply update
         let update = update.into();
         let mut changeset = match update.chain {
             Some(chain_update) => ChangeSet::from(self.chain.apply_update(chain_update)?),
@@ -2359,7 +2451,26 @@ impl Wallet {
         changeset.merge(index_changeset.into());
         changeset.merge(self.indexed_graph.apply_update(update.tx_update).into());
         self.stage.merge(changeset);
-        Ok(())
+
+        // chain tip and transactions after update
+        let chain_tip2 = self.chain.tip().block_id();
+        let wallet_txs2 = self
+            .transactions()
+            .map(|wtx| {
+                (
+                    wtx.tx_node.txid,
+                    (wtx.tx_node.tx.clone(), wtx.chain_position),
+                )
+            })
+            .collect::<BTreeMap<Txid, (Arc<Transaction>, ChainPosition<ConfirmationBlockTime>)>>();
+
+        Ok(wallet_events(
+            self,
+            chain_tip1,
+            chain_tip2,
+            wallet_txs1,
+            wallet_txs2,
+        ))
     }
 
     /// Get a reference of the staged [`ChangeSet`] that is yet to be committed (if any).
@@ -2400,14 +2511,22 @@ impl Wallet {
         &self.chain
     }
 
-    /// Introduces a `block` of `height` to the wallet, and tries to connect it to the
+    /// Introduces a `block` of `height` to the wallet and tries to connect it to the
     /// `prev_blockhash` of the block's header.
     ///
-    /// This is a convenience method that is equivalent to calling [`apply_block_connected_to`]
-    /// with `prev_blockhash` and `height-1` as the `connected_to` parameter.
+    /// This is a convenience method that is equivalent to calling
+    /// [`apply_block_connected_to`] with `prev_blockhash` and `height-1` as the
+    /// `connected_to` parameter.
+    ///
+    /// See [`apply_update`] for more information on the returned [`WalletEvent`]s.
     ///
     /// [`apply_block_connected_to`]: Self::apply_block_connected_to
-    pub fn apply_block(&mut self, block: &Block, height: u32) -> Result<(), CannotConnectError> {
+    /// [`apply_update`]: Self::apply_update
+    pub fn apply_block(
+        &mut self,
+        block: &Block,
+        height: u32,
+    ) -> Result<Vec<WalletEvent>, CannotConnectError> {
         let connected_to = match height.checked_sub(1) {
             Some(prev_height) => BlockId {
                 height: prev_height,
@@ -2427,7 +2546,7 @@ impl Wallet {
             })
     }
 
-    /// Applies relevant transactions from `block` of `height` to the wallet, and connects the
+    /// Applies relevant transactions from `block` of `height` to the wallet and connects the
     /// block to the internal chain.
     ///
     /// The `connected_to` parameter informs the wallet how this block connects to the internal
@@ -2437,12 +2556,27 @@ impl Wallet {
     /// **WARNING**: You must persist the changes resulting from one or more calls to this method
     /// if you need the inserted block data to be reloaded after closing the wallet.
     /// See [`Wallet::reveal_next_address`].
+    ///
+    /// See [`apply_update_events`] for more information on the returned [`WalletEvent`]s.
     pub fn apply_block_connected_to(
         &mut self,
         block: &Block,
         height: u32,
         connected_to: BlockId,
-    ) -> Result<(), ApplyHeaderError> {
+    ) -> Result<Vec<WalletEvent>, ApplyHeaderError> {
+        // snapshot of chain tip and transactions before update
+        let chain_tip1 = self.chain.tip().block_id();
+        let wallet_txs1 = self
+            .transactions()
+            .map(|wtx| {
+                (
+                    wtx.tx_node.txid,
+                    (wtx.tx_node.tx.clone(), wtx.chain_position),
+                )
+            })
+            .collect::<BTreeMap<Txid, (Arc<Transaction>, ChainPosition<ConfirmationBlockTime>)>>();
+
+        // apply block to wallet
         let mut changeset = ChangeSet::default();
         changeset.merge(
             self.chain
@@ -2455,7 +2589,26 @@ impl Wallet {
                 .into(),
         );
         self.stage.merge(changeset);
-        Ok(())
+
+        // chain tip and transactions after update
+        let chain_tip2 = self.chain.tip().block_id();
+        let wallet_txs2 = self
+            .transactions()
+            .map(|wtx| {
+                (
+                    wtx.tx_node.txid,
+                    (wtx.tx_node.tx.clone(), wtx.chain_position),
+                )
+            })
+            .collect::<BTreeMap<Txid, (Arc<Transaction>, ChainPosition<ConfirmationBlockTime>)>>();
+
+        Ok(wallet_events(
+            self,
+            chain_tip1,
+            chain_tip2,
+            wallet_txs1,
+            wallet_txs2,
+        ))
     }
 
     /// Apply relevant unconfirmed transactions to the wallet.
