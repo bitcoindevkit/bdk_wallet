@@ -4,14 +4,16 @@ use bdk_chain::{
 use miniscript::{Descriptor, DescriptorPublicKey};
 use serde::{Deserialize, Serialize};
 
+use crate::locked_outpoints;
+
 type IndexedTxGraphChangeSet =
     indexed_tx_graph::ChangeSet<ConfirmationBlockTime, keychain_txout::ChangeSet>;
 
-/// A change set for [`Wallet`]
+/// A change set for [`Wallet`].
 ///
 /// ## Definition
 ///
-/// The change set is responsible for transmiting data between the persistent storage layer and the
+/// The change set is responsible for transmitting data between the persistent storage layer and the
 /// core library components. Specifically, it serves two primary functions:
 ///
 /// 1) Recording incremental changes to the in-memory representation that need to be persisted to
@@ -114,6 +116,8 @@ pub struct ChangeSet {
     pub tx_graph: tx_graph::ChangeSet<ConfirmationBlockTime>,
     /// Changes to [`KeychainTxOutIndex`](keychain_txout::KeychainTxOutIndex).
     pub indexer: keychain_txout::ChangeSet,
+    /// Changes to locked outpoints.
+    pub locked_outpoints: locked_outpoints::ChangeSet,
 }
 
 impl Merge for ChangeSet {
@@ -142,6 +146,9 @@ impl Merge for ChangeSet {
             self.network = other.network;
         }
 
+        // merge locked outpoints
+        self.locked_outpoints.merge(other.locked_outpoints);
+
         Merge::merge(&mut self.local_chain, other.local_chain);
         Merge::merge(&mut self.tx_graph, other.tx_graph);
         Merge::merge(&mut self.indexer, other.indexer);
@@ -154,6 +161,7 @@ impl Merge for ChangeSet {
             && self.local_chain.is_empty()
             && self.tx_graph.is_empty()
             && self.indexer.is_empty()
+            && self.locked_outpoints.is_empty()
     }
 }
 
@@ -163,6 +171,8 @@ impl ChangeSet {
     pub const WALLET_SCHEMA_NAME: &'static str = "bdk_wallet";
     /// Name of table to store wallet descriptors and network.
     pub const WALLET_TABLE_NAME: &'static str = "bdk_wallet";
+    /// Name of table to store wallet locked outpoints.
+    pub const WALLET_OUTPOINT_LOCK_TABLE_NAME: &'static str = "bdk_wallet_locked_outpoints";
 
     /// Get v0 sqlite [ChangeSet] schema
     pub fn schema_v0() -> alloc::string::String {
@@ -177,12 +187,24 @@ impl ChangeSet {
         )
     }
 
+    /// Get v1 sqlite [`ChangeSet`] schema. Schema v1 adds a table for locked outpoints.
+    pub fn schema_v1() -> alloc::string::String {
+        format!(
+            "CREATE TABLE {} ( \
+                txid TEXT NOT NULL, \
+                vout INTEGER NOT NULL, \
+                PRIMARY KEY(txid, vout) \
+                ) STRICT;",
+            Self::WALLET_OUTPOINT_LOCK_TABLE_NAME,
+        )
+    }
+
     /// Initialize sqlite tables for wallet tables.
     pub fn init_sqlite_tables(db_tx: &chain::rusqlite::Transaction) -> chain::rusqlite::Result<()> {
         crate::rusqlite_impl::migrate_schema(
             db_tx,
             Self::WALLET_SCHEMA_NAME,
-            &[&Self::schema_v0()],
+            &[&Self::schema_v0(), &Self::schema_v1()],
         )?;
 
         bdk_chain::local_chain::ChangeSet::init_sqlite_tables(db_tx)?;
@@ -194,6 +216,7 @@ impl ChangeSet {
 
     /// Recover a [`ChangeSet`] from sqlite database.
     pub fn from_sqlite(db_tx: &chain::rusqlite::Transaction) -> chain::rusqlite::Result<Self> {
+        use bitcoin::{OutPoint, Txid};
         use chain::rusqlite::OptionalExtension;
         use chain::Impl;
 
@@ -218,6 +241,24 @@ impl ChangeSet {
             changeset.descriptor = desc.map(Impl::into_inner);
             changeset.change_descriptor = change_desc.map(Impl::into_inner);
             changeset.network = network.map(Impl::into_inner);
+        }
+
+        // Select locked outpoints.
+        let mut stmt = db_tx.prepare(&format!(
+            "SELECT txid, vout FROM {}",
+            Self::WALLET_OUTPOINT_LOCK_TABLE_NAME,
+        ))?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, Impl<Txid>>("txid")?,
+                row.get::<_, u32>("vout")?,
+            ))
+        })?;
+        let locked_outpoints = &mut changeset.locked_outpoints.outpoints;
+        for row in rows {
+            let (Impl(txid), vout) = row?;
+            let outpoint = OutPoint::new(txid, vout);
+            locked_outpoints.insert(outpoint, true);
         }
 
         changeset.local_chain = local_chain::ChangeSet::from_sqlite(db_tx)?;
@@ -268,6 +309,30 @@ impl ChangeSet {
             })?;
         }
 
+        // Insert or delete locked outpoints.
+        let mut insert_stmt = db_tx.prepare_cached(&format!(
+            "INSERT OR IGNORE INTO {}(txid, vout) VALUES(:txid, :vout)",
+            Self::WALLET_OUTPOINT_LOCK_TABLE_NAME
+        ))?;
+        let mut delete_stmt = db_tx.prepare_cached(&format!(
+            "DELETE FROM {} WHERE txid=:txid AND vout=:vout",
+            Self::WALLET_OUTPOINT_LOCK_TABLE_NAME,
+        ))?;
+        for (&outpoint, &is_locked) in &self.locked_outpoints.outpoints {
+            let bitcoin::OutPoint { txid, vout } = outpoint;
+            if is_locked {
+                insert_stmt.execute(named_params! {
+                    ":txid": Impl(txid),
+                    ":vout": vout,
+                })?;
+            } else {
+                delete_stmt.execute(named_params! {
+                    ":txid": Impl(txid),
+                    ":vout": vout,
+                })?;
+            }
+        }
+
         self.local_chain.persist_to_sqlite(db_tx)?;
         self.tx_graph.persist_to_sqlite(db_tx)?;
         self.indexer.persist_to_sqlite(db_tx)?;
@@ -307,6 +372,15 @@ impl From<keychain_txout::ChangeSet> for ChangeSet {
     fn from(indexer: keychain_txout::ChangeSet) -> Self {
         Self {
             indexer,
+            ..Default::default()
+        }
+    }
+}
+
+impl From<locked_outpoints::ChangeSet> for ChangeSet {
+    fn from(locked_outpoints: locked_outpoints::ChangeSet) -> Self {
+        Self {
+            locked_outpoints,
             ..Default::default()
         }
     }

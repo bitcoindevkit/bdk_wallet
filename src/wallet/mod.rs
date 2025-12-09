@@ -53,6 +53,7 @@ mod changeset;
 pub mod coin_selection;
 pub mod error;
 pub mod export;
+pub mod locked_outpoints;
 mod params;
 mod persisted;
 pub mod signer;
@@ -109,6 +110,7 @@ pub struct Wallet {
     stage: ChangeSet,
     network: Network,
     secp: SecpCtx,
+    locked_outpoints: HashSet<OutPoint>,
 }
 
 /// An update to [`Wallet`].
@@ -227,9 +229,9 @@ pub enum LoadMismatch {
         /// Keychain identifying the descriptor.
         keychain: KeychainKind,
         /// The loaded descriptor.
-        loaded: Option<ExtendedDescriptor>,
+        loaded: Option<Box<ExtendedDescriptor>>,
         /// The expected descriptor.
-        expected: Option<ExtendedDescriptor>,
+        expected: Option<Box<ExtendedDescriptor>>,
     },
 }
 
@@ -474,6 +476,8 @@ impl Wallet {
             None => (None, Arc::new(SignersContainer::new())),
         };
 
+        let locked_outpoints = HashSet::new();
+
         let mut stage = ChangeSet {
             descriptor: Some(descriptor.clone()),
             change_descriptor: change_descriptor.clone(),
@@ -500,6 +504,7 @@ impl Wallet {
             indexed_graph,
             stage,
             secp,
+            locked_outpoints,
         })
     }
 
@@ -599,8 +604,8 @@ impl Wallet {
                 if descriptor.descriptor_id() != exp_desc.descriptor_id() {
                     return Err(LoadError::Mismatch(LoadMismatch::Descriptor {
                         keychain: KeychainKind::External,
-                        loaded: Some(descriptor),
-                        expected: Some(exp_desc),
+                        loaded: Some(Box::new(descriptor)),
+                        expected: Some(Box::new(exp_desc)),
                     }));
                 }
                 if params.extract_keys {
@@ -609,7 +614,7 @@ impl Wallet {
             } else {
                 return Err(LoadError::Mismatch(LoadMismatch::Descriptor {
                     keychain: KeychainKind::External,
-                    loaded: Some(descriptor),
+                    loaded: Some(Box::new(descriptor)),
                     expected: None,
                 }));
             }
@@ -630,7 +635,7 @@ impl Wallet {
                     return Err(LoadError::Mismatch(LoadMismatch::Descriptor {
                         keychain: KeychainKind::Internal,
                         loaded: None,
-                        expected: Some(exp_desc),
+                        expected: Some(Box::new(exp_desc)),
                     }));
                 }
             }
@@ -644,7 +649,7 @@ impl Wallet {
                 None => {
                     return Err(LoadError::Mismatch(LoadMismatch::Descriptor {
                         keychain: KeychainKind::Internal,
-                        loaded: Some(desc),
+                        loaded: Some(Box::new(desc)),
                         expected: None,
                     }))
                 }
@@ -656,8 +661,8 @@ impl Wallet {
                     if desc.descriptor_id() != exp_desc.descriptor_id() {
                         return Err(LoadError::Mismatch(LoadMismatch::Descriptor {
                             keychain: KeychainKind::Internal,
-                            loaded: Some(desc),
-                            expected: Some(exp_desc),
+                            loaded: Some(Box::new(desc)),
+                            expected: Some(Box::new(exp_desc)),
                         }));
                     }
                     if params.extract_keys {
@@ -676,6 +681,14 @@ impl Wallet {
             )),
             None => Arc::new(SignersContainer::new()),
         };
+
+        // Apply locked outpoints
+        let locked_outpoints = changeset.locked_outpoints.outpoints;
+        let locked_outpoints = locked_outpoints
+            .into_iter()
+            .filter(|&(_op, is_locked)| is_locked)
+            .map(|(op, _)| op)
+            .collect();
 
         let mut stage = ChangeSet::default();
 
@@ -698,6 +711,7 @@ impl Wallet {
             stage,
             network,
             secp,
+            locked_outpoints,
         }))
     }
 
@@ -2131,6 +2145,8 @@ impl Wallet {
                     CanonicalizationParams::default(),
                     self.indexed_graph.index.outpoints().iter().cloned(),
                 )
+                // Filter out locked outpoints.
+                .filter(|(_, txo)| !self.is_outpoint_locked(txo.outpoint))
                 // Only create LocalOutput if UTxO is mature.
                 .filter_map(move |((k, i), full_txo)| {
                     full_txo
@@ -2398,6 +2414,51 @@ impl Wallet {
     /// Get a reference to the inner [`LocalChain`].
     pub fn local_chain(&self) -> &LocalChain {
         &self.chain
+    }
+
+    /// List the locked outpoints.
+    pub fn list_locked_outpoints(&self) -> impl Iterator<Item = OutPoint> + '_ {
+        self.locked_outpoints.iter().copied()
+    }
+
+    /// List unspent outpoints that are currently locked.
+    pub fn list_locked_unspent(&self) -> impl Iterator<Item = OutPoint> + '_ {
+        self.list_unspent()
+            .filter(|output| self.is_outpoint_locked(output.outpoint))
+            .map(|output| output.outpoint)
+    }
+
+    /// Whether the `outpoint` is locked. See [`Wallet::lock_outpoint`] for more.
+    pub fn is_outpoint_locked(&self, outpoint: OutPoint) -> bool {
+        self.locked_outpoints.contains(&outpoint)
+    }
+
+    /// Lock a wallet output identified by the given `outpoint`.
+    ///
+    /// A locked UTXO will not be selected as an input to fund a transaction. This is useful
+    /// for excluding or reserving candidate inputs during transaction creation.
+    ///
+    /// **You must persist the staged change for the lock status to be persistent**. To unlock a
+    /// previously locked outpoint, see [`Wallet::unlock_outpoint`].
+    pub fn lock_outpoint(&mut self, outpoint: OutPoint) {
+        if self.locked_outpoints.insert(outpoint) {
+            let changeset = locked_outpoints::ChangeSet {
+                outpoints: [(outpoint, true)].into(),
+            };
+            self.stage.merge(changeset.into());
+        }
+    }
+
+    /// Unlock the wallet output of the specified `outpoint`.
+    ///
+    /// **You must persist the staged change for the lock status to be persistent**.
+    pub fn unlock_outpoint(&mut self, outpoint: OutPoint) {
+        if self.locked_outpoints.remove(&outpoint) {
+            let changeset = locked_outpoints::ChangeSet {
+                outpoints: [(outpoint, false)].into(),
+            };
+            self.stage.merge(changeset.into());
+        }
     }
 
     /// Introduces a `block` of `height` to the wallet, and tries to connect it to the
