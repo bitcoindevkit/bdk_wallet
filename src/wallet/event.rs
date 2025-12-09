@@ -8,76 +8,82 @@ use alloc::vec::Vec;
 use bitcoin::{Transaction, Txid};
 use chain::{BlockId, ChainPosition, ConfirmationBlockTime};
 
-/// Events representing changes to wallet transactions.
+/// Events representing changes to the wallet state.
 ///
-/// Returned after calling
-/// [`Wallet::apply_update_events`](crate::wallet::Wallet::apply_update_events).
+/// Returned by [`Wallet::apply_update`], [`Wallet::apply_block`], and
+/// [`Wallet::apply_block_connected_to`] to track transaction status changes and chain
+/// tip changes due to new blocks or reorganizations.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum WalletEvent {
-    /// The latest chain tip known to the wallet changed.
+    /// The blockchain tip known to the wallet has changed.
+    ///
+    /// Emitted when the blockchain is extended or a chain reorganization occurs.
     ChainTipChanged {
-        /// Previous chain tip.
+        /// The previous blockchain tip.
         old_tip: BlockId,
-        /// New chain tip.
+        /// The new blockchain tip.
         new_tip: BlockId,
     },
-    /// A transaction is now confirmed.
+
+    /// A transaction has been confirmed in a block.
     ///
-    /// If the transaction was previously unconfirmed `old_block_time` will be `None`.
-    ///
-    /// If a confirmed transaction is now re-confirmed in a new block `old_block_time` will contain
-    /// the block id and the time it was previously confirmed. This can happen after a chain
-    /// reorg.
+    /// Emitted when a transaction is first confirmed or re-confirmed in a different block after
+    /// a chain reorganization. When `old_block_time` is `Some`, the transaction was previously
+    /// confirmed in a different block.
     TxConfirmed {
-        /// Transaction id.
+        /// The transaction id.
         txid: Txid,
-        /// Transaction.
+        /// The full transaction.
         tx: Arc<Transaction>,
-        /// Confirmation block time.
+        /// The block and timestamp where the transaction is confirmed.
         block_time: ConfirmationBlockTime,
-        /// Old confirmation block and time if previously confirmed in a different block.
+        /// Previous confirmation details if re-confirmed after a reorg, `None` for first
+        /// confirmation.
         old_block_time: Option<ConfirmationBlockTime>,
     },
-    /// A transaction is now unconfirmed.
+
+    /// A transaction is now unconfirmed (in the mempool).
     ///
-    /// If the transaction is first seen in the mempool `old_block_time` will be `None`.
-    ///
-    /// If a previously confirmed transaction is now seen in the mempool `old_block_time` will
-    /// contain the block id and the time it was previously confirmed. This can happen after a
-    /// chain reorg.
+    /// Emitted when a transaction first appears in the mempool or when a confirmed transaction
+    /// becomes unconfirmed due to a chain reorganization. When `old_block_time` is `Some`, the
+    /// transaction was previously confirmed but is now unconfirmed due to a reorg.
     TxUnconfirmed {
-        /// Transaction id.
+        /// The transaction id.
         txid: Txid,
-        /// Transaction.
+        /// The full transaction.
         tx: Arc<Transaction>,
-        /// Old confirmation block and time, if previously confirmed.
+        /// Previous confirmation details if unconfirmed due to reorg, `None` if first seen.
         old_block_time: Option<ConfirmationBlockTime>,
     },
-    /// An unconfirmed transaction was replaced.
+
+    /// One or more unconfirmed transactions were replaced.
     ///
-    /// This can happen after an RBF is broadcast or if a third party double spends an input of
-    /// a received payment transaction before it is confirmed.
+    /// Occurs when a transaction's inputs are spent by the replacement transaction, typically due
+    /// to Replace-By-Fee (RBF) or a double-spend attempt.
     ///
-    /// The 'conflicts' field contains the txid and vin (in which it conflicts) of the conflicting
-    /// transactions.
+    /// The `conflicts` field contains `(input_index, conflicting_txid)` pairs indicating which
+    /// inputs conflict. Only conflicting transactions known to the wallet are reported.
+    /// Conflicting transactions are usually added during a sync because they spend a UTXO tracked
+    /// by the wallet.
     TxReplaced {
-        /// Transaction id.
+        /// The replacement transaction id.
         txid: Txid,
-        /// Transaction.
+        /// The full replacement transaction.
         tx: Arc<Transaction>,
-        /// Conflicting transaction ids.
+        /// List of `(input_index, conflicting_txid)` pairs showing which inputs were double-spent.
         conflicts: Vec<(usize, Txid)>,
     },
-    /// Unconfirmed transaction dropped.
+
+    /// An unconfirmed transaction was dropped from the mempool.
     ///
-    /// The transaction was dropped from the local mempool. This is generally due to the fee rate
-    /// being too low. The transaction can still reappear in the mempool in the future resulting in
-    /// a [`WalletEvent::TxUnconfirmed`] event.
+    /// This typically occurs when a transaction's fee rate is too low and/or the mempool is full.
+    /// The transaction may reappear later if conditions change, which will emit a
+    /// [`WalletEvent::TxUnconfirmed`] event.
     TxDropped {
-        /// Transaction id.
+        /// The dropped transaction id.
         txid: Txid,
-        /// Transaction.
+        /// The full dropped transaction.
         tx: Arc<Transaction>,
     },
 }
