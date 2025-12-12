@@ -1,3 +1,4 @@
+#![allow(unused)]
 use bdk_bitcoind_rpc::{
     bitcoincore_rpc::{Auth, Client, RpcApi},
     Emitter, MempoolEvent,
@@ -5,7 +6,8 @@ use bdk_bitcoind_rpc::{
 use bdk_wallet::rusqlite::Connection;
 use bdk_wallet::{
     bitcoin::{Block, Network},
-    KeychainKind, Wallet,
+    keyring::KeyRing,
+    KeychainKind, LoadParams, Wallet,
 };
 use clap::{self, Parser};
 use std::{
@@ -94,29 +96,44 @@ fn main() -> anyhow::Result<()> {
 
     let start_load_wallet = Instant::now();
     let mut db = Connection::open(args.db_path)?;
-    let wallet_opt = Wallet::load()
-        .descriptor(KeychainKind::External, Some(args.descriptor.clone()))
-        .descriptor(KeychainKind::Internal, args.change_descriptor.clone())
-        .extract_keys()
-        .check_network(args.network)
-        .load_wallet(&mut db)?;
-    let mut wallet = match wallet_opt {
+
+    let mut params = LoadParams::new()
+        .check_default(KeychainKind::External)
+        .check_descriptor(KeychainKind::External, Some(args.descriptor.clone()))
+        .check_genesis_hash(bitcoin::constants::genesis_block(args.network).block_hash())
+        .check_network(args.network);
+
+    if let Some(desc) = &args.change_descriptor {
+        params = params.check_descriptor(KeychainKind::Internal, Some(desc.clone()));
+    }
+
+    let mut wallet = match Wallet::<KeychainKind>::from_sqlite(&mut db, params).unwrap() {
         Some(wallet) => wallet,
-        None => match &args.change_descriptor {
-            Some(change_desc) => Wallet::create(args.descriptor.clone(), change_desc.clone())
-                .network(args.network)
-                .create_wallet(&mut db)?,
-            None => Wallet::create_single(args.descriptor.clone())
-                .network(args.network)
-                .create_wallet(&mut db)?,
-        },
+        None => {
+            let mut keyring: KeyRing<KeychainKind> = KeyRing::new(
+                args.network,
+                KeychainKind::External,
+                args.descriptor.clone(),
+            )
+            .unwrap();
+            if let Some(desc) = &args.change_descriptor {
+                keyring
+                    .add_descriptor(KeychainKind::Internal, desc.clone(), false)
+                    .unwrap();
+            }
+            Wallet::new(keyring)
+        }
     };
+
     println!(
         "Loaded wallet in {}s",
         start_load_wallet.elapsed().as_secs_f32()
     );
 
-    let address = wallet.reveal_next_address(KeychainKind::External).address;
+    let address = wallet
+        .next_unused_address(KeychainKind::External)
+        .unwrap()
+        .address;
     println!("Wallet address: {address}");
 
     let balance = wallet.balance();
@@ -168,7 +185,7 @@ fn main() -> anyhow::Result<()> {
                 let connected_to = block_emission.connected_to();
                 let start_apply_block = Instant::now();
                 wallet.apply_block_connected_to(&block_emission.block, height, connected_to)?;
-                wallet.persist(&mut db)?;
+                wallet.persist_to_sqlite(&mut db)?;
                 let elapsed = start_apply_block.elapsed().as_secs_f32();
                 println!("Applied block {hash} at height {height} in {elapsed}s");
             }
@@ -176,7 +193,7 @@ fn main() -> anyhow::Result<()> {
                 let start_apply_mempool = Instant::now();
                 wallet.apply_evicted_txs(event.evicted);
                 wallet.apply_unconfirmed_txs(event.update);
-                wallet.persist(&mut db)?;
+                wallet.persist_to_sqlite(&mut db)?;
                 println!(
                     "Applied unconfirmed transactions in {}s",
                     start_apply_mempool.elapsed().as_secs_f32()
