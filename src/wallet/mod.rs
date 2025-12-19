@@ -34,8 +34,8 @@ use bdk_chain::{
     FullTxOut, Indexed, IndexedTxGraph, Indexer, KeychainIndexed, Merge,
 };
 use bdk_tx::{
-    selection_algorithm_lowest_fee_bnb, ChangePolicyType, DefiniteDescriptor, Finalizer, Input,
-    InputCandidates, OriginalTxStats, Output, RbfParams, Selector, SelectorParams, TxStatus,
+    selection_algorithm_lowest_fee_bnb, ConfirmationStatus, Finalizer, Input, InputCandidates,
+    OriginalTxStats, Output, RbfParams, ScriptSource, Selector, SelectorParams,
 };
 #[cfg(feature = "std")]
 use bitcoin::secp256k1::rand;
@@ -2755,13 +2755,17 @@ impl Wallet {
 ///
 /// [`Height`]: bitcoin::absolute::Height
 /// [`Time`]: bitcoin::absolute::Time
-fn status_from_position(pos: ChainPosition<ConfirmationBlockTime>) -> Option<TxStatus> {
+fn status_from_position(pos: ChainPosition<ConfirmationBlockTime>) -> Option<ConfirmationStatus> {
     if let ChainPosition::Confirmed { anchor, .. } = pos {
         let conf_height = anchor.confirmation_height_upper_bound();
         let height = absolute::Height::from_consensus(conf_height).ok()?;
+        // TODO: Currently BDK has no notion of MTP, we can use the confirmation block time for now.
         let time =
             absolute::Time::from_consensus(anchor.confirmation_time.try_into().ok()?).ok()?;
-        Some(TxStatus { height, time })
+        Some(ConfirmationStatus {
+            height,
+            prev_mtp: Some(time),
+        })
     } else {
         None
     }
@@ -2794,7 +2798,7 @@ impl Wallet {
         params: &PsbtParams<C>,
     ) -> (
         Assets,
-        DefiniteDescriptor,
+        ScriptSource,
         HashMap<OutPoint, FullTxOut<ConfirmationBlockTime>>,
     ) {
         // Get spend assets.
@@ -2812,12 +2816,14 @@ impl Wallet {
         };
 
         // Get change script.
-        let change_script = params.change_descriptor.clone().unwrap_or_else(|| {
+        let change_script = params.change_script.clone().unwrap_or_else(|| {
             let change_keychain = self.map_keychain(KeychainKind::Internal);
-            let desc = self.public_descriptor(change_keychain);
+            let descriptor = self.public_descriptor(change_keychain);
             let next_index = self.next_derivation_index(change_keychain);
-            desc.at_derivation_index(next_index)
-                .expect("should be valid derivation index")
+            let definite_descriptor = descriptor
+                .at_derivation_index(next_index)
+                .expect("should be valid derivation index");
+            ScriptSource::from_descriptor(definite_descriptor)
         });
 
         // Get wallet txouts.
@@ -2896,6 +2902,7 @@ impl Wallet {
     /// ```rust,no_run
     /// # use std::str::FromStr;
     /// # use bitcoin::{Amount, Address, FeeRate, OutPoint};
+    /// # use bdk_tx::FeeStrategy;
     /// # use bdk_wallet::psbt::{PsbtParams, SelectionStrategy};
     /// # let wallet = bdk_wallet::doctest_wallet!();
     /// # let outpoint = OutPoint::null();
@@ -2906,7 +2913,7 @@ impl Wallet {
     ///     .add_utxos(&[outpoint])
     ///     .add_recipients([(address, amount)])
     ///     .coin_selection(SelectionStrategy::LowestFee)
-    ///     .feerate(FeeRate::BROADCAST_MIN);
+    ///     .fee(FeeStrategy::FeeRate(FeeRate::BROADCAST_MIN));
     ///
     /// let (psbt, finalizer) = wallet.create_psbt(params)?;
     /// # Ok::<_, anyhow::Error>(())
@@ -2983,12 +2990,10 @@ impl Wallet {
         let mut selector = Selector::new(
             &input_candidates,
             SelectorParams {
-                target_feerate: params.feerate,
+                fee_strategy: params.fee_strategy.clone(),
                 target_outputs,
-                change_descriptor: change_script,
-                change_policy: ChangePolicyType::NoDustAndLeastWaste {
-                    longterm_feerate: params.longterm_feerate,
-                },
+                change_script,
+                change_policy: params.change_policy,
                 replace: None,
             },
         )
@@ -3009,6 +3014,8 @@ impl Wallet {
     ) -> Result<(Psbt, Finalizer), CreatePsbtError> {
         // How many times to run bnb before giving up
         const BNB_MAX_ROUNDS: usize = 10_000;
+        /// Longterm feerate
+        const LONGTERM_FEERATE: FeeRate = FeeRate::from_sat_per_vb_unchecked(2);
 
         // Select coins
         if params.drain_wallet {
@@ -3025,7 +3032,7 @@ impl Wallet {
                 SelectionStrategy::LowestFee => {
                     selector
                         .select_with_algorithm(selection_algorithm_lowest_fee_bnb(
-                            params.longterm_feerate,
+                            LONGTERM_FEERATE,
                             BNB_MAX_ROUNDS,
                         ))
                         .map_err(CreatePsbtError::Bnb)?;
@@ -3057,6 +3064,8 @@ impl Wallet {
                 fallback_locktime,
                 fallback_sequence,
                 mandate_full_tx_for_segwit_v0: !params.only_witness_utxo,
+                sighash_type: params.sighash_type,
+                ..Default::default()
             })
             .map_err(CreatePsbtError::Psbt)?;
 
@@ -3121,7 +3130,7 @@ impl Wallet {
         recipients: Vec<(ScriptBuf, Amount)>,
     ) -> Result<(Psbt, Finalizer), ReplaceByFeeError> {
         let params = PsbtParams {
-            feerate,
+            fee_strategy: bdk_tx::FeeStrategy::FeeRate(feerate),
             recipients,
             ..Default::default()
         }
@@ -3249,12 +3258,10 @@ impl Wallet {
         let mut selector = Selector::new(
             &input_candidates,
             SelectorParams {
-                target_feerate: params.feerate,
+                fee_strategy: params.fee_strategy.clone(),
                 target_outputs,
-                change_descriptor: change_script,
-                change_policy: ChangePolicyType::NoDustAndLeastWaste {
-                    longterm_feerate: params.longterm_feerate,
-                },
+                change_script,
+                change_policy: params.change_policy,
                 replace: Some(rbf_params),
             },
         )
