@@ -47,7 +47,7 @@ fn main() -> anyhow::Result<()> {
     let feerate = feerate_unchecked(FEERATE);
     params
         .add_recipients([(addr, AMOUNT)])
-        .feerate(feerate)
+        .fee(bdk_tx::FeeStrategy::FeeRate(feerate))
         .coin_selection(SingleRandomDraw);
 
     // Create PSBT (which also returns the Finalizer).

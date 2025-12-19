@@ -5,10 +5,11 @@ use alloc::vec::Vec;
 use core::fmt;
 
 use bdk_chain::{BlockId, CanonicalizationParams, ConfirmationBlockTime, FullTxOut, TxGraph};
-use bdk_tx::{DefiniteDescriptor, Input, Output};
+use bdk_coin_select::{ChangePolicy, DrainWeights};
+use bdk_tx::{FeeStrategy, Input, Output, ScriptSource};
 use bitcoin::{
-    absolute, transaction::Version, Amount, FeeRate, OutPoint, ScriptBuf, Sequence, Transaction,
-    Txid,
+    absolute, psbt::PsbtSighashType, transaction::Version, Amount, FeeRate, OutPoint, ScriptBuf,
+    Sequence, Transaction, Txid,
 };
 use miniscript::plan::Assets;
 
@@ -36,12 +37,12 @@ pub struct PsbtParams<C> {
 
     // Outputs
     pub(crate) recipients: Vec<(ScriptBuf, Amount)>,
-    pub(crate) change_descriptor: Option<DefiniteDescriptor>,
+    pub(crate) change_script: Option<ScriptSource>,
 
     // Coin Selection
     pub(crate) assets: Option<Assets>,
-    pub(crate) feerate: FeeRate,
-    pub(crate) longterm_feerate: FeeRate,
+    pub(crate) fee_strategy: FeeStrategy,
+    pub(crate) change_policy: ChangePolicy,
     pub(crate) drain_wallet: bool,
     pub(crate) coin_selection: SelectionStrategy,
     pub(crate) canonical_params: CanonicalizationParams,
@@ -55,6 +56,7 @@ pub struct PsbtParams<C> {
     pub(crate) fallback_sequence: Option<Sequence>,
     pub(crate) ordering: TxOrdering<Input, Output>,
     pub(crate) only_witness_utxo: bool,
+    pub(crate) sighash_type: Option<PsbtSighashType>,
     pub(crate) add_global_xpubs: bool,
 
     // RBF
@@ -72,9 +74,12 @@ impl Default for PsbtParams<CreateTx> {
             inputs: Default::default(),
             assets: Default::default(),
             recipients: Default::default(),
-            change_descriptor: Default::default(),
-            feerate: bitcoin::FeeRate::BROADCAST_MIN,
-            longterm_feerate: bitcoin::FeeRate::from_sat_per_vb_unchecked(10),
+            change_script: Default::default(),
+            fee_strategy: FeeStrategy::FeeRate(FeeRate::BROADCAST_MIN),
+            change_policy: ChangePolicy {
+                min_value: 330,
+                drain_weights: DrainWeights::TR_KEYSPEND,
+            },
             drain_wallet: Default::default(),
             coin_selection: Default::default(),
             canonical_params: Default::default(),
@@ -86,6 +91,7 @@ impl Default for PsbtParams<CreateTx> {
             fallback_sequence: Default::default(),
             ordering: Default::default(),
             only_witness_utxo: Default::default(),
+            sighash_type: Default::default(),
             add_global_xpubs: Default::default(),
             replace: Default::default(),
             marker: core::marker::PhantomData,
@@ -145,9 +151,9 @@ impl PsbtParams<CreateTx> {
             inputs: self.inputs,
             assets: self.assets,
             recipients: self.recipients,
-            change_descriptor: self.change_descriptor,
-            feerate: self.feerate,
-            longterm_feerate: self.longterm_feerate,
+            change_script: self.change_script,
+            fee_strategy: self.fee_strategy,
+            change_policy: self.change_policy,
             drain_wallet: self.drain_wallet,
             coin_selection: self.coin_selection,
             canonical_params: self.canonical_params,
@@ -159,6 +165,7 @@ impl PsbtParams<CreateTx> {
             fallback_sequence: self.fallback_sequence,
             ordering: self.ordering,
             only_witness_utxo: self.only_witness_utxo,
+            sighash_type: self.sighash_type,
             add_global_xpubs: self.add_global_xpubs,
             replace: self.replace,
             marker: core::marker::PhantomData,
@@ -246,9 +253,11 @@ impl<C> PsbtParams<C> {
         self
     }
 
-    /// Set the target fee rate.
-    pub fn feerate(&mut self, feerate: FeeRate) -> &mut Self {
-        self.feerate = feerate;
+    /// Set the fee targeting strategy. See [`FeeStrategy`] for more.
+    ///
+    /// If not set, defaults to [`FeeRate::BROADCAST_MIN`].
+    pub fn fee(&mut self, fee: FeeStrategy) -> &mut Self {
+        self.fee_strategy = fee;
         self
     }
 
@@ -271,9 +280,31 @@ impl<C> PsbtParams<C> {
         self
     }
 
-    /// Set the definite descriptor used for generating the change output.
-    pub fn change_descriptor(&mut self, desc: DefiniteDescriptor) -> &mut Self {
-        self.change_descriptor = Some(desc);
+    /// Set the [`Descriptor`] or raw [`Script`] to be used for generating the change output.
+    ///
+    /// [`Descriptor`]: ScriptSource::Descriptor
+    /// [`Script`]: ScriptSource::Script
+    pub fn change_script(&mut self, script_source: ScriptSource) -> &mut Self {
+        self.change_script = Some(script_source);
+        self
+    }
+
+    /// Set the policy to be used when considering whether a change output should be added to the
+    /// transaction.
+    ///
+    /// If not set, the wallet will use a change policy that makes sense for most single-signature
+    /// wallets. It's highly recommended to set your own [`ChangePolicy`] if you expect to build
+    /// transactions with change characteristics that signifcantly differ from the default.
+    ///
+    /// Things to consider when specifying a change policy include:
+    ///
+    /// - The minimum allowable value of a change output
+    /// - The [`Weight`] of a change output
+    /// - The [`Weight`] needed to spend the change in the future
+    ///
+    /// [`Weight`]: bitcoin::Weight
+    pub fn change_policy(&mut self, change_policy: ChangePolicy) -> &mut Self {
+        self.change_policy = change_policy;
         self
     }
 
@@ -385,8 +416,11 @@ impl<C> PsbtParams<C> {
         self
     }
 
-    // TODO(@valuedmammal): Should we expose an option to set the `longterm_feerate`, and/or
-    // set the coin-select `ChangePolicy`?
+    /// Set a specific [`PsbtSighashType`].
+    pub fn sighash_type(&mut self, sighash_type: PsbtSighashType) -> &mut Self {
+        self.sighash_type = Some(sighash_type);
+        self
+    }
 
     /// Fill in the global [`Psbt::xpub`]s field with the extended keys of the wallet's
     /// descriptors.
@@ -506,14 +540,11 @@ mod test {
         use crate::KeychainKind::Internal;
         let (wallet, txid0) = crate::test_utils::get_funded_wallet_wpkh();
         let outpoint_0 = OutPoint::new(txid0, 0);
-        let change_desc = wallet
-            .public_descriptor(Internal)
-            .at_derivation_index(0)
-            .unwrap();
+        let change_script = wallet.spk_index().spk_at_index(Internal, 0).unwrap();
 
         // Create psbt
         let mut params = PsbtParams::default();
-        params.change_descriptor(change_desc);
+        params.change_script(ScriptSource::Script(change_script));
         params.drain_wallet();
         let (psbt, _) = wallet.create_psbt(params).unwrap();
         let tx = psbt.unsigned_tx;
@@ -522,13 +553,17 @@ mod test {
         // Replace tx
         let mut params = PsbtParams::default().replace_txs(&[Arc::new(tx)]);
         params.add_recipients([(ScriptBuf::new_op_return([0xb1, 0x0c]), Amount::ZERO)]);
-        params.feerate(FeeRate::from_sat_per_vb_unchecked(8));
+        let feerate = FeeRate::from_sat_per_vb_unchecked(8);
+        params.fee(FeeStrategy::FeeRate(feerate));
 
         // Get utxos
         assert_eq!(params.utxos(), &[outpoint_0].into());
 
         assert_eq!(params.replace, [txid1].into());
-        assert_eq!(params.feerate, FeeRate::from_sat_per_vb_unchecked(8));
+        assert!(matches!(
+            params.fee_strategy,
+            FeeStrategy::FeeRate(r) if r == feerate,
+        ));
         assert_eq!(
             params.recipients,
             [(ScriptBuf::new_op_return([0xb1, 0x0c]), Amount::ZERO)]

@@ -1,10 +1,11 @@
 use bdk_chain::{BlockId, ConfirmationBlockTime};
+use bdk_tx::FeeStrategy;
 use bdk_wallet::bitcoin;
 use bdk_wallet::test_utils::*;
 use bdk_wallet::{error::CreatePsbtError, psbt, KeychainKind, PsbtParams, SignOptions, Wallet};
 use bitcoin::{
-    absolute, hashes::Hash, secp256k1, Address, Amount, FeeRate, Network, OutPoint, Psbt,
-    ScriptBuf, Transaction, TxIn, TxOut,
+    absolute, hashes::Hash, Address, Amount, FeeRate, Network, OutPoint, Psbt, ScriptBuf,
+    Transaction, TxIn, TxOut,
 };
 use core::str::FromStr;
 use miniscript::plan::Assets;
@@ -40,21 +41,19 @@ fn test_create_psbt() {
     insert_checkpoint(&mut wallet, anchor.block_id);
     receive_output(&mut wallet, Amount::ONE_BTC, ReceiveTo::Block(anchor));
 
-    let change_desc =
-        miniscript::Descriptor::parse_descriptor(&secp256k1::Secp256k1::new(), change_desc)
-            .unwrap()
-            .0
-            .at_derivation_index(0)
-            .unwrap();
+    let change_spk = wallet
+        .peek_address(KeychainKind::Internal, 0)
+        .script_pubkey();
 
     let addr = wallet.reveal_next_address(KeychainKind::External);
     let mut params = PsbtParams::default();
+    let feerate = FeeRate::from_sat_per_vb_unchecked(4);
     params
         .version(bitcoin::transaction::Version(3))
         .coin_selection(psbt::SelectionStrategy::LowestFee)
         .add_recipients([(addr.script_pubkey(), Amount::from_btc(0.42).unwrap())])
-        .change_descriptor(change_desc)
-        .feerate(FeeRate::from_sat_per_vb_unchecked(4))
+        .change_script(change_spk.into())
+        .fee(FeeStrategy::FeeRate(feerate))
         .fallback_sequence(bitcoin::Sequence::MAX)
         .ordering(bdk_wallet::TxOrdering::Shuffle)
         .add_global_xpubs();
@@ -242,7 +241,7 @@ fn test_create_psbt_cltv() {
         assert_eq!(psbt.unsigned_tx.lock_time.to_consensus_u32(), 100_000);
     }
 
-    // FIXME: Locktime greater than required
+    // Locktime greater than required
     {
         let mut params = PsbtParams::default();
         params
@@ -250,8 +249,8 @@ fn test_create_psbt_cltv() {
             .locktime(LockTime::from_consensus(200_000))
             .add_recipients([(addr.script_pubkey(), Amount::from_btc(0.42).unwrap())]);
 
-        // let (psbt, _) = wallet.create_psbt(params).unwrap();
-        // assert_eq!(psbt.unsigned_tx.lock_time.to_consensus_u32(), 200_000);
+        let (psbt, _) = wallet.create_psbt(params).unwrap();
+        assert_eq!(psbt.unsigned_tx.lock_time.to_consensus_u32(), 200_000);
     }
 }
 
@@ -453,16 +452,18 @@ fn test_create_psbt_utxo_filter() {
     assert_eq!(wallet.balance().total().to_sat(), 2100);
 
     let mut params = PsbtParams::default();
-    params.feerate(FeeRate::ZERO);
+    params.fee(FeeStrategy::FeeRate(FeeRate::ZERO));
     // Avoid selection of dust utxos
     params.filter_utxos(|txo| {
         let min_non_dust = txo.txout.script_pubkey.minimal_non_dust(); // 330
         txo.txout.value >= min_non_dust
     });
-    params.change_descriptor({
-        let internal_desc = wallet.public_descriptor(KeychainKind::Internal);
-        internal_desc.at_derivation_index(0).unwrap()
-    });
+    params.change_script(
+        wallet
+            .peek_address(KeychainKind::Internal, 0)
+            .script_pubkey()
+            .into(),
+    );
     params.drain_wallet();
     let (psbt, _) = wallet.create_psbt(params).unwrap();
     assert_eq!(psbt.unsigned_tx.input.len(), 2);
