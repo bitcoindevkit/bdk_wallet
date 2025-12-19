@@ -382,7 +382,7 @@ pub enum CreatePsbtError {
     /// Failed to create a spending plan for a manually selected output.
     Plan(OutPoint),
     /// Failed to create PSBT.
-    Psbt(Box<bdk_tx::CreatePsbtError>),
+    Psbt(bdk_tx::CreatePsbtError),
     /// Selector error.
     Selector(bdk_tx::SelectorError),
     /// The UTXO of outpoint could not be found.
