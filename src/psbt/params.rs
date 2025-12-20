@@ -447,8 +447,9 @@ pub enum SelectionStrategy {
     LowestFee,
 }
 
-/// [`UtxoFilter`] is a user-defined `Fn` closure which decides whether to exclude a UTXO
-/// from being selected.
+/// [`UtxoFilter`] is a user-defined `Fn` closure which decides whether to include a UTXO
+/// for coin selection. This has a default implementation that enables selection of all
+/// txouts passed to it.
 #[allow(clippy::type_complexity)]
 pub(crate) struct UtxoFilter(
     pub Arc<dyn Fn(&FullTxOut<ConfirmationBlockTime>) -> bool + Send + Sync>,
