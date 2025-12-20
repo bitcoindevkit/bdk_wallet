@@ -30,39 +30,53 @@ pub type Rbf = ReplaceTx;
 /// Parameters to create a PSBT.
 #[derive(Debug)]
 pub struct PsbtParams<C> {
-    // Inputs
+    /// Set of selected UTXO outpoints.
     pub(crate) set: HashSet<OutPoint>,
+    /// List of UTXO outpoints to spend.
     pub(crate) utxos: Vec<OutPoint>,
+    /// List of planned transaction [`Input`]s.
     pub(crate) inputs: Vec<Input>,
-
-    // Outputs
+    /// List of recipient script/amount pairs.
     pub(crate) recipients: Vec<(ScriptBuf, Amount)>,
+    /// Optional script or descriptor designated for change.
     pub(crate) change_script: Option<ScriptSource>,
-
-    // Coin Selection
+    /// Optional assets for creating a spend plan.
     pub(crate) assets: Option<Assets>,
+    /// Fee targeting strategy.
     pub(crate) fee_strategy: FeeStrategy,
+    /// Policy for creating change outputs.
     pub(crate) change_policy: ChangePolicy,
+    /// Whether to spend all available coins.
     pub(crate) drain_wallet: bool,
+    /// Coin selection strategy to use.
     pub(crate) coin_selection: SelectionStrategy,
+    /// Parameters for transaction canonicalization.
     pub(crate) canonical_params: CanonicalizationParams,
+    /// UTXO filtering function.
     pub(crate) utxo_filter: UtxoFilter,
+    /// Optional height for evaluating coinbase maturity.
     pub(crate) maturity_height: Option<u32>,
+    /// Only allow spending UTXOs which are selected manually.
     pub(crate) manually_selected_only: bool,
-
-    // PSBT
+    /// Optional transaction [`Version`].
     pub(crate) version: Option<Version>,
+    /// Optional transaction [`LockTime`](absolute::LockTime).
     pub(crate) locktime: Option<absolute::LockTime>,
+    /// Optional fallback [`Sequence`] for inputs.
     pub(crate) fallback_sequence: Option<Sequence>,
+    /// Ordering of the transaction's inputs and outputs.
     pub(crate) ordering: TxOrdering<Input, Output>,
+    /// Only set the [`witness_utxo`](bitcoin::psbt::Input::witness_utxo) in PSBT inputs. This
+    /// allows opting out of setting the
+    /// [`non_witness_utxo`](bitcoin::psbt::Input::non_witness_utxo).
     pub(crate) only_witness_utxo: bool,
+    /// Optional PSBT sighash type.
     pub(crate) sighash_type: Option<PsbtSighashType>,
+    /// Whether to try filling in the PSBT global xpubs from the wallet's descriptors.
     pub(crate) add_global_xpubs: bool,
-
-    // RBF
+    /// Set of txids being replaced if this is a RBF transaction.
     pub(crate) replace: HashSet<Txid>,
-
-    /// Context marker.
+    /// The context in which the params are used.
     pub(crate) marker: core::marker::PhantomData<C>,
 }
 
