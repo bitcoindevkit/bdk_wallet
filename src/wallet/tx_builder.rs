@@ -1344,7 +1344,7 @@ mod test {
         assert_ne!(txid1, txid2);
 
         let utxo1 = wallet1.list_unspent().next().unwrap();
-        let tx1 = wallet1.get_tx(txid1).unwrap().tx_node.tx.clone();
+        let tx1 = wallet1.get_tx(txid1).unwrap().tx.clone();
 
         let satisfaction_weight = wallet1
             .public_descriptor(KeychainKind::External)
