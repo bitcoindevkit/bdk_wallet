@@ -124,7 +124,13 @@ pub fn new_wallet_and_funding_update(
         block_id: b3,
         confirmation_time: 200,
     };
-    update.chain = CheckPoint::from_block_ids([b0, b1, b2, b3]).ok();
+    update.chain = CheckPoint::from_blocks([
+        (b0.height, b0.hash),
+        (b1.height, b1.hash),
+        (b2.height, b2.hash),
+        (b3.height, b3.hash),
+    ])
+    .ok();
     update.tx_update.anchors = [(a2, tx0.compute_txid()), (a3, tx1.compute_txid())].into();
     update.tx_update.txs = [Arc::new(tx0), Arc::new(tx1)].into();
 
@@ -305,7 +311,7 @@ pub fn receive_output_to_address(
 /// a different one at the same height, then all later blocks are evicted as well.
 pub fn insert_checkpoint(wallet: &mut Wallet, block: BlockId) {
     let mut cp = wallet.latest_checkpoint();
-    cp = cp.insert(block);
+    cp = cp.insert(block.height, block.hash);
     wallet
         .apply_update(Update {
             chain: Some(cp),

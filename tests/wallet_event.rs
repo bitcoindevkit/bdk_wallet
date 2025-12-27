@@ -45,7 +45,7 @@ fn test_tx_unconfirmed_event() {
         hash: BlockHash::from_slice(&[1; 32]).unwrap(),
     };
     let mut cp = wallet.latest_checkpoint();
-    cp = cp.insert(reorg_block);
+    cp = cp.insert(reorg_block.height, reorg_block.hash);
     let reorg_update = Update {
         chain: Some(cp),
         ..Default::default()
@@ -157,7 +157,11 @@ fn test_tx_confirmed_event() {
         block_id: new_block,
         confirmation_time: 300,
     };
-    update.chain = CheckPoint::from_block_ids([parent_block, new_block]).ok();
+    update.chain = CheckPoint::from_blocks([
+        (parent_block.height, parent_block.hash),
+        (new_block.height, new_block.hash),
+    ])
+    .ok();
     update.tx_update.anchors = [(new_anchor, new_txid)].into();
 
     let orig_tip = wallet.local_chain().tip().block_id();
@@ -213,7 +217,11 @@ fn test_tx_confirmed_new_block_event() {
         block_id: new_block,
         confirmation_time: 300,
     };
-    update.chain = CheckPoint::from_block_ids([parent_block, new_block]).ok();
+    update.chain = CheckPoint::from_blocks([
+        (parent_block.height, parent_block.hash),
+        (new_block.height, new_block.hash),
+    ])
+    .ok();
     update.tx_update.anchors = [(new_anchor, new_txid)].into();
 
     let orig_tip = wallet.local_chain().tip().block_id();
@@ -239,7 +247,11 @@ fn test_tx_confirmed_new_block_event() {
         block_id: reorg_block,
         confirmation_time: 310,
     };
-    update.chain = CheckPoint::from_block_ids([parent_block, reorg_block]).ok();
+    update.chain = CheckPoint::from_blocks([
+        (parent_block.height, parent_block.hash),
+        (reorg_block.height, reorg_block.hash),
+    ])
+    .ok();
     update.tx_update.anchors = [(reorg_anchor, new_txid)].into();
 
     let events = wallet.apply_update_events(update).unwrap();
@@ -438,7 +450,7 @@ fn test_apply_block_tx_confirmed_new_block_event() {
             .map(|tx| (**tx).clone())
             .collect(),
     );
-    let events = wallet.apply_block_events(&block1, 1).unwrap();
+    let events = dbg!(wallet.apply_block_events(&block1, 1).unwrap());
     assert_eq!(events.len(), 2);
 
     // apply spending block

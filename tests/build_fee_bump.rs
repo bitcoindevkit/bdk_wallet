@@ -358,8 +358,7 @@ fn test_bump_fee_remove_output_manually_selected_only() {
         }],
     };
 
-    let position: ChainPosition<ConfirmationBlockTime> =
-        wallet.transactions().last().unwrap().chain_position;
+    let position: ChainPosition<ConfirmationBlockTime> = wallet.transactions().last().unwrap().pos;
     insert_tx(&mut wallet, init_tx.clone());
     match position {
         ChainPosition::Confirmed { anchor, .. } => {
@@ -410,8 +409,7 @@ fn test_bump_fee_add_input() {
         }],
     };
     let txid = init_tx.compute_txid();
-    let pos: ChainPosition<ConfirmationBlockTime> =
-        wallet.transactions().last().unwrap().chain_position;
+    let pos: ChainPosition<ConfirmationBlockTime> = wallet.transactions().last().unwrap().pos;
     insert_tx(&mut wallet, init_tx);
     match pos {
         ChainPosition::Confirmed { anchor, .. } => insert_anchor(&mut wallet, txid, anchor),
@@ -846,8 +844,7 @@ fn test_legacy_bump_fee_add_input() {
         }],
     };
     let txid = init_tx.compute_txid();
-    let pos: ChainPosition<ConfirmationBlockTime> =
-        wallet.transactions().last().unwrap().chain_position;
+    let pos: ChainPosition<ConfirmationBlockTime> = wallet.transactions().last().unwrap().pos;
     insert_tx(&mut wallet, init_tx);
     match pos {
         ChainPosition::Confirmed { anchor, .. } => insert_anchor(&mut wallet, txid, anchor),
@@ -977,7 +974,7 @@ fn test_bump_fee_pay_to_anchor_foreign_utxo() {
     let tx = psbt.unsigned_tx.clone();
     assert!(tx.input.iter().any(|txin| txin.previous_output == outpoint));
     let txid1 = tx.compute_txid();
-    wallet.apply_unconfirmed_txs([(tx, 123456)]);
+    insert_tx(&mut wallet, tx);
 
     // Now build fee bump.
     let mut tx_builder = wallet

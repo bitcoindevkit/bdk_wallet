@@ -139,8 +139,8 @@ fn test_add_foreign_utxo_where_outpoint_doesnt_match_psbt_input() {
         get_funded_wallet_single("wpkh(cVbZ8ovhye9AoAHFsqobCf7LxbXDAECy9Kb8TZdfsDYMZGBUyCnm)");
 
     let utxo2 = wallet2.list_unspent().next().unwrap();
-    let tx1 = wallet1.get_tx(txid1).unwrap().tx_node.tx.clone();
-    let tx2 = wallet2.get_tx(txid2).unwrap().tx_node.tx.clone();
+    let tx1 = wallet1.get_tx(txid1).unwrap().tx.clone();
+    let tx2 = wallet2.get_tx(txid2).unwrap().tx.clone();
 
     let satisfaction_weight = wallet2
         .public_descriptor(KeychainKind::External)
@@ -230,7 +230,7 @@ fn test_add_foreign_utxo_only_witness_utxo() {
         let mut builder = wallet1.build_tx();
         builder.add_recipient(addr.script_pubkey(), Amount::from_sat(60_000));
 
-        let tx2 = wallet2.get_tx(txid2).unwrap().tx_node.tx;
+        let tx2 = wallet2.get_tx(txid2).unwrap().tx;
         let psbt_input = psbt::Input {
             non_witness_utxo: Some(tx2.as_ref().clone()),
             ..Default::default()
