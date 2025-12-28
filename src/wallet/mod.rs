@@ -1731,9 +1731,8 @@ impl Wallet {
     ) -> Result<TxBuilder<'_, DefaultCoinSelectionAlgorithm>, BuildFeeBumpError> {
         let tx_graph = self.indexed_graph.graph();
         let txout_index = &self.indexed_graph.index;
-        let chain_tip = self.chain.tip().block_id();
-        let chain_positions: HashMap<Txid, ChainPosition<_>> = tx_graph
-            .canonical_view(&self.chain, chain_tip, CanonicalizationParams::default())
+        let chain_positions: HashMap<Txid, ChainPosition<_>> = self
+            .canonical_view
             .txs()
             .map(|canon_tx| (canon_tx.txid, canon_tx.pos))
             .collect();
@@ -1979,16 +1978,13 @@ impl Wallet {
         sign_options: SignOptions,
     ) -> Result<bool, SignerError> {
         let tx = &psbt.unsigned_tx;
-        let chain_tip = self.chain.tip().block_id();
         let prev_txids = tx
             .input
             .iter()
             .map(|txin| txin.previous_output.txid)
             .collect::<HashSet<Txid>>();
         let confirmation_heights = self
-            .indexed_graph
-            .graph()
-            .canonical_view(&self.chain, chain_tip, CanonicalizationParams::default())
+            .canonical_view
             .txs()
             .filter(|canon_tx| prev_txids.contains(&canon_tx.txid))
             // This is for a small performance gain. Although `.filter` filters out excess txs, it

@@ -974,7 +974,7 @@ fn test_bump_fee_pay_to_anchor_foreign_utxo() {
     let tx = psbt.unsigned_tx.clone();
     assert!(tx.input.iter().any(|txin| txin.previous_output == outpoint));
     let txid1 = tx.compute_txid();
-    wallet.apply_unconfirmed_txs([(tx, 123456)]);
+    insert_tx(&mut wallet, tx);
 
     // Now build fee bump.
     let mut tx_builder = wallet
