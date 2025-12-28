@@ -1045,8 +1045,13 @@ impl Wallet {
     /// [`list_unspent`]: Self::list_unspent
     /// [`list_output`]: Self::list_output
     pub fn insert_txout(&mut self, outpoint: OutPoint, txout: TxOut) {
-        let additions = self.indexed_graph.insert_txout(outpoint, txout);
-        self.stage.merge(additions.into());
+        let mut tx_update = TxUpdate::default();
+        tx_update.txouts = [(outpoint, txout)].into();
+        self.apply_update(Update {
+            tx_update,
+            ..Default::default()
+        })
+        .expect("Applying a `TxUpdate` cannot fail")
     }
 
     /// Calculates the fee of a given transaction. Returns [`Amount::ZERO`] if `tx` is a coinbase
@@ -2356,8 +2361,15 @@ impl Wallet {
     /// Usually you create an `update` by interacting with some blockchain data source and inserting
     /// transactions related to your wallet into it.
     ///
-    /// After applying updates you should persist the staged wallet changes. For an example of how
-    /// to persist staged wallet changes see [`Wallet::reveal_next_address`].
+    /// After applying updates the [`canonical_view`](Self::canonical_view) of transactions is
+    /// updated to reflect changes to the transaction graph.
+    ///
+    /// You should persist the staged wallet changes. For an example of how to persist staged
+    /// wallet changes see [`Wallet::reveal_next_address`].
+    ///
+    /// # Errors
+    ///
+    /// If the [`Update::chain`] update fails, a [`CannotConnectError`] will occur.
     pub fn apply_update(&mut self, update: impl Into<Update>) -> Result<(), CannotConnectError> {
         let update = update.into();
         let mut changeset = match update.chain {
