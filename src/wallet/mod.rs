@@ -1256,6 +1256,9 @@ impl Wallet {
         let Some(tx) = self.indexed_graph.graph().get_tx(txid) else {
             return false;
         };
+        if tx.input.is_empty() {
+            return false;
+        }
         tx.input.iter().all(|txin| {
             self.indexed_graph
                 .index
