@@ -63,6 +63,7 @@ that the `Wallet` can use to update its view of the chain.
 
 * [`examples/esplora_async`](https://github.com/bitcoindevkit/bdk_wallet/tree/master/examples/esplora_async)
 * [`examples/esplora_blocking`](https://github.com/bitcoindevkit/bdk_wallet/tree/master/examples/esplora_blocking)
+* [`examples/esplora_with_timeout`](https://github.com/bitcoindevkit/bdk_wallet/tree/master/examples/esplora_with_timeout)
 * [`examples/electrum`](https://github.com/bitcoindevkit/bdk_wallet/tree/master/examples/electrum)
 * [`examples/bitcoind_rpc`](https://github.com/bitcoindevkit/bdk_wallet/tree/master/examples/bitcoind_rpc)
 
