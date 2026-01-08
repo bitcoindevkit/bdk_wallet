@@ -17,6 +17,10 @@ use bitcoin::FeeRate;
 use bitcoin::Psbt;
 use bitcoin::TxOut;
 
+mod params;
+
+pub use params::*;
+
 // TODO upstream the functions here to `rust-bitcoin`?
 
 /// Trait to add functions to extract utxos and calculate fees.
