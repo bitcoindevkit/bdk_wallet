@@ -28,6 +28,11 @@ jobs:
         uses: actions/checkout@v6
         with:
           persist-credentials: false
+      # hwi (async-hwi) depends on libudev-sys
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libudev-dev libusb-1.0-0-dev
       # The 'toolchain' argument on this action overrides the Rust compiler version set in rust-toolchain.toml
       # in order to test our MSRV.
       - name: Install Rust toolchain
@@ -58,6 +63,11 @@ jobs:
         uses: actions/checkout@v6
         with:
           persist-credentials: false
+      # hwi (async-hwi) depends on libudev-sys
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libudev-dev libusb-1.0-0-dev
       # This action will honor the Rust compiler version set in rust-toolchain.toml. We aim to keep it in sync with
       # Rust stable.
       - name: Install Rust toolchain
@@ -77,6 +87,12 @@ jobs:
         uses: actions/checkout@v6
         with:
           persist-credentials: false
+
+      # hwi (async-hwi) depends on libudev-sys
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libudev-dev libusb-1.0-0-dev
       # This action automatically reads and applies rust-toolchain.toml
       - name: Install Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@v1
