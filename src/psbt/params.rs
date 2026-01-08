@@ -28,6 +28,7 @@ pub struct ReplaceTx;
 pub type Rbf = ReplaceTx;
 
 /// Parameters to create a PSBT.
+// TODO: Can we derive `Clone` for this?
 #[derive(Debug)]
 pub struct PsbtParams<C> {
     /// Set of selected UTXO outpoints.
@@ -465,6 +466,7 @@ pub enum SelectionStrategy {
 /// for coin selection. This has a default implementation that enables selection of all
 /// txouts passed to it.
 #[allow(clippy::type_complexity)]
+#[derive(Clone)]
 pub(crate) struct UtxoFilter(
     pub Arc<dyn Fn(&FullTxOut<ConfirmationBlockTime>) -> bool + Send + Sync>,
 );
