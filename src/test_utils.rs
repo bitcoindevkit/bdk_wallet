@@ -308,7 +308,7 @@ pub fn receive_output_to_address(
 /// a different one at the same height, then all later blocks are evicted as well.
 pub fn insert_checkpoint(wallet: &mut Wallet, block: BlockId) {
     let mut cp = wallet.latest_checkpoint();
-    cp = cp.insert(block);
+    cp = cp.insert(block.height, block.hash);
     wallet
         .apply_update(Update {
             chain: Some(cp),
