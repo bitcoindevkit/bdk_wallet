@@ -52,6 +52,7 @@ use rand_core::RngCore;
 mod changeset;
 pub mod coin_selection;
 pub mod error;
+pub mod event;
 pub mod export;
 mod params;
 mod persisted;
@@ -74,10 +75,12 @@ use crate::wallet::{
     tx_builder::{FeePolicy, TxBuilder, TxParams},
     utils::{check_nsequence_rbf, After, Older, SecpCtx},
 };
+use event::wallet_events;
 
 // re-exports
 pub use bdk_chain::Balance;
 pub use changeset::ChangeSet;
+pub use event::WalletEvent;
 pub use params::*;
 pub use persisted::*;
 pub use utils::IsDust;
@@ -2338,14 +2341,123 @@ impl Wallet {
             .to_string()
     }
 
-    /// Applies an update to the wallet and stages the changes (but does not persist them).
+    /// Applies an update to the wallet, stages changes, and returns events describing what changed.
     ///
-    /// Usually you create an `update` by interacting with some blockchain data source and inserting
-    /// transactions related to your wallet into it.
+    /// This is the primary method for updating wallet state with new blockchain data. It accepts
+    /// an [`Update`]
     ///
-    /// After applying updates you should persist the staged wallet changes. For an example of how
-    /// to persist staged wallet changes see [`Wallet::reveal_next_address`].
-    pub fn apply_update(&mut self, update: impl Into<Update>) -> Result<(), CannotConnectError> {
+    /// **IMPORTANT**: Changes are staged but **NOT automatically persisted**. You must:
+    ///
+    /// 1. Process the returned events in your application
+    /// 2. Call [`take_staged`] to retrieve the [`ChangeSet`]
+    /// 3. Persist the changeset to your database/storage
+    ///
+    /// Failing to persist changes means they will be lost when the wallet is reloaded.
+    ///
+    /// # Example
+    ///
+    /// ## Basic usage with event handling
+    ///
+    /// ```rust,no_run
+    /// # use bitcoin::*;
+    /// # use bdk_wallet::*;
+    /// use bdk_wallet::event::WalletEvent;
+    /// # let wallet_update = Update::default();
+    /// # let mut wallet = doctest_wallet!();
+    ///
+    /// // Apply the update and get events
+    /// let events = wallet.apply_update(wallet_update)?;
+    ///
+    /// // Handle each event
+    /// for event in events {
+    ///     match event {
+    ///         WalletEvent::ChainTipChanged { old_tip, new_tip } => {
+    ///             println!(
+    ///                 "Chain advanced from {} to {}",
+    ///                 old_tip.height, new_tip.height
+    ///             );
+    ///         }
+    ///         WalletEvent::TxConfirmed {
+    ///             txid,
+    ///             block_time,
+    ///             old_block_time: None,
+    ///             ..
+    ///         } => {
+    ///             println!(
+    ///                 "Transaction {} confirmed at height {}",
+    ///                 txid, block_time.block_id.height
+    ///             );
+    ///         }
+    ///         WalletEvent::TxConfirmed {
+    ///             txid,
+    ///             block_time,
+    ///             old_block_time: Some(old),
+    ///             ..
+    ///         } => {
+    ///             println!(
+    ///                 "Transaction {} re-confirmed due to reorg: {} -> {}",
+    ///                 txid, old.block_id.height, block_time.block_id.height
+    ///             );
+    ///         }
+    ///         WalletEvent::TxUnconfirmed {
+    ///             txid,
+    ///             old_block_time: None,
+    ///             ..
+    ///         } => {
+    ///             println!("New mempool transaction: {}", txid);
+    ///         }
+    ///         WalletEvent::TxUnconfirmed {
+    ///             txid,
+    ///             old_block_time: Some(old),
+    ///             ..
+    ///         } => {
+    ///             println!(
+    ///                 "Transaction {} unconfirmed due to reorg from height {}",
+    ///                 txid, old.block_id.height
+    ///             );
+    ///         }
+    ///         WalletEvent::TxReplaced {
+    ///             txid, conflicts, ..
+    ///         } => {
+    ///             println!("Transaction {} replaced: {:?}", txid, conflicts);
+    ///         }
+    ///         WalletEvent::TxDropped { txid, .. } => {
+    ///             println!("Transaction {} dropped from mempool", txid);
+    ///         }
+    ///         _ => {
+    ///             debug_assert!(false, "unexpected event")
+    ///         }
+    ///     }
+    /// }
+    ///
+    /// // IMPORTANT: Persist the changes
+    /// if let Some(changeset) = wallet.take_staged() {
+    ///     // Save changeset to your database
+    ///     // e.g., db.persist(&changeset)?;
+    /// }
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
+    ///
+    /// # See Also
+    ///
+    /// - [`apply_block`] - Apply a single block to the wallet
+    /// - [`apply_block_connected_to`] - Apply a block with explicit connection point
+    /// - [`take_staged`] - Retrieve staged changes for persistence
+    /// - [`WalletEvent`] - Documentation for all event types
+    /// - [`Update`] - The update structure accepted by this method
+    ///
+    /// [`apply_block`]: Wallet::apply_block
+    /// [`apply_block_connected_to`]: Wallet::apply_block_connected_to
+    /// [`take_staged`]: Wallet::take_staged
+    pub fn apply_update(
+        &mut self,
+        update: impl Into<Update>,
+    ) -> Result<Vec<WalletEvent>, CannotConnectError> {
+        // snapshot of chain tip and transactions before update
+        let chain_tip1 = self.chain.tip().block_id();
+        let wallet_txs1 = self.collect_wallet_txs();
+
+        // apply update
         let update = update.into();
         let mut changeset = match update.chain {
             Some(chain_update) => ChangeSet::from(self.chain.apply_update(chain_update)?),
@@ -2359,7 +2471,18 @@ impl Wallet {
         changeset.merge(index_changeset.into());
         changeset.merge(self.indexed_graph.apply_update(update.tx_update).into());
         self.stage.merge(changeset);
-        Ok(())
+
+        // chain tip and transactions after update
+        let chain_tip2 = self.chain.tip().block_id();
+        let wallet_txs2 = self.collect_wallet_txs();
+
+        Ok(wallet_events(
+            self,
+            chain_tip1,
+            chain_tip2,
+            wallet_txs1,
+            wallet_txs2,
+        ))
     }
 
     /// Get a reference of the staged [`ChangeSet`] that is yet to be committed (if any).
@@ -2400,14 +2523,22 @@ impl Wallet {
         &self.chain
     }
 
-    /// Introduces a `block` of `height` to the wallet, and tries to connect it to the
+    /// Introduces a `block` of `height` to the wallet and tries to connect it to the
     /// `prev_blockhash` of the block's header.
     ///
-    /// This is a convenience method that is equivalent to calling [`apply_block_connected_to`]
-    /// with `prev_blockhash` and `height-1` as the `connected_to` parameter.
+    /// This is a convenience method that is equivalent to calling
+    /// [`apply_block_connected_to`] with `prev_blockhash` and `height-1` as the
+    /// `connected_to` parameter.
+    ///
+    /// See [`apply_update`] for more information on the returned [`WalletEvent`]s.
     ///
     /// [`apply_block_connected_to`]: Self::apply_block_connected_to
-    pub fn apply_block(&mut self, block: &Block, height: u32) -> Result<(), CannotConnectError> {
+    /// [`apply_update`]: Self::apply_update
+    pub fn apply_block(
+        &mut self,
+        block: &Block,
+        height: u32,
+    ) -> Result<Vec<WalletEvent>, CannotConnectError> {
         let connected_to = match height.checked_sub(1) {
             Some(prev_height) => BlockId {
                 height: prev_height,
@@ -2427,7 +2558,7 @@ impl Wallet {
             })
     }
 
-    /// Applies relevant transactions from `block` of `height` to the wallet, and connects the
+    /// Applies relevant transactions from `block` of `height` to the wallet and connects the
     /// block to the internal chain.
     ///
     /// The `connected_to` parameter informs the wallet how this block connects to the internal
@@ -2437,12 +2568,21 @@ impl Wallet {
     /// **WARNING**: You must persist the changes resulting from one or more calls to this method
     /// if you need the inserted block data to be reloaded after closing the wallet.
     /// See [`Wallet::reveal_next_address`].
+    ///
+    /// See [`apply_update`] for more information on the returned [`WalletEvent`]s.
+    ///
+    /// [`apply_update`]: Wallet::apply_update
     pub fn apply_block_connected_to(
         &mut self,
         block: &Block,
         height: u32,
         connected_to: BlockId,
-    ) -> Result<(), ApplyHeaderError> {
+    ) -> Result<Vec<WalletEvent>, ApplyHeaderError> {
+        // snapshot of chain tip and transactions before update
+        let chain_tip1 = self.chain.tip().block_id();
+        let wallet_txs1 = self.collect_wallet_txs();
+
+        // apply block to wallet
         let mut changeset = ChangeSet::default();
         changeset.merge(
             self.chain
@@ -2455,7 +2595,35 @@ impl Wallet {
                 .into(),
         );
         self.stage.merge(changeset);
-        Ok(())
+
+        // chain tip and transactions after update
+        let chain_tip2 = self.chain.tip().block_id();
+        let wallet_txs2 = self.collect_wallet_txs();
+
+        Ok(wallet_events(
+            self,
+            chain_tip1,
+            chain_tip2,
+            wallet_txs1,
+            wallet_txs2,
+        ))
+    }
+
+    /// Collects all canonical wallet transactions into a map.
+    ///
+    /// This method is primarily used internally to create before/after snapshots when applying
+    /// updates or blocks to the wallet.
+    fn collect_wallet_txs(
+        &self,
+    ) -> BTreeMap<Txid, (Arc<Transaction>, ChainPosition<ConfirmationBlockTime>)> {
+        self.transactions()
+            .map(|wtx| {
+                (
+                    wtx.tx_node.txid,
+                    (wtx.tx_node.tx.clone(), wtx.chain_position),
+                )
+            })
+            .collect()
     }
 
     /// Apply relevant unconfirmed transactions to the wallet.
@@ -2464,7 +2632,7 @@ impl Wallet {
     ///
     /// This method takes in an iterator of `(tx, last_seen)` where `last_seen` is the timestamp of
     /// when the transaction was last seen in the mempool. This is used for conflict resolution
-    /// when there is conflicting unconfirmed transactions. The transaction with the later
+    /// when there are conflicting unconfirmed transactions. The transaction with the later
     /// `last_seen` is prioritized.
     ///
     /// **WARNING**: You must persist the changes resulting from one or more calls to this method
