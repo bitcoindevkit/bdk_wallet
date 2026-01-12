@@ -54,6 +54,7 @@ pub mod coin_selection;
 pub mod error;
 pub mod event;
 pub mod export;
+pub mod migration;
 mod params;
 mod persisted;
 #[deprecated(
