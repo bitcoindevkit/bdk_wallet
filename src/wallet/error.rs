@@ -273,7 +273,8 @@ pub enum CreatePsbtError {
     /// Failed to create a spending plan for a manually selected output.
     Plan(OutPoint),
     /// Failed to create PSBT.
-    Psbt(bdk_tx::CreatePsbtError),
+    // TODO(@valuedmammal): `Box` shouldn't be needed once we can depend on `bdk_tx` 0.2.0.
+    Psbt(alloc::boxed::Box<bdk_tx::CreatePsbtError>),
     /// Selector error.
     Selector(bdk_tx::SelectorError),
     /// The UTXO of outpoint could not be found.

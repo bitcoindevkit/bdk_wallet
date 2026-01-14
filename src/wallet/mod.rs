@@ -3062,7 +3062,7 @@ impl Wallet {
                 mandate_full_tx_for_segwit_v0: !params.only_witness_utxo,
                 sighash_type: params.sighash_type,
             })
-            .map_err(CreatePsbtError::Psbt)?;
+            .map_err(|e| CreatePsbtError::Psbt(Box::new(e)))?;
 
         // Add global xpubs.
         if params.add_global_xpubs {
