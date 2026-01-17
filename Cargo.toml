@@ -74,3 +74,27 @@ name = "esplora_blocking"
 
 [[example]]
 name = "bitcoind_rpc"
+
+[[example]]
+name = "simple_keyring"
+required-features = ["rusqlite"]
+
+[[example]]
+name = "multi_keychain_address_generation"
+path = "examples/multi_keychain/address_generation.rs"
+
+[[example]]
+name = "multi_keychain_wallet"
+path = "examples/multi_keychain/wallet.rs"
+
+[[example]]
+name = "multi_keychain_balance_tracking"
+path = "examples/multi_keychain/balance_tracking.rs"
+
+[[example]]
+name = "multi_keychain_migration_guide"
+path = "examples/multi_keychain/migration_guide.rs"
+
+[[example]]
+name = "multi_keychain_persistence"
+path = "examples/multi_keychain/persistence.rs"
