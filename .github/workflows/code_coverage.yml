@@ -30,8 +30,12 @@ jobs:
         run: cargo install cargo-llvm-cov
       - name: Generate coverage data
         run: cargo llvm-cov --all-features --lcov --output-path lcov.info
+        env:
+          RUSTFLAGS: "--cfg coverage_nightly"
       - name: Generate HTML coverage report
         run: cargo llvm-cov --all-features --html
+        env:
+          RUSTFLAGS: "--cfg coverage_nightly"
       - name: Codecov upload
         uses: codecov/codecov-action@5a1091511ad55cbe89839c7260b706298ca349f7
         with:
