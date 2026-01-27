@@ -18,6 +18,7 @@ rustdoc-args = ["--cfg", "docsrs"]
 
 [dependencies]
 bdk_chain = { version = "0.23.1", features = ["miniscript", "serde"], default-features = false }
+bdk_coin_select = { version = "0.4.1" }
 bitcoin = { version = "0.32.7", features = ["serde", "base64"], default-features = false }
 miniscript = { version = "12.3.1", features = ["serde"], default-features = false }
 rand_core = { version = "0.6.0" }
@@ -29,6 +30,11 @@ anyhow = { version = "1.0.98", optional = true }
 bdk_file_store = { version = "0.21.1", optional = true }
 bip39 = { version = "2.0", optional = true }
 tempfile = { version = "3.20.0", optional = true }
+
+[dependencies.bdk_tx]
+version = "0.2.0"
+git = "https://github.com/valuedmammal/bdk-tx"
+branch = "release/0_2_0"
 
 [features]
 default = ["std"]
