@@ -2847,6 +2847,7 @@ macro_rules! doctest_wallet {
     }}
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 #[cfg(test)]
 mod test {
     use super::*;

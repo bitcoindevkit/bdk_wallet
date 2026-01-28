@@ -16,6 +16,9 @@ rust-version = "1.85.0"
 all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage_nightly)'] }
+
 [dependencies]
 bdk_chain = { version = "0.23.1", features = ["miniscript", "serde"], default-features = false }
 bitcoin = { version = "0.32.7", features = ["serde", "base64"], default-features = false }

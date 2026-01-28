@@ -632,6 +632,7 @@ expand_make_bipxx!(legacy, Legacy);
 expand_make_bipxx!(segwit_v0, Segwitv0);
 expand_make_bipxx!(segwit_v1, Tap);
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 #[cfg(test)]
 mod test {
     // Test existing descriptor templates to make sure they are expanded to the right descriptors.
