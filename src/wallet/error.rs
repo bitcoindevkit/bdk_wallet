@@ -15,9 +15,11 @@ use crate::descriptor::policy::PolicyError;
 use crate::descriptor::DescriptorError;
 use crate::wallet::coin_selection;
 use crate::{descriptor, KeychainKind};
-use alloc::string::String;
+use alloc::string::{String, ToString};
 use bitcoin::{absolute, psbt, Amount, OutPoint, Sequence, Txid};
+use chain::tx_graph::CalculateFeeError;
 use core::fmt;
+use core::num::TryFromIntError;
 
 /// Errors returned by miniscript when updating inconsistent PSBTs
 #[derive(Debug, Clone)]
@@ -256,3 +258,152 @@ impl fmt::Display for BuildFeeBumpError {
 
 #[cfg(feature = "std")]
 impl std::error::Error for BuildFeeBumpError {}
+
+/// Error when creating a PSBT.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum CreatePsbtError {
+    /// No Bnb solution.
+    Bnb(bdk_coin_select::NoBnbSolution),
+    /// Non-sufficient funds.
+    InsufficientFunds(bdk_coin_select::InsufficientFunds),
+    /// In order to use the [`add_global_xpubs`] option, every extended key in the descriptor must
+    /// either be a master key itself, having a depth of 0, or have an explicit origin provided.
+    ///
+    /// [`add_global_xpubs`]: crate::psbt::PsbtParams::add_global_xpubs
+    MissingKeyOrigin(bitcoin::bip32::Xpub),
+    /// Failed to create a spending plan for a manually selected output.
+    Plan(OutPoint),
+    /// Failed to create PSBT.
+    // TODO(@valuedmammal): `Box` shouldn't be needed once we can depend on `bdk_tx` 0.2.0.
+    Psbt(alloc::boxed::Box<bdk_tx::CreatePsbtError>),
+    /// Selector error.
+    Selector(bdk_tx::SelectorError),
+    /// The UTXO of outpoint could not be found.
+    UnknownUtxo(OutPoint),
+}
+
+impl fmt::Display for CreatePsbtError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Bnb(e) => write!(f, "{e}"),
+            Self::InsufficientFunds(e) => write!(f, "{e}"),
+            Self::MissingKeyOrigin(e) => write!(f, "missing key origin: {e}"),
+            Self::Plan(op) => write!(f, "failed to create a plan for txout with outpoint {op}"),
+            Self::Psbt(e) => write!(f, "{e}"),
+            Self::Selector(e) => write!(f, "{e}"),
+            Self::UnknownUtxo(op) => write!(f, "unknown UTXO: {op}"),
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for CreatePsbtError {}
+
+/// Error when creating a CPFP sweep transaction.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum CreateSweepError {
+    /// The UTXO of the outpoint could not be found.
+    UnknownUtxo(OutPoint),
+    /// The parent transaction is already confirmed and cannot be accelerated with CPFP.
+    ParentAlreadyConfirmed(OutPoint),
+    /// The output value is insufficient to pay the required child fee.
+    InsufficientValue {
+        /// Amount still needed (required fee - available value).
+        missing_amount: u64,
+    },
+    /// Failed to create PSBT.
+    Psbt(CreatePsbtError),
+    /// Descriptor key conversion error
+    Conversion(miniscript::descriptor::ConversionError),
+    /// Descriptor key conversion error
+    Miniscript(miniscript::Error),
+    /// Failed to calculate the fee
+    FeeCalculationError(String),
+}
+
+impl fmt::Display for CreateSweepError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnknownUtxo(op) => write!(f, "unknown UTXO: {op}"),
+            Self::ParentAlreadyConfirmed(op) => {
+                write!(f, "parent transaction output {op} is already confirmed")
+            }
+            Self::InsufficientValue { missing_amount } => {
+                write!(
+                    f,
+                    "insufficient value: need additional {missing_amount} sats"
+                )
+            }
+            Self::Psbt(e) => write!(f, "Failed to create PSBT: {e}"),
+            Self::FeeCalculationError(e) => write!(f, "Fee calculation failed: {e}"),
+            Self::Conversion(err) => write!(f, "Conversion error: {err}"),
+            Self::Miniscript(err) => write!(f, "Miniscript error: {err}"),
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for CreateSweepError {}
+
+impl From<CreatePsbtError> for CreateSweepError {
+    fn from(e: CreatePsbtError) -> Self {
+        Self::Psbt(e)
+    }
+}
+
+impl From<miniscript::descriptor::ConversionError> for CreateSweepError {
+    fn from(e: miniscript::descriptor::ConversionError) -> Self {
+        CreateSweepError::Conversion(e)
+    }
+}
+
+impl From<CalculateFeeError> for CreateSweepError {
+    fn from(e: CalculateFeeError) -> Self {
+        CreateSweepError::FeeCalculationError(e.to_string())
+    }
+}
+
+impl From<core::num::TryFromIntError> for CreateSweepError {
+    fn from(e: TryFromIntError) -> Self {
+        CreateSweepError::FeeCalculationError(e.to_string())
+    }
+}
+
+impl From<miniscript::Error> for CreateSweepError {
+    fn from(e: miniscript::Error) -> Self {
+        CreateSweepError::Miniscript(e)
+    }
+}
+
+/// Error when creating a Replace-By-Fee transaction.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum ReplaceByFeeError {
+    /// There was a problem creating the PSBT
+    CreatePsbt(CreatePsbtError),
+    /// Failed to compute the fee of an original transaction
+    PreviousFee(bdk_chain::tx_graph::CalculateFeeError),
+    /// Original transaction could not be found
+    MissingTransaction(Txid),
+}
+
+impl fmt::Display for ReplaceByFeeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::CreatePsbt(e) => write!(f, "{e}"),
+            Self::PreviousFee(e) => write!(f, "{e}"),
+            Self::MissingTransaction(txid) => write!(f, "missing transaction: {txid}"),
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for ReplaceByFeeError {}
+
+impl From<CreatePsbtError> for ReplaceByFeeError {
+    fn from(e: CreatePsbtError) -> Self {
+        Self::CreatePsbt(e)
+    }
+}
