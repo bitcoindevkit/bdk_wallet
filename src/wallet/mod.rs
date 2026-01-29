@@ -41,11 +41,12 @@ use bitcoin::{
     secp256k1::Secp256k1,
     sighash::{EcdsaSighashType, TapSighashType},
     transaction, Address, Amount, Block, BlockHash, FeeRate, Network, NetworkKind, OutPoint, Psbt,
-    ScriptBuf, Sequence, SignedAmount, Transaction, TxOut, Txid, Weight, Witness,
+    PublicKey, ScriptBuf, Sequence, SignedAmount, Transaction, TxOut, Txid, Weight, Witness,
 };
 use miniscript::{
-    descriptor::KeyMap,
+    descriptor::{ConversionError, KeyMap},
     psbt::{PsbtExt, PsbtInputExt, PsbtInputSatisfier},
+    ToPublicKey,
 };
 use rand_core::RngCore;
 
@@ -2612,6 +2613,26 @@ impl Wallet {
             keychain
         }
     }
+
+    /// Get the public key at the specified derivation index
+    pub fn public_key_at_index(
+        &self,
+        keychain: KeychainKind,
+        index: u32,
+    ) -> Result<PublicKey, ConversionError> {
+        let descriptor = self
+            .public_descriptor(keychain)
+            .at_derivation_index(index)?;
+
+        match descriptor {
+            miniscript::Descriptor::Pkh(pkh) => Ok(pkh.as_inner().to_public_key()),
+            miniscript::Descriptor::Wpkh(wpkh) => Ok(wpkh.as_inner().to_public_key()),
+            miniscript::Descriptor::Tr(tr) => Ok(tr.internal_key().to_public_key()),
+            miniscript::Descriptor::Bare(_) => Err(ConversionError::MultiKey),
+            miniscript::Descriptor::Sh(_) => Err(ConversionError::MultiKey),
+            miniscript::Descriptor::Wsh(_) => Err(ConversionError::MultiKey),
+        }
+    }
 }
 
 /// Methods to construct sync/full-scan requests for spk-based chain sources.
@@ -2853,6 +2874,41 @@ mod test {
     use crate::miniscript::Error::Unexpected;
     use crate::test_utils::get_test_tr_single_sig_xprv_and_change_desc;
     use crate::test_utils::insert_tx;
+
+    #[test]
+    fn test_generate_publick_keys() {
+        // Create new wallet.
+        let (internal_desc, external_desc) = crate::test_utils::get_test_wpkh_and_change_desc();
+        let wallet = Wallet::create(internal_desc, external_desc)
+            .network(Network::Testnet)
+            .create_wallet_no_persist()
+            .unwrap();
+
+        let pk = wallet
+            .public_key_at_index(KeychainKind::External, 0)
+            .unwrap();
+        let expected: [u8; 33] = [
+            2, 206, 182, 158, 34, 51, 63, 131, 85, 108, 93, 30, 251, 167, 90, 3, 52, 107, 243, 213,
+            44, 251, 211, 159, 197, 210, 77, 237, 3, 78, 247, 217, 244,
+        ];
+        assert_eq!(pk.to_public_key().to_bytes(), expected);
+
+        // Test: Simple 2-of-2 multi-signature
+        let my_key_1 = pk;
+        let my_key_2 = wallet
+            .public_key_at_index(KeychainKind::External, 1)
+            .unwrap();
+
+        let (descriptor, _, _) = crate::descriptor! {
+             wsh (
+                 multi(2, my_key_1, my_key_2)
+             )
+        }
+        .unwrap();
+
+        let expected_descriptor = "wsh(multi(2,02ceb69e22333f83556c5d1efba75a03346bf3d52cfbd39fc5d24ded034ef7d9f4,02d466308945a80e73cb65d35e30adcfaacfd8e4fb657edbe15537d770cf9021a9))#539zz7na";
+        assert_eq!(expected_descriptor, descriptor.to_string());
+    }
 
     #[test]
     fn not_duplicated_utxos_across_optional_and_required() {
