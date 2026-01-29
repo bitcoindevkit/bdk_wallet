@@ -73,4 +73,7 @@ name = "esplora_async"
 name = "esplora_blocking"
 
 [[example]]
+name = "esplora_with_timeout"
+
+[[example]]
 name = "bitcoind_rpc"
