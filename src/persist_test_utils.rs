@@ -432,3 +432,234 @@ where
     assert_eq!(changeset_read.descriptor.unwrap(), descriptor);
     assert_eq!(changeset_read.change_descriptor, None);
 }
+
+// WIP: Add async support to `persist_test_utils`
+// TODO:
+// - Refactor persist_wallet_changeset (to remove tempfile, anyhow)
+// - Introduce PersistError, and handle more errors
+// - Extract changeset construction to be used by both sync/async
+
+use alloc::string::{String, ToString};
+use core::fmt;
+
+use crate::AsyncWalletPersister;
+
+/// Error while testing a wallet persister.
+#[derive(Debug)]
+pub enum PersistError {
+    /// Store error
+    Store(String),
+}
+
+impl fmt::Display for PersistError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Store(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for PersistError {}
+
+/// Creates a [`ChangeSet`].
+fn get_changeset(tx1: Transaction) -> ChangeSet {
+    let descriptor: Descriptor<DescriptorPublicKey> = DESCRIPTORS[0].parse().unwrap();
+    let change_descriptor: Descriptor<DescriptorPublicKey> = DESCRIPTORS[1].parse().unwrap();
+
+    let local_chain_changeset = local_chain::ChangeSet {
+        blocks: [
+            (910234, Some(hash!("B"))),
+            (910233, Some(hash!("T"))),
+            (910235, Some(hash!("C"))),
+        ]
+        .into(),
+    };
+
+    let txid1 = tx1.compute_txid();
+
+    let conf_anchor: ConfirmationBlockTime = ConfirmationBlockTime {
+        block_id: block_id!(910234, "B"),
+        confirmation_time: 1755317160,
+    };
+
+    let outpoint = OutPoint::new(hash!("Rust"), 0);
+
+    let tx_graph_changeset = tx_graph::ChangeSet::<ConfirmationBlockTime> {
+        txs: [Arc::new(tx1)].into(),
+        txouts: [
+            (
+                outpoint,
+                TxOut {
+                    value: Amount::from_sat(1300),
+                    script_pubkey: spk_at_index(&descriptor, 4),
+                },
+            ),
+            (
+                OutPoint::new(hash!("REDB"), 0),
+                TxOut {
+                    value: Amount::from_sat(1400),
+                    script_pubkey: spk_at_index(&descriptor, 10),
+                },
+            ),
+        ]
+        .into(),
+        anchors: [(conf_anchor, txid1)].into(),
+        last_seen: [(txid1, 1755317760)].into(),
+        first_seen: [(txid1, 1755317750)].into(),
+        last_evicted: [(txid1, 1755317760)].into(),
+    };
+
+    let keychain_txout_changeset = keychain_txout::ChangeSet {
+        last_revealed: [
+            (descriptor.descriptor_id(), 12),
+            (change_descriptor.descriptor_id(), 10),
+        ]
+        .into(),
+        spk_cache: [
+            (
+                descriptor.descriptor_id(),
+                SpkIterator::new_with_range(&descriptor, 0..=37).collect(),
+            ),
+            (
+                change_descriptor.descriptor_id(),
+                SpkIterator::new_with_range(&change_descriptor, 0..=35).collect(),
+            ),
+        ]
+        .into(),
+    };
+
+    let locked_outpoints_changeset = locked_outpoints::ChangeSet {
+        outpoints: [(outpoint, true)].into(),
+    };
+
+    ChangeSet {
+        descriptor: Some(descriptor.clone()),
+        change_descriptor: Some(change_descriptor.clone()),
+        network: Some(Network::Testnet),
+        local_chain: local_chain_changeset,
+        tx_graph: tx_graph_changeset,
+        indexer: keychain_txout_changeset,
+        locked_outpoints: locked_outpoints_changeset,
+    }
+}
+
+/// Creates another [`ChangeSet`].
+fn get_changeset_two(tx2: Transaction) -> ChangeSet {
+    let descriptor: Descriptor<DescriptorPublicKey> = DESCRIPTORS[0].parse().unwrap();
+
+    let local_chain_changeset = local_chain::ChangeSet {
+        blocks: [(910236, Some(hash!("BDK")))].into(),
+    };
+
+    let conf_anchor: ConfirmationBlockTime = ConfirmationBlockTime {
+        block_id: block_id!(910236, "BDK"),
+        confirmation_time: 1755317760,
+    };
+
+    let txid2 = tx2.compute_txid();
+
+    let outpoint = OutPoint::new(hash!("Bitcoin_fixes_things"), 0);
+
+    let tx_graph_changeset = tx_graph::ChangeSet::<ConfirmationBlockTime> {
+        txs: [Arc::new(tx2)].into(),
+        txouts: [(
+            outpoint,
+            TxOut {
+                value: Amount::from_sat(10000),
+                script_pubkey: spk_at_index(&descriptor, 21),
+            },
+        )]
+        .into(),
+        anchors: [(conf_anchor, txid2)].into(),
+        last_seen: [(txid2, 1755317700)].into(),
+        first_seen: [(txid2, 1755317700)].into(),
+        last_evicted: [(txid2, 1755317760)].into(),
+    };
+
+    let keychain_txout_changeset = keychain_txout::ChangeSet {
+        last_revealed: [(descriptor.descriptor_id(), 14)].into(),
+        spk_cache: [(
+            descriptor.descriptor_id(),
+            SpkIterator::new_with_range(&descriptor, 37..=39).collect(),
+        )]
+        .into(),
+    };
+
+    let locked_outpoints_changeset = locked_outpoints::ChangeSet {
+        outpoints: [(outpoint, true)].into(),
+    };
+
+    ChangeSet {
+        descriptor: None,
+        change_descriptor: None,
+        network: None,
+        local_chain: local_chain_changeset,
+        tx_graph: tx_graph_changeset,
+        indexer: keychain_txout_changeset,
+        locked_outpoints: locked_outpoints_changeset,
+    }
+}
+
+/// Persist changeset async.
+#[allow(clippy::print_stderr)]
+pub async fn persist_wallet_changeset_async<F, P>(create_store: F) -> Result<(), PersistError>
+where
+    F: AsyncFn() -> Result<P, P::Error>,
+    P: AsyncWalletPersister,
+    P::Error: fmt::Debug + fmt::Display,
+{
+    // Create store
+    let mut store = create_store().await.expect("store should get created");
+    let changeset = AsyncWalletPersister::initialize(&mut store)
+        .await
+        .expect("empty changeset should get loaded");
+    assert_eq!(changeset, ChangeSet::default());
+
+    let tx1 = create_one_inp_one_out_tx(hash!("We_are_all_Satoshi"), 30_000);
+    let tx2 = create_one_inp_one_out_tx(tx1.compute_txid(), 20_000);
+
+    // Create changeset
+    let mut changeset = get_changeset(tx1);
+
+    AsyncWalletPersister::persist(&mut store, &changeset)
+        .await
+        .expect("changeset should get persisted");
+
+    let changeset_read = AsyncWalletPersister::initialize(&mut store)
+        .await
+        .expect("should load persisted changeset");
+
+    if changeset != changeset_read {
+        eprintln!("BUG: Changeset read does not match persisted, read: {changeset_read:#?}\npersisted: {changeset:#?}");
+        return Err(PersistError::Store(
+            "failed test changeset equality".to_string(),
+        ));
+    }
+
+    assert_eq!(changeset_read, changeset);
+
+    // Create another changeset
+    let changeset_2 = get_changeset_two(tx2);
+
+    AsyncWalletPersister::persist(&mut store, &changeset_2)
+        .await
+        .expect("changeset should get persisted");
+
+    let changeset_read = AsyncWalletPersister::initialize(&mut store)
+        .await
+        .expect("persister should not fail");
+
+    changeset.merge(changeset_2);
+
+    if changeset_read != changeset {
+        eprintln!("BUG: Changeset read does not match persisted, read: {changeset_read:#?}\npersisted: {changeset:#?}");
+        return Err(PersistError::Store(
+            "failed test changeset equality".to_string(),
+        ));
+    }
+
+    assert_eq!(changeset, changeset_read);
+
+    Ok(())
+}
