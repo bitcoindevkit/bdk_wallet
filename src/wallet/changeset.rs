@@ -48,7 +48,7 @@ type IndexedTxGraphChangeSet =
 /// to change at any point thereafter.
 ///
 /// Other fields of the change set are not required to be non-empty, that is they may be empty even
-/// in the aggregate. However in practice they should contain the data needed to recover a wallet
+/// in the aggregate. However, in practice they should contain the data needed to recover a wallet
 /// state between sessions. These include:
 /// * [`tx_graph`](Self::tx_graph)
 /// * [`indexer`](Self::indexer)
