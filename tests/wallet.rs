@@ -2801,7 +2801,7 @@ fn test_tx_cancellation() {
         .unwrap();
     assert_eq!(change_derivation_2, (KeychainKind::Internal, 1));
 
-    wallet.cancel_tx(&psbt1.extract_tx().expect("failed to extract tx"));
+    wallet.unreserve_change_address(&psbt1.extract_tx().expect("failed to extract tx"));
 
     let psbt3 = new_tx!(wallet);
     let change_derivation_3 = psbt3
@@ -2821,7 +2821,7 @@ fn test_tx_cancellation() {
         .unwrap();
     assert_eq!(change_derivation_3, (KeychainKind::Internal, 2));
 
-    wallet.cancel_tx(&psbt3.extract_tx().expect("failed to extract tx"));
+    wallet.unreserve_change_address(&psbt3.extract_tx().expect("failed to extract tx"));
 
     let psbt3 = new_tx!(wallet);
     let change_derivation_4 = psbt3
