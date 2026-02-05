@@ -3061,6 +3061,7 @@ impl Wallet {
                 fallback_sequence,
                 mandate_full_tx_for_segwit_v0: !params.only_witness_utxo,
                 sighash_type: params.sighash_type,
+                enable_anti_fee_sniping: params.enable_anti_fee_sniping,
             })
             .map_err(|e| CreatePsbtError::Psbt(Box::new(e)))?;
 
