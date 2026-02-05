@@ -6,7 +6,7 @@ use assert_matches::assert_matches;
 use bdk_chain::{BlockId, CanonicalizationParams, ConfirmationBlockTime};
 // use bdk_wallet::coin_selection;
 use bdk_wallet::descriptor::{calc_checksum, DescriptorError};
-// use bdk_wallet::error::CreateTxError;
+use bdk_wallet::keyring::KeyRing;
 use bdk_wallet::psbt::PsbtUtils;
 use bdk_wallet::signer::{SignOptions, SignerError};
 use bdk_wallet::test_utils::*;
@@ -31,136 +31,286 @@ use bitcoin::{
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 
+use bdk_wallet::test_utils::insert_anchor;
+
 mod common;
 
-// #[test]
-// fn test_error_external_and_internal_are_the_same() {
-//     // identical descriptors should fail to create wallet
-//     let desc = get_test_wpkh();
-//     let err = Wallet::create(desc, desc)
-//         .network(Network::Testnet)
-//         .create_wallet_no_persist();
-//     assert!(
-//         matches!(&err, Err(DescriptorError::ExternalAndInternalAreTheSame)),
-//         "expected same descriptors error, got {err:?}",
-//     );
+#[test]
+fn check_balance() {
+    let mut keyring = KeyRing::new(Network::Regtest, KeychainKind::External, "tr(tprv8ZgxMBicQKsPdWAHbugK2tjtVtRjKGixYVZUdL7xLHMgXZS6BFbFi1UDb1CHT25Z5PU1F9j7wGxwUiRhqz9E3nZRztikGUV6HoRDYcqPhM4/86'/1'/0'/0/*)").unwrap();
+    keyring.add_descriptor(KeychainKind::Internal, "tr(tprv8ZgxMBicQKsPdWAHbugK2tjtVtRjKGixYVZUdL7xLHMgXZS6BFbFi1UDb1CHT25Z5PU1F9j7wGxwUiRhqz9E3nZRztikGUV6HoRDYcqPhM4/86'/1'/0'/5/*)");
+    let mut wallet = Wallet::create(keyring).create_wallet_no_persist().unwrap();
+    let receive_address = wallet
+        .reveal_next_address(KeychainKind::External)
+        .unwrap()
+        .address;
+    let internal_address = wallet
+        .reveal_next_address(KeychainKind::Internal)
+        .unwrap()
+        .address;
+    let sendto_address = Address::from_str("bcrt1q3qtze4ys45tgdvguj66zrk4fu6hq3a3v9pfly5")
+        .unwrap()
+        .require_network(Network::Regtest)
+        .unwrap();
 
-//     // public + private of same descriptor should fail to create wallet
-//     let desc =
-// "wpkh(tprv8ZgxMBicQKsPdcAqYBpzAFwU5yxBUo88ggoBqu1qPcHUfSbKK1sKMLmC7EAk438btHQrSdu3jGGQa6PA71nvH5nkDexhLteJqkM4dQmWF9g/
-// 84'/1'/0'/0/*)";     let change_desc =
-// "wpkh([3c31d632/84'/1'/0'
-// ]tpubDCYwFkks2cg78N7eoYbBatsFEGje8vW8arSKW4rLwD1AU1s9KJMDRHE32JkvYERuiFjArrsH7qpWSpJATed5ShZbG9KsskA5Rmi6NSYgYN2/
-// 0/*)";     let err = Wallet::create(desc, change_desc)
-//         .network(Network::Testnet)
-//         .create_wallet_no_persist();
-//     assert!(
-//         matches!(err, Err(DescriptorError::ExternalAndInternalAreTheSame)),
-//         "expected same descriptors error, got {err:?}",
-//     );
-// }
+    let tx0 = Transaction {
+        output: vec![TxOut {
+            value: Amount::from_sat(76_000),
+            script_pubkey: receive_address.script_pubkey(),
+        }],
+        ..new_tx(0)
+    };
 
-// #[test]
-// fn test_descriptor_checksum() {
-//     let (wallet, _) = get_funded_wallet_wpkh();
-//     let checksum = wallet.descriptor_checksum(KeychainKind::External);
-//     assert_eq!(checksum.len(), 8);
+    // tx1 is a receive to internal and is in mempool
+    // This should not add to trusted_pending
+    let tx1 = Transaction {
+        output: vec![TxOut {
+            value: Amount::from_sat(10_000),
+            script_pubkey: internal_address.script_pubkey(),
+        }],
+        ..new_tx(0)
+    };
 
-//     let raw_descriptor = wallet
-//         .keychains()
-//         .next()
-//         .unwrap()
-//         .1
-//         .to_string()
-//         .split_once('#')
-//         .unwrap()
-//         .0
-//         .to_string();
-//     assert_eq!(calc_checksum(&raw_descriptor).unwrap(), checksum);
-// }
+    let tx2 = Transaction {
+        output: vec![TxOut {
+            value: Amount::from_sat(5_000),
+            script_pubkey: receive_address.script_pubkey(),
+        }],
+        ..new_tx(0)
+    };
 
-// #[test]
-// fn test_get_funded_wallet_balance() {
-//     let (wallet, _) = get_funded_wallet_wpkh();
+    // tx3 spends tx0 and is confirmed
+    let tx3 = Transaction {
+        input: vec![TxIn {
+            previous_output: OutPoint {
+                txid: tx0.compute_txid(),
+                vout: 0,
+            },
+            ..Default::default()
+        }],
+        output: vec![
+            TxOut {
+                value: Amount::from_sat(50_000),
+                script_pubkey: internal_address.script_pubkey(),
+            },
+            TxOut {
+                value: Amount::from_sat(25_000),
+                script_pubkey: sendto_address.script_pubkey(),
+            },
+        ],
+        ..new_tx(0)
+    };
 
-//     // The funded wallet contains a tx with a 76_000 sats input and two outputs, one spending
-// 25_000     // to a foreign address and one returning 50_000 back to the wallet as change. The
-// remaining     // 1000 sats are the transaction fee.
-//     assert_eq!(wallet.balance().confirmed, Amount::from_sat(50_000));
-// }
+    // tx4 spends tx2 and is in mempool
+    // This should still be trusted_pending even though sending to external keychain.
+    let tx4 = Transaction {
+        input: vec![TxIn {
+            previous_output: OutPoint {
+                txid: tx2.compute_txid(),
+                vout: 0,
+            },
+            ..Default::default()
+        }],
+        output: vec![TxOut {
+            value: Amount::from_sat(4_000),
+            script_pubkey: receive_address.script_pubkey(),
+        }],
+        ..new_tx(0)
+    };
 
-// #[test]
-// fn test_get_funded_wallet_sent_and_received() {
-//     let (wallet, txid) = get_funded_wallet_wpkh();
+    insert_checkpoint(
+        &mut wallet,
+        BlockId {
+            height: 1_000,
+            hash: BlockHash::all_zeros(),
+        },
+    );
+    insert_checkpoint(
+        &mut wallet,
+        BlockId {
+            height: 2_000,
+            hash: BlockHash::all_zeros(),
+        },
+    );
 
-//     let mut tx_amounts: Vec<(Txid, (Amount, Amount))> = wallet
-//         .transactions()
-//         .map(|ct| (ct.tx_node.txid, wallet.sent_and_received(&ct.tx_node)))
-//         .collect();
-//     tx_amounts.sort_by(|a1, a2| a1.0.cmp(&a2.0));
+    insert_tx(&mut wallet, tx0.clone());
+    insert_tx(&mut wallet, tx2.clone());
+    insert_anchor(
+        &mut wallet,
+        tx0.compute_txid(),
+        ConfirmationBlockTime {
+            block_id: BlockId {
+                height: 1_000,
+                hash: BlockHash::all_zeros(),
+            },
+            confirmation_time: 100,
+        },
+    );
 
-//     let tx = wallet.get_tx(txid).expect("transaction").tx_node.tx;
-//     let (sent, received) = wallet.sent_and_received(&tx);
+    insert_anchor(
+        &mut wallet,
+        tx2.compute_txid(),
+        ConfirmationBlockTime {
+            block_id: BlockId {
+                height: 1_000,
+                hash: BlockHash::all_zeros(),
+            },
+            confirmation_time: 100,
+        },
+    );
 
-//     // The funded wallet contains a tx with a 76_000 sats input and two outputs, one spending
-// 25_000     // to a foreign address and one returning 50_000 back to the wallet as change. The
-// remaining     // 1000 sats are the transaction fee.
-//     assert_eq!(sent.to_sat(), 76_000);
-//     assert_eq!(received.to_sat(), 50_000);
-// }
+    insert_tx(&mut wallet, tx1.clone());
+    insert_tx(&mut wallet, tx3.clone());
+    insert_tx(&mut wallet, tx4.clone());
+    insert_anchor(
+        &mut wallet,
+        tx3.compute_txid(),
+        ConfirmationBlockTime {
+            block_id: BlockId {
+                height: 2_000,
+                hash: BlockHash::all_zeros(),
+            },
+            confirmation_time: 200,
+        },
+    );
 
-// #[test]
-// fn test_get_funded_wallet_tx_fees() {
-//     let (wallet, txid) = get_funded_wallet_wpkh();
+    // TODO PR #318: For now, all balances are "untrusted". Fix this (but might not be a fix that
+    //               should arrive in #318).
+    assert_eq!(wallet.balance().confirmed.to_sat(), 50_000);
+    assert_eq!(wallet.balance().untrusted_pending.to_sat(), 14_000);
+    // assert_eq!(wallet.balance().trusted_pending.to_sat(), 4_000);
 
-//     let tx = wallet.get_tx(txid).expect("transaction").tx_node.tx;
-//     let tx_fee = wallet.calculate_fee(&tx).expect("transaction fee");
+    // let min_3_conf_balance = wallet.balance_with_params_conf_threshold(
+    //     CanonicalizationParams::default(),
+    //     wallet.spk_index().outpoints().iter().cloned(),
+    //     3,
+    //     |txo| wallet.is_tx_trusted(txo.outpoint.txid),
+    // );
+    //
+    // assert_eq!(min_3_conf_balance.confirmed.to_sat(), 0);
+    // assert_eq!(min_3_conf_balance.untrusted_pending.to_sat(), 10_000);
+    // assert_eq!(min_3_conf_balance.trusted_pending.to_sat(), 54_000);
 
-//     // The funded wallet contains a tx with a 76_000 sats input and two outputs, one spending
-// 25_000     // to a foreign address and one returning 50_000 back to the wallet as change. The
-// remaining     // 1000 sats are the transaction fee.
-//     assert_eq!(tx_fee, Amount::from_sat(1000))
-// }
+    insert_checkpoint(
+        &mut wallet,
+        BlockId {
+            height: 2_002,
+            hash: BlockHash::all_zeros(),
+        },
+    );
 
-// #[test]
-// fn test_get_funded_wallet_tx_fee_rate() {
-//     let (wallet, txid) = get_funded_wallet_wpkh();
+    // let min_3_conf_balance = wallet.balance_with_params_conf_threshold(
+    //     CanonicalizationParams::default(),
+    //     wallet.spk_index().outpoints().iter().cloned(),
+    //     3,
+    //     |txo| wallet.is_tx_trusted(txo.outpoint.txid),
+    // );
+    //
+    // assert_eq!(min_3_conf_balance.confirmed.to_sat(), 50_000);
+    // assert_eq!(min_3_conf_balance.untrusted_pending.to_sat(), 10_000);
+    // assert_eq!(min_3_conf_balance.trusted_pending.to_sat(), 4_000);
+}
 
-//     let tx = wallet.get_tx(txid).expect("transaction").tx_node.tx;
-//     let tx_fee_rate = wallet
-//         .calculate_fee_rate(&tx)
-//         .expect("transaction fee rate");
+#[test]
+fn test_descriptor_checksum() {
+    let (wallet, _) = get_funded_wallet_wpkh();
+    let checksum = wallet.descriptor_checksum(KeychainKind::External);
+    assert_eq!(checksum.len(), 8);
 
-//     // The funded wallet contains a tx with a 76_000 sats input and two outputs, one spending
-// 25_000     // to a foreign address and one returning 50_000 back to the wallet as change. The
-// remaining     // 1000 sats are the transaction fee.
+    let raw_descriptor = wallet
+        .keychains()
+        .get(&KeychainKind::External)
+        .unwrap()
+        .to_string()
+        .split_once('#')
+        .unwrap()
+        .0
+        .to_string();
+    assert_eq!(calc_checksum(&raw_descriptor).unwrap(), checksum);
+}
 
-//     // tx weight = 452 wu, as vbytes = (452 + 3) / 4 = 113
-//     // fee_rate (sats per kwu) = fee / weight = 1000sat / 0.452kwu = 2212
-//     // fee_rate (sats per vbyte ceil) = fee / vsize = 1000sat / 113vb = 9
-//     assert_eq!(tx_fee_rate.to_sat_per_kwu(), 2212);
-//     assert_eq!(tx_fee_rate.to_sat_per_vb_ceil(), 9);
-// }
+#[test]
+fn test_get_funded_wallet_balance() {
+    let (wallet, _) = get_funded_wallet_wpkh();
 
-// #[test]
-// fn test_legacy_get_funded_wallet_tx_fee_rate() {
-//     let (wallet, txid) = get_funded_wallet_single(get_test_pkh());
+    // The funded wallet contains a tx with a 76_000 sats input and two outputs, one spending 25_000
+    // to a foreign address and one returning 50_000 back to the wallet as change. The remaining
+    // 1000 sats are the transaction fee.
+    assert_eq!(wallet.balance().confirmed, Amount::from_sat(50_000));
+}
 
-//     let tx = wallet.get_tx(txid).expect("transaction").tx_node.tx;
-//     let tx_fee_rate = wallet
-//         .calculate_fee_rate(&tx)
-//         .expect("transaction fee rate");
+#[test]
+fn test_get_funded_wallet_sent_and_received() {
+    let (wallet, txid) = get_funded_wallet_wpkh();
 
-//     // The funded wallet contains a tx with a 76_000 sats input and two outputs, one spending
-// 25_000     // to a foreign address and one returning 50_000 back to the wallet as change. The
-// remaining     // 1000 sats are the transaction fee.
+    let mut tx_amounts: Vec<(Txid, (Amount, Amount))> = wallet
+        .transactions()
+        .map(|ct| (ct.tx_node.txid, wallet.sent_and_received(&ct.tx_node)))
+        .collect();
+    tx_amounts.sort_by(|a1, a2| a1.0.cmp(&a2.0));
 
-//     // tx weight = 464 wu, as vbytes = (464)/4 = 116
-//     // fee rate (sats per kwu) = fee / weight = 1000sat / 0.464kwu = 2155
-//     // fee rate (sats per vbyte ceil) = fee / kwu = 1000 / 116 = 8.621
-//     assert_eq!(tx_fee_rate.to_sat_per_kwu(), 2155);
-//     assert_eq!(tx_fee_rate.to_sat_per_vb_ceil(), 9);
-// }
+    let tx = wallet.get_tx(txid).expect("transaction").tx_node.tx;
+    let (sent, received) = wallet.sent_and_received(&tx);
+
+    // The funded wallet contains a tx with a 76_000 sats input and two outputs, one spending 25_000
+    // to a foreign address and one returning 50_000 back to the wallet as change. The remaining
+    // 1000 sats are the transaction fee.
+    assert_eq!(sent.to_sat(), 76_000);
+    assert_eq!(received.to_sat(), 50_000);
+}
+
+#[test]
+fn test_get_funded_wallet_tx_fees() {
+    let (wallet, txid) = get_funded_wallet_wpkh();
+
+    let tx = wallet.get_tx(txid).expect("transaction").tx_node.tx;
+    let tx_fee = wallet.calculate_fee(&tx).expect("transaction fee");
+
+    // The funded wallet contains a tx with a 76_000 sats input and two outputs, one spending 25_000
+    // to a foreign address and one returning 50_000 back to the wallet as change. The remaining
+    // 1000 sats are the transaction fee.
+    assert_eq!(tx_fee, Amount::from_sat(1000))
+}
+
+#[test]
+fn test_get_funded_wallet_tx_fee_rate() {
+    let (wallet, txid) = get_funded_wallet_wpkh();
+
+    let tx = wallet.get_tx(txid).expect("transaction").tx_node.tx;
+    let tx_fee_rate = wallet
+        .calculate_fee_rate(&tx)
+        .expect("transaction fee rate");
+
+    // The funded wallet contains a tx with a 76_000 sats input and two outputs, one spending 25_000
+    // to a foreign address and one returning 50_000 back to the wallet as change. The remaining
+    // 1000 sats are the transaction fee.
+
+    // tx weight = 452 wu, as vbytes = (452 + 3) / 4 = 113
+    // fee_rate (sats per kwu) = fee / weight = 1000sat / 0.452kwu = 2212
+    // fee_rate (sats per vbyte ceil) = fee / vsize = 1000sat / 113vb = 9
+    assert_eq!(tx_fee_rate.to_sat_per_kwu(), 2212);
+    assert_eq!(tx_fee_rate.to_sat_per_vb_ceil(), 9);
+}
+
+#[test]
+fn test_legacy_get_funded_wallet_tx_fee_rate() {
+    let (wallet, txid) = get_funded_wallet_single(get_test_pkh());
+
+    let tx = wallet.get_tx(txid).expect("transaction").tx_node.tx;
+    let tx_fee_rate = wallet
+        .calculate_fee_rate(&tx)
+        .expect("transaction fee rate");
+
+    // The funded wallet contains a tx with a 76_000 sats input and two outputs, one spending 25_000
+    // to a foreign address and one returning 50_000 back to the wallet as change. The remaining
+    // 1000 sats are the transaction fee.
+
+    // tx weight = 464 wu, as vbytes = (464)/4 = 116
+    // fee rate (sats per kwu) = fee / weight = 1000sat / 0.464kwu = 2155
+    // fee rate (sats per vbyte ceil) = fee / kwu = 1000 / 116 = 8.621
+    assert_eq!(tx_fee_rate.to_sat_per_kwu(), 2155);
+    assert_eq!(tx_fee_rate.to_sat_per_vb_ceil(), 9);
+}
 
 // #[test]
 // fn test_list_output() {
