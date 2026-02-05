@@ -75,6 +75,8 @@ pub struct PsbtParams<C> {
     pub(crate) sighash_type: Option<PsbtSighashType>,
     /// Whether to try filling in the PSBT global xpubs from the wallet's descriptors.
     pub(crate) add_global_xpubs: bool,
+    /// Whether to enable BIP326 Sequence based anti-fee sniping.
+    pub(crate) enable_anti_fee_sniping: bool,
     /// Set of txids being replaced if this is a RBF transaction.
     pub(crate) replace: HashSet<Txid>,
     /// The context in which the params are used.
@@ -108,6 +110,7 @@ impl Default for PsbtParams<CreateTx> {
             only_witness_utxo: Default::default(),
             sighash_type: Default::default(),
             add_global_xpubs: Default::default(),
+            enable_anti_fee_sniping: Default::default(),
             replace: Default::default(),
             marker: core::marker::PhantomData,
         }
@@ -182,6 +185,7 @@ impl PsbtParams<CreateTx> {
             only_witness_utxo: self.only_witness_utxo,
             sighash_type: self.sighash_type,
             add_global_xpubs: self.add_global_xpubs,
+            enable_anti_fee_sniping: self.enable_anti_fee_sniping,
             replace: self.replace,
             marker: core::marker::PhantomData,
         }
@@ -445,6 +449,21 @@ impl<C> PsbtParams<C> {
     /// [`Psbt::xpub`]: bitcoin::Psbt::xpub
     pub fn add_global_xpubs(&mut self) -> &mut Self {
         self.add_global_xpubs = true;
+        self
+    }
+
+    /// Whether to enable [BIP326] anti-fee sniping.
+    ///
+    /// When enabled, the transaction's `nLockTime` or `nSequence` will be set to indicate the
+    /// transaction should only be valid after the current block height. This discourages
+    /// miners from reorganizing recent blocks to capture fees. For details refer to
+    /// the corresponding [`enable_anti_fee_sniping`] option which covers the rules
+    /// and caveats.
+    ///
+    /// [`enable_anti_fee_sniping`]: bdk_tx::PsbtParams::enable_anti_fee_sniping
+    /// [BIP326]: <https://github.com/bitcoin/bips/blob/master/bip-0326.mediawiki>
+    pub fn enable_anti_fee_sniping(&mut self) -> &mut Self {
+        self.enable_anti_fee_sniping = true;
         self
     }
 }
