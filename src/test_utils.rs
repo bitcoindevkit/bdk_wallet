@@ -5,132 +5,143 @@ use alloc::sync::Arc;
 use core::fmt;
 use core::str::FromStr;
 
+use crate::keyring::KeyRing;
+use crate::{KeychainKind, Update, Wallet};
 use bdk_chain::{BlockId, CheckPoint, ConfirmationBlockTime, TxUpdate};
 use bitcoin::{
     absolute, hashes::Hash, transaction, Address, Amount, BlockHash, FeeRate, Network, OutPoint,
     Transaction, TxIn, TxOut, Txid,
 };
 
-use crate::{KeychainKind, Update, Wallet};
+/// Return a fake wallet that appears to be funded for testing.
+///
+/// The funded wallet contains a tx with a 76_000 sats input and two outputs, one spending 25_000
+/// to a foreign address and one returning 50_000 back to the wallet. The remaining 1000
+/// sats are the transaction fee.
+pub fn get_funded_wallet(
+    descriptor: &str,
+    change_descriptor: &str,
+) -> (Wallet<KeychainKind>, Txid) {
+    new_funded_wallet(descriptor, Some(change_descriptor))
+}
 
-// /// Return a fake wallet that appears to be funded for testing.
-// ///
-// /// The funded wallet contains a tx with a 76_000 sats input and two outputs, one spending 25_000
-// /// to a foreign address and one returning 50_000 back to the wallet. The remaining 1000
-// /// sats are the transaction fee.
-// pub fn get_funded_wallet(descriptor: &str, change_descriptor: &str) -> (Wallet, Txid) {
-//     new_funded_wallet(descriptor, Some(change_descriptor))
-// }
+fn new_funded_wallet(
+    descriptor: &str,
+    change_descriptor: Option<&str>,
+) -> (Wallet<KeychainKind>, Txid) {
+    let (mut wallet, txid, update) = new_wallet_and_funding_update(descriptor, change_descriptor);
+    wallet.apply_update(update).unwrap();
+    (wallet, txid)
+}
 
-// fn new_funded_wallet(descriptor: &str, change_descriptor: Option<&str>) -> (Wallet, Txid) {
-//     let (mut wallet, txid, update) = new_wallet_and_funding_update(descriptor,
-// change_descriptor);     wallet.apply_update(update).unwrap();
-//     (wallet, txid)
-// }
-//
-// /// Return a fake wallet that appears to be funded for testing.
-// ///
-// /// The funded wallet contains a tx with a 76_000 sats input and two outputs, one spending 25_000
-// /// to a foreign address and one returning 50_000 back to the wallet. The remaining 1000
-// /// sats are the transaction fee.
-// pub fn get_funded_wallet_single(descriptor: &str) -> (Wallet, Txid) {
-//     new_funded_wallet(descriptor, None)
-// }
-//
-// /// Get funded segwit wallet
-// pub fn get_funded_wallet_wpkh() -> (Wallet, Txid) {
-//     let (desc, change_desc) = get_test_wpkh_and_change_desc();
-//     get_funded_wallet(desc, change_desc)
-// }
-//
-// /// Get unfunded wallet and wallet update that funds it
-// ///
-// /// The funding update contains a tx with a 76_000 sats input and two outputs, one spending
-// /// 25_000 to a foreign address and one returning 50_000 back to the wallet as
-// /// change. The remaining 1000 sats are the transaction fee.
-// pub fn new_wallet_and_funding_update(
-//     descriptor: &str,
-//     change_descriptor: Option<&str>,
-// ) -> (Wallet, Txid, Update) {
-//     let params = if let Some(change_desc) = change_descriptor {
-//         Wallet::create(descriptor.to_string(), change_desc.to_string())
-//     } else {
-//         Wallet::create_single(descriptor.to_string())
-//     };
-//
-//     let wallet = params
-//         .network(Network::Regtest)
-//         .create_wallet_no_persist()
-//         .expect("descriptors must be valid");
-//
-//     let receive_address = wallet.peek_address(KeychainKind::External, 0).address;
-//     let sendto_address = Address::from_str("bcrt1q3qtze4ys45tgdvguj66zrk4fu6hq3a3v9pfly5")
-//         .expect("address")
-//         .require_network(Network::Regtest)
-//         .unwrap();
-//
-//     let mut update = Update::default();
-//
-//     let tx0 = Transaction {
-//         output: vec![TxOut {
-//             value: Amount::from_sat(76_000),
-//             script_pubkey: receive_address.script_pubkey(),
-//         }],
-//         ..new_tx(0)
-//     };
-//
-//     let tx1 = Transaction {
-//         input: vec![TxIn {
-//             previous_output: OutPoint {
-//                 txid: tx0.compute_txid(),
-//                 vout: 0,
-//             },
-//             ..Default::default()
-//         }],
-//         output: vec![
-//             TxOut {
-//                 value: Amount::from_sat(50_000),
-//                 script_pubkey: receive_address.script_pubkey(),
-//             },
-//             TxOut {
-//                 value: Amount::from_sat(25_000),
-//                 script_pubkey: sendto_address.script_pubkey(),
-//             },
-//         ],
-//         ..new_tx(0)
-//     };
-//     let txid1 = tx1.compute_txid();
-//
-//     let b0 = BlockId {
-//         height: 0,
-//         hash: BlockHash::from_slice(wallet.network().chain_hash().as_bytes()).unwrap(),
-//     };
-//     let b1 = BlockId {
-//         height: 42,
-//         hash: BlockHash::all_zeros(),
-//     };
-//     let b2 = BlockId {
-//         height: 1000,
-//         hash: BlockHash::all_zeros(),
-//     };
-//     let a2 = ConfirmationBlockTime {
-//         block_id: b2,
-//         confirmation_time: 100,
-//     };
-//     let b3 = BlockId {
-//         height: 2000,
-//         hash: BlockHash::all_zeros(),
-//     };
-//     let a3 = ConfirmationBlockTime {
-//         block_id: b3,
-//         confirmation_time: 200,
-//     };
-//     update.chain = CheckPoint::from_block_ids([b0, b1, b2, b3]).ok();
-//     update.tx_update.anchors = [(a2, tx0.compute_txid()), (a3, tx1.compute_txid())].into();
-//     update.tx_update.txs = [Arc::new(tx0), Arc::new(tx1)].into();
-//
-//     (wallet, txid1, update)
-// }
+/// Return a fake wallet that appears to be funded for testing.
+///
+/// The funded wallet contains a tx with a 76_000 sats input and two outputs, one spending 25_000
+/// to a foreign address and one returning 50_000 back to the wallet. The remaining 1000
+/// sats are the transaction fee.
+pub fn get_funded_wallet_single(descriptor: &str) -> (Wallet<KeychainKind>, Txid) {
+    new_funded_wallet(descriptor, None)
+}
+
+/// Get funded segwit wallet
+pub fn get_funded_wallet_wpkh() -> (Wallet<KeychainKind>, Txid) {
+    let (desc, change_desc) = get_test_wpkh_and_change_desc();
+    get_funded_wallet(desc, change_desc)
+}
+
+// TODO: Perhaps this can be made generic!
+/// Get unfunded wallet and wallet update that funds it
+///
+/// The funding update contains a tx with a 76_000 sats input and two outputs, one spending
+/// 25_000 to a foreign address and one returning 50_000 back to the wallet as
+/// change. The remaining 1000 sats are the transaction fee.
+pub fn new_wallet_and_funding_update(
+    descriptor: &str,
+    change_descriptor: Option<&str>,
+) -> (Wallet<KeychainKind>, Txid, Update<KeychainKind>) {
+    let mut keyring = KeyRing::new(Network::Regtest, KeychainKind::External, descriptor)
+        .expect("descriptor must be valid");
+    if let Some(change_desc) = change_descriptor {
+        keyring
+            .add_descriptor(KeychainKind::Internal, change_desc)
+            .expect("descriptor must be valid");
+    };
+
+    let wallet = Wallet::create(keyring)
+        .create_wallet_no_persist()
+        .expect("descriptors must be valid");
+
+    let receive_address = wallet
+        .peek_address(KeychainKind::External, 0)
+        .unwrap()
+        .address;
+    let sendto_address = Address::from_str("bcrt1q3qtze4ys45tgdvguj66zrk4fu6hq3a3v9pfly5")
+        .expect("address")
+        .require_network(Network::Regtest)
+        .unwrap();
+
+    let mut update = Update::default();
+
+    let tx0 = Transaction {
+        output: vec![TxOut {
+            value: Amount::from_sat(76_000),
+            script_pubkey: receive_address.script_pubkey(),
+        }],
+        ..new_tx(0)
+    };
+
+    let tx1 = Transaction {
+        input: vec![TxIn {
+            previous_output: OutPoint {
+                txid: tx0.compute_txid(),
+                vout: 0,
+            },
+            ..Default::default()
+        }],
+        output: vec![
+            TxOut {
+                value: Amount::from_sat(50_000),
+                script_pubkey: receive_address.script_pubkey(),
+            },
+            TxOut {
+                value: Amount::from_sat(25_000),
+                script_pubkey: sendto_address.script_pubkey(),
+            },
+        ],
+        ..new_tx(0)
+    };
+    let txid1 = tx1.compute_txid();
+
+    let b0 = BlockId {
+        height: 0,
+        hash: BlockHash::from_slice(wallet.network().chain_hash().as_bytes()).unwrap(),
+    };
+    let b1 = BlockId {
+        height: 42,
+        hash: BlockHash::all_zeros(),
+    };
+    let b2 = BlockId {
+        height: 1000,
+        hash: BlockHash::all_zeros(),
+    };
+    let a2 = ConfirmationBlockTime {
+        block_id: b2,
+        confirmation_time: 100,
+    };
+    let b3 = BlockId {
+        height: 2000,
+        hash: BlockHash::all_zeros(),
+    };
+    let a3 = ConfirmationBlockTime {
+        block_id: b3,
+        confirmation_time: 200,
+    };
+    update.chain = CheckPoint::from_block_ids([b0, b1, b2, b3]).ok();
+    update.tx_update.anchors = [(a2, tx0.compute_txid()), (a3, tx1.compute_txid())].into();
+    update.tx_update.txs = [Arc::new(tx0), Arc::new(tx1)].into();
+
+    (wallet, txid1, update)
+}
 
 /// `pkh` single key descriptor
 pub fn get_test_pkh() -> &'static str {

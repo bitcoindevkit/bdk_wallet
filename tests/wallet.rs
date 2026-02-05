@@ -6,7 +6,7 @@ use assert_matches::assert_matches;
 use bdk_chain::{BlockId, CanonicalizationParams, ConfirmationBlockTime};
 // use bdk_wallet::coin_selection;
 use bdk_wallet::descriptor::{calc_checksum, DescriptorError};
-// use bdk_wallet::error::CreateTxError;
+use bdk_wallet::keyring::{self, KeyRing};
 use bdk_wallet::psbt::PsbtUtils;
 // use bdk_wallet::signer::{SignOptions, SignerError};
 use bdk_wallet::test_utils::*;
@@ -31,136 +31,290 @@ use bitcoin::{
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 
+use bdk_wallet::test_utils::insert_anchor;
+
 mod common;
 
-// #[test]
-// fn test_error_external_and_internal_are_the_same() {
-//     // identical descriptors should fail to create wallet
-//     let desc = get_test_wpkh();
-//     let err = Wallet::create(desc, desc)
-//         .network(Network::Testnet)
-//         .create_wallet_no_persist();
-//     assert!(
-//         matches!(&err, Err(DescriptorError::ExternalAndInternalAreTheSame)),
-//         "expected same descriptors error, got {err:?}",
-//     );
+#[test]
+fn check_balance() {
+    let mut keyring = KeyRing::new(Network::Regtest, KeychainKind::External, "tr(tprv8ZgxMBicQKsPdWAHbugK2tjtVtRjKGixYVZUdL7xLHMgXZS6BFbFi1UDb1CHT25Z5PU1F9j7wGxwUiRhqz9E3nZRztikGUV6HoRDYcqPhM4/86'/1'/0'/0/*)").unwrap();
+    keyring.add_descriptor(KeychainKind::Internal, "tr(tprv8ZgxMBicQKsPdWAHbugK2tjtVtRjKGixYVZUdL7xLHMgXZS6BFbFi1UDb1CHT25Z5PU1F9j7wGxwUiRhqz9E3nZRztikGUV6HoRDYcqPhM4/86'/1'/0'/5/*)");
+    let mut wallet = Wallet::create(keyring).create_wallet_no_persist().unwrap();
+    let receive_address = wallet
+        .reveal_next_address(KeychainKind::External)
+        .unwrap()
+        .address;
+    let internal_address = wallet
+        .reveal_next_address(KeychainKind::Internal)
+        .unwrap()
+        .address;
+    let sendto_address = Address::from_str("bcrt1q3qtze4ys45tgdvguj66zrk4fu6hq3a3v9pfly5")
+        .unwrap()
+        .require_network(Network::Regtest)
+        .unwrap();
 
-//     // public + private of same descriptor should fail to create wallet
-//     let desc =
-// "wpkh(tprv8ZgxMBicQKsPdcAqYBpzAFwU5yxBUo88ggoBqu1qPcHUfSbKK1sKMLmC7EAk438btHQrSdu3jGGQa6PA71nvH5nkDexhLteJqkM4dQmWF9g/
-// 84'/1'/0'/0/*)";     let change_desc =
-// "wpkh([3c31d632/84'/1'/0'
-// ]tpubDCYwFkks2cg78N7eoYbBatsFEGje8vW8arSKW4rLwD1AU1s9KJMDRHE32JkvYERuiFjArrsH7qpWSpJATed5ShZbG9KsskA5Rmi6NSYgYN2/
-// 0/*)";     let err = Wallet::create(desc, change_desc)
-//         .network(Network::Testnet)
-//         .create_wallet_no_persist();
-//     assert!(
-//         matches!(err, Err(DescriptorError::ExternalAndInternalAreTheSame)),
-//         "expected same descriptors error, got {err:?}",
-//     );
-// }
+    let tx0 = Transaction {
+        output: vec![TxOut {
+            value: Amount::from_sat(76_000),
+            script_pubkey: receive_address.script_pubkey(),
+        }],
+        ..new_tx(0)
+    };
 
-// #[test]
-// fn test_descriptor_checksum() {
-//     let (wallet, _) = get_funded_wallet_wpkh();
-//     let checksum = wallet.descriptor_checksum(KeychainKind::External);
-//     assert_eq!(checksum.len(), 8);
+    // tx1 is a receive to internal and is in mempool
+    // This should not add to trusted_pending
+    let tx1 = Transaction {
+        output: vec![TxOut {
+            value: Amount::from_sat(10_000),
+            script_pubkey: internal_address.script_pubkey(),
+        }],
+        ..new_tx(0)
+    };
 
-//     let raw_descriptor = wallet
-//         .keychains()
-//         .next()
-//         .unwrap()
-//         .1
-//         .to_string()
-//         .split_once('#')
-//         .unwrap()
-//         .0
-//         .to_string();
-//     assert_eq!(calc_checksum(&raw_descriptor).unwrap(), checksum);
-// }
+    let tx2 = Transaction {
+        output: vec![TxOut {
+            value: Amount::from_sat(5_000),
+            script_pubkey: receive_address.script_pubkey(),
+        }],
+        ..new_tx(0)
+    };
 
-// #[test]
-// fn test_get_funded_wallet_balance() {
-//     let (wallet, _) = get_funded_wallet_wpkh();
+    // tx3 spends tx0 and is confirmed
+    let tx3 = Transaction {
+        input: vec![TxIn {
+            previous_output: OutPoint {
+                txid: tx0.compute_txid(),
+                vout: 0,
+            },
+            ..Default::default()
+        }],
+        output: vec![
+            TxOut {
+                value: Amount::from_sat(50_000),
+                script_pubkey: internal_address.script_pubkey(),
+            },
+            TxOut {
+                value: Amount::from_sat(25_000),
+                script_pubkey: sendto_address.script_pubkey(),
+            },
+        ],
+        ..new_tx(0)
+    };
 
-//     // The funded wallet contains a tx with a 76_000 sats input and two outputs, one spending
-// 25_000     // to a foreign address and one returning 50_000 back to the wallet as change. The
-// remaining     // 1000 sats are the transaction fee.
-//     assert_eq!(wallet.balance().confirmed, Amount::from_sat(50_000));
-// }
+    // tx4 spends tx2 and is in mempool
+    // This should still be trusted_pending even though sending to external keychain.
+    let tx4 = Transaction {
+        input: vec![TxIn {
+            previous_output: OutPoint {
+                txid: tx2.compute_txid(),
+                vout: 0,
+            },
+            ..Default::default()
+        }],
+        output: vec![TxOut {
+            value: Amount::from_sat(4_000),
+            script_pubkey: receive_address.script_pubkey(),
+        }],
+        ..new_tx(0)
+    };
 
-// #[test]
-// fn test_get_funded_wallet_sent_and_received() {
-//     let (wallet, txid) = get_funded_wallet_wpkh();
+    insert_checkpoint(
+        &mut wallet,
+        BlockId {
+            height: 1_000,
+            hash: BlockHash::all_zeros(),
+        },
+    );
+    insert_checkpoint(
+        &mut wallet,
+        BlockId {
+            height: 2_000,
+            hash: BlockHash::all_zeros(),
+        },
+    );
 
-//     let mut tx_amounts: Vec<(Txid, (Amount, Amount))> = wallet
-//         .transactions()
-//         .map(|ct| (ct.tx_node.txid, wallet.sent_and_received(&ct.tx_node)))
-//         .collect();
-//     tx_amounts.sort_by(|a1, a2| a1.0.cmp(&a2.0));
+    insert_tx(&mut wallet, tx0.clone());
+    insert_tx(&mut wallet, tx2.clone());
+    insert_anchor(
+        &mut wallet,
+        tx0.compute_txid(),
+        ConfirmationBlockTime {
+            block_id: BlockId {
+                height: 1_000,
+                hash: BlockHash::all_zeros(),
+            },
+            confirmation_time: 100,
+        },
+    );
 
-//     let tx = wallet.get_tx(txid).expect("transaction").tx_node.tx;
-//     let (sent, received) = wallet.sent_and_received(&tx);
+    insert_anchor(
+        &mut wallet,
+        tx2.compute_txid(),
+        ConfirmationBlockTime {
+            block_id: BlockId {
+                height: 1_000,
+                hash: BlockHash::all_zeros(),
+            },
+            confirmation_time: 100,
+        },
+    );
 
-//     // The funded wallet contains a tx with a 76_000 sats input and two outputs, one spending
-// 25_000     // to a foreign address and one returning 50_000 back to the wallet as change. The
-// remaining     // 1000 sats are the transaction fee.
-//     assert_eq!(sent.to_sat(), 76_000);
-//     assert_eq!(received.to_sat(), 50_000);
-// }
+    insert_tx(&mut wallet, tx1.clone());
+    insert_tx(&mut wallet, tx3.clone());
+    insert_tx(&mut wallet, tx4.clone());
+    insert_anchor(
+        &mut wallet,
+        tx3.compute_txid(),
+        ConfirmationBlockTime {
+            block_id: BlockId {
+                height: 2_000,
+                hash: BlockHash::all_zeros(),
+            },
+            confirmation_time: 200,
+        },
+    );
 
-// #[test]
-// fn test_get_funded_wallet_tx_fees() {
-//     let (wallet, txid) = get_funded_wallet_wpkh();
+    // TODO PR #318: For now, all balances are "untrusted". Fix this (but might not be a fix that
+    //               should arrive in #318).
+    assert_eq!(wallet.balance().confirmed.to_sat(), 50_000);
+    assert_eq!(wallet.balance().untrusted_pending.to_sat(), 14_000);
+    // assert_eq!(wallet.balance().trusted_pending.to_sat(), 4_000);
 
-//     let tx = wallet.get_tx(txid).expect("transaction").tx_node.tx;
-//     let tx_fee = wallet.calculate_fee(&tx).expect("transaction fee");
+    // let min_3_conf_balance = wallet.balance_with_params_conf_threshold(
+    //     CanonicalizationParams::default(),
+    //     wallet.spk_index().outpoints().iter().cloned(),
+    //     3,
+    //     |txo| wallet.is_tx_trusted(txo.outpoint.txid),
+    // );
+    //
+    // assert_eq!(min_3_conf_balance.confirmed.to_sat(), 0);
+    // assert_eq!(min_3_conf_balance.untrusted_pending.to_sat(), 10_000);
+    // assert_eq!(min_3_conf_balance.trusted_pending.to_sat(), 54_000);
 
-//     // The funded wallet contains a tx with a 76_000 sats input and two outputs, one spending
-// 25_000     // to a foreign address and one returning 50_000 back to the wallet as change. The
-// remaining     // 1000 sats are the transaction fee.
-//     assert_eq!(tx_fee, Amount::from_sat(1000))
-// }
+    insert_checkpoint(
+        &mut wallet,
+        BlockId {
+            height: 2_002,
+            hash: BlockHash::all_zeros(),
+        },
+    );
 
-// #[test]
-// fn test_get_funded_wallet_tx_fee_rate() {
-//     let (wallet, txid) = get_funded_wallet_wpkh();
+    // let min_3_conf_balance = wallet.balance_with_params_conf_threshold(
+    //     CanonicalizationParams::default(),
+    //     wallet.spk_index().outpoints().iter().cloned(),
+    //     3,
+    //     |txo| wallet.is_tx_trusted(txo.outpoint.txid),
+    // );
+    //
+    // assert_eq!(min_3_conf_balance.confirmed.to_sat(), 50_000);
+    // assert_eq!(min_3_conf_balance.untrusted_pending.to_sat(), 10_000);
+    // assert_eq!(min_3_conf_balance.trusted_pending.to_sat(), 4_000);
+}
 
-//     let tx = wallet.get_tx(txid).expect("transaction").tx_node.tx;
-//     let tx_fee_rate = wallet
-//         .calculate_fee_rate(&tx)
-//         .expect("transaction fee rate");
+#[test]
+fn test_descriptor_checksum() {
+    let (wallet, _) = get_funded_wallet_wpkh();
+    let checksum = wallet
+        .keyring()
+        .descriptor_checksum(KeychainKind::External)
+        .expect("keychain must exist");
+    assert_eq!(checksum.len(), 8);
 
-//     // The funded wallet contains a tx with a 76_000 sats input and two outputs, one spending
-// 25_000     // to a foreign address and one returning 50_000 back to the wallet as change. The
-// remaining     // 1000 sats are the transaction fee.
+    let raw_descriptor = wallet
+        .keyring()
+        .list_keychains()
+        .get(&KeychainKind::External)
+        .unwrap()
+        .to_string()
+        .split_once('#')
+        .unwrap()
+        .0
+        .to_string();
+    assert_eq!(calc_checksum(&raw_descriptor).unwrap(), checksum);
+}
 
-//     // tx weight = 452 wu, as vbytes = (452 + 3) / 4 = 113
-//     // fee_rate (sats per kwu) = fee / weight = 1000sat / 0.452kwu = 2212
-//     // fee_rate (sats per vbyte ceil) = fee / vsize = 1000sat / 113vb = 9
-//     assert_eq!(tx_fee_rate.to_sat_per_kwu(), 2212);
-//     assert_eq!(tx_fee_rate.to_sat_per_vb_ceil(), 9);
-// }
+#[test]
+fn test_get_funded_wallet_balance() {
+    let (wallet, _) = get_funded_wallet_wpkh();
 
-// #[test]
-// fn test_legacy_get_funded_wallet_tx_fee_rate() {
-//     let (wallet, txid) = get_funded_wallet_single(get_test_pkh());
+    // The funded wallet contains a tx with a 76_000 sats input and two outputs, one spending 25_000
+    // to a foreign address and one returning 50_000 back to the wallet as change. The remaining
+    // 1000 sats are the transaction fee.
+    assert_eq!(wallet.balance().confirmed, Amount::from_sat(50_000));
+}
 
-//     let tx = wallet.get_tx(txid).expect("transaction").tx_node.tx;
-//     let tx_fee_rate = wallet
-//         .calculate_fee_rate(&tx)
-//         .expect("transaction fee rate");
+#[test]
+fn test_get_funded_wallet_sent_and_received() {
+    let (wallet, txid) = get_funded_wallet_wpkh();
 
-//     // The funded wallet contains a tx with a 76_000 sats input and two outputs, one spending
-// 25_000     // to a foreign address and one returning 50_000 back to the wallet as change. The
-// remaining     // 1000 sats are the transaction fee.
+    let mut tx_amounts: Vec<(Txid, (Amount, Amount))> = wallet
+        .transactions()
+        .map(|ct| (ct.tx_node.txid, wallet.sent_and_received(&ct.tx_node)))
+        .collect();
+    tx_amounts.sort_by(|a1, a2| a1.0.cmp(&a2.0));
 
-//     // tx weight = 464 wu, as vbytes = (464)/4 = 116
-//     // fee rate (sats per kwu) = fee / weight = 1000sat / 0.464kwu = 2155
-//     // fee rate (sats per vbyte ceil) = fee / kwu = 1000 / 116 = 8.621
-//     assert_eq!(tx_fee_rate.to_sat_per_kwu(), 2155);
-//     assert_eq!(tx_fee_rate.to_sat_per_vb_ceil(), 9);
-// }
+    let tx = wallet.get_tx(txid).expect("transaction").tx_node.tx;
+    let (sent, received) = wallet.sent_and_received(&tx);
+
+    // The funded wallet contains a tx with a 76_000 sats input and two outputs, one spending 25_000
+    // to a foreign address and one returning 50_000 back to the wallet as change. The remaining
+    // 1000 sats are the transaction fee.
+    assert_eq!(sent.to_sat(), 76_000);
+    assert_eq!(received.to_sat(), 50_000);
+}
+
+#[test]
+fn test_get_funded_wallet_tx_fees() {
+    let (wallet, txid) = get_funded_wallet_wpkh();
+
+    let tx = wallet.get_tx(txid).expect("transaction").tx_node.tx;
+    let tx_fee = wallet.calculate_fee(&tx).expect("transaction fee");
+
+    // The funded wallet contains a tx with a 76_000 sats input and two outputs, one spending 25_000
+    // to a foreign address and one returning 50_000 back to the wallet as change. The remaining
+    // 1000 sats are the transaction fee.
+    assert_eq!(tx_fee, Amount::from_sat(1000))
+}
+
+#[test]
+fn test_get_funded_wallet_tx_fee_rate() {
+    let (wallet, txid) = get_funded_wallet_wpkh();
+
+    let tx = wallet.get_tx(txid).expect("transaction").tx_node.tx;
+    let tx_fee_rate = wallet
+        .calculate_fee_rate(&tx)
+        .expect("transaction fee rate");
+
+    // The funded wallet contains a tx with a 76_000 sats input and two outputs, one spending 25_000
+    // to a foreign address and one returning 50_000 back to the wallet as change. The remaining
+    // 1000 sats are the transaction fee.
+
+    // tx weight = 452 wu, as vbytes = (452 + 3) / 4 = 113
+    // fee_rate (sats per kwu) = fee / weight = 1000sat / 0.452kwu = 2212
+    // fee_rate (sats per vbyte ceil) = fee / vsize = 1000sat / 113vb = 9
+    assert_eq!(tx_fee_rate.to_sat_per_kwu(), 2212);
+    assert_eq!(tx_fee_rate.to_sat_per_vb_ceil(), 9);
+}
+
+#[test]
+fn test_legacy_get_funded_wallet_tx_fee_rate() {
+    let (wallet, txid) = get_funded_wallet_single(get_test_pkh());
+
+    let tx = wallet.get_tx(txid).expect("transaction").tx_node.tx;
+    let tx_fee_rate = wallet
+        .calculate_fee_rate(&tx)
+        .expect("transaction fee rate");
+
+    // The funded wallet contains a tx with a 76_000 sats input and two outputs, one spending 25_000
+    // to a foreign address and one returning 50_000 back to the wallet as change. The remaining
+    // 1000 sats are the transaction fee.
+
+    // tx weight = 464 wu, as vbytes = (464)/4 = 116
+    // fee rate (sats per kwu) = fee / weight = 1000sat / 0.464kwu = 2155
+    // fee rate (sats per vbyte ceil) = fee / kwu = 1000 / 116 = 8.621
+    assert_eq!(tx_fee_rate.to_sat_per_kwu(), 2155);
+    assert_eq!(tx_fee_rate.to_sat_per_vb_ceil(), 9);
+}
 
 // #[test]
 // fn test_list_output() {
@@ -1673,212 +1827,250 @@ macro_rules! from_str {
 //     );
 // }
 
-// #[test]
-// fn test_unused_address() {
-//     let descriptor =
-// "wpkh(tpubEBr4i6yk5nf5DAaJpsi9N2pPYBeJ7fZ5Z9rmN4977iYLCGco1VyjB9tvvuvYtfZzjD5A8igzgw3HeWeeKFmanHYqksqZXYXGsw5zjnj7KM9/
-// *)";     let change_descriptor = get_test_wpkh();
-//     let mut wallet = Wallet::create(descriptor, change_descriptor)
-//         .network(Network::Testnet)
-//         .create_wallet_no_persist()
-//         .expect("wallet");
+#[test]
+fn test_unused_address() {
+    let descriptor =
+"wpkh(tpubEBr4i6yk5nf5DAaJpsi9N2pPYBeJ7fZ5Z9rmN4977iYLCGco1VyjB9tvvuvYtfZzjD5A8igzgw3HeWeeKFmanHYqksqZXYXGsw5zjnj7KM9/*)";
+    let keyring = KeyRing::new(Network::Testnet, KeychainKind::External, descriptor).unwrap();
+    let mut wallet = Wallet::create(keyring)
+        .create_wallet_no_persist()
+        .expect("wallet");
 
-//     // `list_unused_addresses` should be empty if we haven't revealed any
-//     assert!(wallet
-//         .list_unused_addresses(KeychainKind::External)
-//         .next()
-//         .is_none());
+    // `list_unused_addresses` should be empty if we haven't revealed any
+    assert!(wallet
+        .list_unused_addresses(KeychainKind::External)
+        .next()
+        .is_none());
 
-//     assert_eq!(
-//         wallet
-//             .next_unused_address(KeychainKind::External)
-//             .to_string(),
-//         "tb1q6yn66vajcctph75pvylgkksgpp6nq04ppwct9a"
-//     );
-//     assert_eq!(
-//         wallet
-//             .list_unused_addresses(KeychainKind::External)
-//             .next()
-//             .unwrap()
-//             .to_string(),
-//         "tb1q6yn66vajcctph75pvylgkksgpp6nq04ppwct9a"
-//     );
-// }
+    assert_eq!(
+        wallet
+            .next_unused_address(KeychainKind::External)
+            .expect("Keychain must exist.")
+            .to_string(),
+        "tb1q6yn66vajcctph75pvylgkksgpp6nq04ppwct9a"
+    );
+    assert_eq!(
+        wallet
+            .list_unused_addresses(KeychainKind::External)
+            .next()
+            .unwrap()
+            .to_string(),
+        "tb1q6yn66vajcctph75pvylgkksgpp6nq04ppwct9a"
+    );
+}
 
-// #[test]
-// fn test_next_unused_address() {
-//     let descriptor =
-// "wpkh(tpubEBr4i6yk5nf5DAaJpsi9N2pPYBeJ7fZ5Z9rmN4977iYLCGco1VyjB9tvvuvYtfZzjD5A8igzgw3HeWeeKFmanHYqksqZXYXGsw5zjnj7KM9/
-// *)";     let change_descriptor = get_test_wpkh();
-//     let mut wallet = Wallet::create(descriptor, change_descriptor)
-//         .network(Network::Testnet)
-//         .create_wallet_no_persist()
-//         .expect("wallet");
-//     assert_eq!(wallet.derivation_index(KeychainKind::External), None);
+#[test]
+fn test_next_unused_address() {
+    let descriptor =
+"wpkh(tpubEBr4i6yk5nf5DAaJpsi9N2pPYBeJ7fZ5Z9rmN4977iYLCGco1VyjB9tvvuvYtfZzjD5A8igzgw3HeWeeKFmanHYqksqZXYXGsw5zjnj7KM9/*)";
+    let keyring = KeyRing::new(Network::Testnet, KeychainKind::External, descriptor).unwrap();
+    let mut wallet = Wallet::create(keyring)
+        .create_wallet_no_persist()
+        .expect("wallet");
+    assert_eq!(wallet.derivation_index(KeychainKind::External), None);
 
-//     assert_eq!(
-//         wallet
-//             .next_unused_address(KeychainKind::External)
-//             .to_string(),
-//         "tb1q6yn66vajcctph75pvylgkksgpp6nq04ppwct9a"
-//     );
-//     assert_eq!(wallet.derivation_index(KeychainKind::External), Some(0));
-//     // calling next_unused again gives same address
-//     assert_eq!(
-//         wallet
-//             .next_unused_address(KeychainKind::External)
-//             .to_string(),
-//         "tb1q6yn66vajcctph75pvylgkksgpp6nq04ppwct9a"
-//     );
-//     assert_eq!(wallet.derivation_index(KeychainKind::External), Some(0));
+    assert_eq!(
+        wallet
+            .next_unused_address(KeychainKind::External)
+            .expect("Keychain must exist.")
+            .to_string(),
+        "tb1q6yn66vajcctph75pvylgkksgpp6nq04ppwct9a"
+    );
+    assert_eq!(wallet.derivation_index(KeychainKind::External), Some(0));
+    // calling next_unused again gives same address
+    assert_eq!(
+        wallet
+            .next_unused_address(KeychainKind::External)
+            .expect("Keychain must exist.")
+            .to_string(),
+        "tb1q6yn66vajcctph75pvylgkksgpp6nq04ppwct9a"
+    );
+    assert_eq!(wallet.derivation_index(KeychainKind::External), Some(0));
 
-//     // test mark used / unused
-//     assert!(wallet.mark_used(KeychainKind::External, 0));
-//     let next_unused_addr = wallet.next_unused_address(KeychainKind::External);
-//     assert_eq!(next_unused_addr.index, 1);
+    // test mark used / unused
+    assert!(wallet.mark_used(KeychainKind::External, 0));
+    let next_unused_addr = wallet
+        .next_unused_address(KeychainKind::External)
+        .expect("Keychain must exist.");
+    assert_eq!(next_unused_addr.index, 1);
 
-//     assert!(wallet.unmark_used(KeychainKind::External, 0));
-//     let next_unused_addr = wallet.next_unused_address(KeychainKind::External);
-//     assert_eq!(next_unused_addr.index, 0);
+    assert!(wallet.unmark_used(KeychainKind::External, 0));
+    let next_unused_addr = wallet
+        .next_unused_address(KeychainKind::External)
+        .expect("Keychain must exist.");
+    assert_eq!(next_unused_addr.index, 0);
 
-//     // use the above address
-//     receive_output(&mut wallet, Amount::from_sat(25_000), ReceiveTo::Mempool(0));
+    // use the above address
+    receive_output(
+        &mut wallet,
+        Amount::from_sat(25_000),
+        ReceiveTo::Mempool(0),
+        KeychainKind::External,
+    );
 
-//     assert_eq!(
-//         wallet
-//             .next_unused_address(KeychainKind::External)
-//             .to_string(),
-//         "tb1q4er7kxx6sssz3q7qp7zsqsdx4erceahhax77d7"
-//     );
-//     assert_eq!(wallet.derivation_index(KeychainKind::External), Some(1));
+    assert_eq!(
+        wallet
+            .next_unused_address(KeychainKind::External)
+            .expect("Keychain must exist.")
+            .to_string(),
+        "tb1q4er7kxx6sssz3q7qp7zsqsdx4erceahhax77d7"
+    );
+    assert_eq!(wallet.derivation_index(KeychainKind::External), Some(1));
 
-//     // trying to mark index 0 unused should return false
-//     assert!(!wallet.unmark_used(KeychainKind::External, 0));
-// }
+    // trying to mark index 0 unused should return false
+    assert!(!wallet.unmark_used(KeychainKind::External, 0));
+}
 
-// #[test]
-// fn test_peek_address_at_index() {
-//     let descriptor =
-// "wpkh(tpubEBr4i6yk5nf5DAaJpsi9N2pPYBeJ7fZ5Z9rmN4977iYLCGco1VyjB9tvvuvYtfZzjD5A8igzgw3HeWeeKFmanHYqksqZXYXGsw5zjnj7KM9/
-// *)";     let change_descriptor = get_test_wpkh();
-//     let mut wallet = Wallet::create(descriptor, change_descriptor)
-//         .network(Network::Testnet)
-//         .create_wallet_no_persist()
-//         .expect("wallet");
+#[test]
+fn test_peek_address_at_index() {
+    let descriptor =
+"wpkh(tpubEBr4i6yk5nf5DAaJpsi9N2pPYBeJ7fZ5Z9rmN4977iYLCGco1VyjB9tvvuvYtfZzjD5A8igzgw3HeWeeKFmanHYqksqZXYXGsw5zjnj7KM9/*)";
+    let change_descriptor = get_test_wpkh();
+    let mut keyring = KeyRing::new(Network::Testnet, KeychainKind::External, descriptor).unwrap();
+    keyring.add_descriptor(KeychainKind::Internal, change_descriptor);
+    let mut wallet = Wallet::create(keyring)
+        .create_wallet_no_persist()
+        .expect("wallet");
 
-//     assert_eq!(
-//         wallet.peek_address(KeychainKind::External, 1).to_string(),
-//         "tb1q4er7kxx6sssz3q7qp7zsqsdx4erceahhax77d7"
-//     );
+    assert_eq!(
+        wallet
+            .peek_address(KeychainKind::External, 1)
+            .expect("Keychain must exist.")
+            .to_string(),
+        "tb1q4er7kxx6sssz3q7qp7zsqsdx4erceahhax77d7"
+    );
 
-//     assert_eq!(
-//         wallet.peek_address(KeychainKind::External, 0).to_string(),
-//         "tb1q6yn66vajcctph75pvylgkksgpp6nq04ppwct9a"
-//     );
+    assert_eq!(
+        wallet
+            .peek_address(KeychainKind::External, 0)
+            .expect("Keychain must exist.")
+            .to_string(),
+        "tb1q6yn66vajcctph75pvylgkksgpp6nq04ppwct9a"
+    );
 
-//     assert_eq!(
-//         wallet.peek_address(KeychainKind::External, 2).to_string(),
-//         "tb1qzntf2mqex4ehwkjlfdyy3ewdlk08qkvkvrz7x2"
-//     );
+    assert_eq!(
+        wallet
+            .peek_address(KeychainKind::External, 2)
+            .expect("Keychain must exist.")
+            .to_string(),
+        "tb1qzntf2mqex4ehwkjlfdyy3ewdlk08qkvkvrz7x2"
+    );
 
-//     // current new address is not affected
-//     assert_eq!(
-//         wallet
-//             .reveal_next_address(KeychainKind::External)
-//             .to_string(),
-//         "tb1q6yn66vajcctph75pvylgkksgpp6nq04ppwct9a"
-//     );
+    // current new address is not affected
+    assert_eq!(
+        wallet
+            .reveal_next_address(KeychainKind::External)
+            .expect("Keychain must exist.")
+            .to_string(),
+        "tb1q6yn66vajcctph75pvylgkksgpp6nq04ppwct9a"
+    );
 
-//     assert_eq!(
-//         wallet
-//             .reveal_next_address(KeychainKind::External)
-//             .to_string(),
-//         "tb1q4er7kxx6sssz3q7qp7zsqsdx4erceahhax77d7"
-//     );
-// }
+    assert_eq!(
+        wallet
+            .reveal_next_address(KeychainKind::External)
+            .expect("Keychain must exist.")
+            .to_string(),
+        "tb1q4er7kxx6sssz3q7qp7zsqsdx4erceahhax77d7"
+    );
+}
 
-// #[test]
-// fn test_peek_address_at_index_not_derivable() {
-//     let descriptor =
-// "wpkh(tpubEBr4i6yk5nf5DAaJpsi9N2pPYBeJ7fZ5Z9rmN4977iYLCGco1VyjB9tvvuvYtfZzjD5A8igzgw3HeWeeKFmanHYqksqZXYXGsw5zjnj7KM9/
-// 1)";     let wallet = Wallet::create(descriptor, get_test_wpkh())
-//         .network(Network::Testnet)
-//         .create_wallet_no_persist()
-//         .unwrap();
+#[test]
+fn test_peek_address_at_index_not_derivable() {
+    let descriptor =
+"wpkh(tpubEBr4i6yk5nf5DAaJpsi9N2pPYBeJ7fZ5Z9rmN4977iYLCGco1VyjB9tvvuvYtfZzjD5A8igzgw3HeWeeKFmanHYqksqZXYXGsw5zjnj7KM9/1)";
+    let mut keyring = KeyRing::new(Network::Testnet, KeychainKind::External, descriptor).unwrap();
+    keyring.add_descriptor(KeychainKind::Internal, get_test_wpkh());
+    let wallet = Wallet::create(keyring).create_wallet_no_persist().unwrap();
 
-//     assert_eq!(
-//         wallet.peek_address(KeychainKind::External, 1).to_string(),
-//         "tb1q4er7kxx6sssz3q7qp7zsqsdx4erceahhax77d7"
-//     );
+    assert_eq!(
+        wallet
+            .peek_address(KeychainKind::External, 1)
+            .expect("Keychain must exist.")
+            .to_string(),
+        "tb1q4er7kxx6sssz3q7qp7zsqsdx4erceahhax77d7"
+    );
 
-//     assert_eq!(
-//         wallet.peek_address(KeychainKind::External, 0).to_string(),
-//         "tb1q4er7kxx6sssz3q7qp7zsqsdx4erceahhax77d7"
-//     );
+    assert_eq!(
+        wallet
+            .peek_address(KeychainKind::External, 0)
+            .expect("Keychain must exist.")
+            .to_string(),
+        "tb1q4er7kxx6sssz3q7qp7zsqsdx4erceahhax77d7"
+    );
 
-//     assert_eq!(
-//         wallet.peek_address(KeychainKind::External, 2).to_string(),
-//         "tb1q4er7kxx6sssz3q7qp7zsqsdx4erceahhax77d7"
-//     );
-// }
+    assert_eq!(
+        wallet
+            .peek_address(KeychainKind::External, 2)
+            .expect("Keychain must exist.")
+            .to_string(),
+        "tb1q4er7kxx6sssz3q7qp7zsqsdx4erceahhax77d7"
+    );
+}
 
-// #[test]
-// fn test_returns_index_and_address() {
-//     let descriptor =
-//         "wpkh(tpubEBr4i6yk5nf5DAaJpsi9N2pPYBeJ7fZ5Z9rmN4977iYLCGco1VyjB9tvvuvYtfZzjD5A8igzgw3HeWeeKFmanHYqksqZXYXGsw5zjnj7KM9/*)";
-//     let mut wallet = Wallet::create(descriptor, get_test_wpkh())
-//         .network(Network::Testnet)
-//         .create_wallet_no_persist()
-//         .unwrap();
+#[test]
+fn test_returns_index_and_address() {
+    let descriptor =
+        "wpkh(tpubEBr4i6yk5nf5DAaJpsi9N2pPYBeJ7fZ5Z9rmN4977iYLCGco1VyjB9tvvuvYtfZzjD5A8igzgw3HeWeeKFmanHYqksqZXYXGsw5zjnj7KM9/*)";
+    let mut keyring = KeyRing::new(Network::Testnet, KeychainKind::External, descriptor).unwrap();
+    keyring.add_descriptor(KeychainKind::Internal, get_test_wpkh());
+    let mut wallet = Wallet::create(keyring).create_wallet_no_persist().unwrap();
 
-//     // new index 0
-//     assert_eq!(
-//         wallet.reveal_next_address(KeychainKind::External),
-//         AddressInfo {
-//             index: 0,
-//             address: Address::from_str("tb1q6yn66vajcctph75pvylgkksgpp6nq04ppwct9a")
-//                 .unwrap()
-//                 .assume_checked(),
-//             keychain: KeychainKind::External,
-//         }
-//     );
+    // new index 0
+    assert_eq!(
+        wallet
+            .reveal_next_address(KeychainKind::External)
+            .expect("Keychain must exist."),
+        AddressInfo {
+            index: 0,
+            address: Address::from_str("tb1q6yn66vajcctph75pvylgkksgpp6nq04ppwct9a")
+                .unwrap()
+                .assume_checked(),
+            keychain: KeychainKind::External,
+        }
+    );
 
-//     // new index 1
-//     assert_eq!(
-//         wallet.reveal_next_address(KeychainKind::External),
-//         AddressInfo {
-//             index: 1,
-//             address: Address::from_str("tb1q4er7kxx6sssz3q7qp7zsqsdx4erceahhax77d7")
-//                 .unwrap()
-//                 .assume_checked(),
-//             keychain: KeychainKind::External,
-//         }
-//     );
+    // new index 1
+    assert_eq!(
+        wallet
+            .reveal_next_address(KeychainKind::External)
+            .expect("Keychain must exist."),
+        AddressInfo {
+            index: 1,
+            address: Address::from_str("tb1q4er7kxx6sssz3q7qp7zsqsdx4erceahhax77d7")
+                .unwrap()
+                .assume_checked(),
+            keychain: KeychainKind::External,
+        }
+    );
 
-//     // peek index 25
-//     assert_eq!(
-//         wallet.peek_address(KeychainKind::External, 25),
-//         AddressInfo {
-//             index: 25,
-//             address: Address::from_str("tb1qsp7qu0knx3sl6536dzs0703u2w2ag6ppl9d0c2")
-//                 .unwrap()
-//                 .assume_checked(),
-//             keychain: KeychainKind::External,
-//         }
-//     );
+    // peek index 25
+    assert_eq!(
+        wallet
+            .peek_address(KeychainKind::External, 25)
+            .expect("Keychain must exist."),
+        AddressInfo {
+            index: 25,
+            address: Address::from_str("tb1qsp7qu0knx3sl6536dzs0703u2w2ag6ppl9d0c2")
+                .unwrap()
+                .assume_checked(),
+            keychain: KeychainKind::External,
+        }
+    );
 
-//     // new index 2
-//     assert_eq!(
-//         wallet.reveal_next_address(KeychainKind::External),
-//         AddressInfo {
-//             index: 2,
-//             address: Address::from_str("tb1qzntf2mqex4ehwkjlfdyy3ewdlk08qkvkvrz7x2")
-//                 .unwrap()
-//                 .assume_checked(),
-//             keychain: KeychainKind::External,
-//         }
-//     );
-// }
+    // new index 2
+    assert_eq!(
+        wallet
+            .reveal_next_address(KeychainKind::External)
+            .expect("Keychain must exist."),
+        AddressInfo {
+            index: 2,
+            address: Address::from_str("tb1qzntf2mqex4ehwkjlfdyy3ewdlk08qkvkvrz7x2")
+                .unwrap()
+                .assume_checked(),
+            keychain: KeychainKind::External,
+        }
+    );
+}
 
 // #[test]
 // fn test_sending_to_bip350_bech32m_address() {
@@ -1892,90 +2084,104 @@ macro_rules! from_str {
 //     builder.finish().unwrap();
 // }
 
-// #[test]
-// fn test_get_address() {
-//     use bdk_wallet::descriptor::template::Bip84;
-//     let key =
-// bitcoin::bip32::Xpriv::from_str("
-// tprv8ZgxMBicQKsPcx5nBGsR63Pe8KnRUqmbJNENAfGftF3yuXoMMoVJJcYeUw5eVkm9WBPjWYt6HMWYJNesB5HaNVBaFc1M6dRjWSYnmewUMYy"
-// ).unwrap();     let wallet = Wallet::create(
-//         Bip84(key, KeychainKind::External),
-//         Bip84(key, KeychainKind::Internal),
-//     )
-//     .network(Network::Regtest)
-//     .create_wallet_no_persist()
-//     .unwrap();
+#[test]
+fn test_get_address() {
+    use bdk_wallet::descriptor::template::Bip84;
+    let key = bitcoin::bip32::Xpriv::from_str("tprv8ZgxMBicQKsPcx5nBGsR63Pe8KnRUqmbJNENAfGftF3yuXoMMoVJJcYeUw5eVkm9WBPjWYt6HMWYJNesB5HaNVBaFc1M6dRjWSYnmewUMYy").unwrap();
+    let mut keyring = KeyRing::new(
+        Network::Regtest,
+        KeychainKind::External,
+        Bip84(key, KeychainKind::External),
+    )
+    .unwrap();
+    keyring.add_descriptor(KeychainKind::Internal, Bip84(key, KeychainKind::Internal));
+    let wallet = Wallet::create(keyring).create_wallet_no_persist().unwrap();
 
-//     assert_eq!(
-//         wallet.peek_address(KeychainKind::External, 0),
-//         AddressInfo {
-//             index: 0,
-//             address: Address::from_str("bcrt1qrhgaqu0zvf5q2d0gwwz04w0dh0cuehhqvzpp4w")
-//                 .unwrap()
-//                 .assume_checked(),
-//             keychain: KeychainKind::External,
-//         }
-//     );
+    assert_eq!(
+        wallet
+            .peek_address(KeychainKind::External, 0)
+            .expect("Keychain must exist"),
+        AddressInfo {
+            index: 0,
+            address: Address::from_str("bcrt1qrhgaqu0zvf5q2d0gwwz04w0dh0cuehhqvzpp4w")
+                .unwrap()
+                .assume_checked(),
+            keychain: KeychainKind::External,
+        }
+    );
 
-//     assert_eq!(
-//         wallet.peek_address(KeychainKind::Internal, 0),
-//         AddressInfo {
-//             index: 0,
-//             address: Address::from_str("bcrt1q0ue3s5y935tw7v3gmnh36c5zzsaw4n9c9smq79")
-//                 .unwrap()
-//                 .assume_checked(),
-//             keychain: KeychainKind::Internal,
-//         }
-//     );
-// }
+    assert_eq!(
+        wallet
+            .peek_address(KeychainKind::Internal, 0)
+            .expect("Keychain must exist"),
+        AddressInfo {
+            index: 0,
+            address: Address::from_str("bcrt1q0ue3s5y935tw7v3gmnh36c5zzsaw4n9c9smq79")
+                .unwrap()
+                .assume_checked(),
+            keychain: KeychainKind::Internal,
+        }
+    );
+}
 
-// #[test]
-// fn test_reveal_addresses() {
-//     let (desc, change_desc) = get_test_tr_single_sig_xprv_and_change_desc();
-//     let mut wallet = Wallet::create(desc, change_desc)
-//         .network(Network::Signet)
-//         .create_wallet_no_persist()
-//         .unwrap();
-//     let keychain = KeychainKind::External;
+#[test]
+fn test_reveal_addresses() {
+    let (desc, change_desc) = get_test_tr_single_sig_xprv_and_change_desc();
+    let mut keyring = KeyRing::new(Network::Signet, KeychainKind::External, desc).unwrap();
+    keyring.add_descriptor(KeychainKind::Internal, change_desc);
+    let mut wallet = Wallet::create(keyring).create_wallet_no_persist().unwrap();
+    let keychain = KeychainKind::External;
 
-//     let last_revealed_addr = wallet.reveal_addresses_to(keychain, 9).last().unwrap();
-//     assert_eq!(wallet.derivation_index(keychain), Some(9));
+    let last_revealed_addr = wallet
+        .reveal_addresses_to(keychain, 9)
+        .expect("Keychain must exist")
+        .last()
+        .unwrap();
+    assert_eq!(wallet.derivation_index(keychain), Some(9));
 
-//     let unused_addrs = wallet.list_unused_addresses(keychain).collect::<Vec<_>>();
-//     assert_eq!(unused_addrs.len(), 10);
-//     assert_eq!(unused_addrs.last().unwrap(), &last_revealed_addr);
+    let unused_addrs = wallet.list_unused_addresses(keychain).collect::<Vec<_>>();
+    assert_eq!(unused_addrs.len(), 10);
+    assert_eq!(unused_addrs.last().unwrap(), &last_revealed_addr);
 
-//     // revealing to an already revealed index returns nothing
-//     let mut already_revealed = wallet.reveal_addresses_to(keychain, 9);
-//     assert!(already_revealed.next().is_none());
-// }
+    // revealing to an already revealed index returns nothing
+    let mut already_revealed = wallet
+        .reveal_addresses_to(keychain, 9)
+        .expect("Keychain must exist");
+    assert!(already_revealed.next().is_none());
+}
 
-// #[test]
-// fn test_get_address_no_reuse() {
-//     use bdk_wallet::descriptor::template::Bip84;
-//     use std::collections::HashSet;
+#[test]
+fn test_get_address_no_reuse() {
+    use bdk_wallet::descriptor::template::Bip84;
+    use std::collections::HashSet;
 
-//     let key =
-// bitcoin::bip32::Xpriv::from_str("
-// tprv8ZgxMBicQKsPcx5nBGsR63Pe8KnRUqmbJNENAfGftF3yuXoMMoVJJcYeUw5eVkm9WBPjWYt6HMWYJNesB5HaNVBaFc1M6dRjWSYnmewUMYy"
-// ).unwrap();     let mut wallet = Wallet::create(
-//         Bip84(key, KeychainKind::External),
-//         Bip84(key, KeychainKind::Internal),
-//     )
-//     .network(Network::Regtest)
-//     .create_wallet_no_persist()
-//     .unwrap();
+    let key =
+bitcoin::bip32::Xpriv::from_str("tprv8ZgxMBicQKsPcx5nBGsR63Pe8KnRUqmbJNENAfGftF3yuXoMMoVJJcYeUw5eVkm9WBPjWYt6HMWYJNesB5HaNVBaFc1M6dRjWSYnmewUMYy").unwrap();
+    let mut keyring = KeyRing::new(
+        Network::Regtest,
+        KeychainKind::External,
+        Bip84(key, KeychainKind::External),
+    )
+    .unwrap();
+    keyring.add_descriptor(KeychainKind::Internal, Bip84(key, KeychainKind::Internal));
+    let mut wallet = Wallet::create(keyring).create_wallet_no_persist().unwrap();
 
-//     let mut used_set = HashSet::new();
+    let mut used_set = HashSet::new();
 
-//     (0..3).for_each(|_| {
-//         let external_addr = wallet.reveal_next_address(KeychainKind::External).address;
-//         assert!(used_set.insert(external_addr));
+    (0..3).for_each(|_| {
+        let external_addr = wallet
+            .reveal_next_address(KeychainKind::External)
+            .expect("Keychain must exist.")
+            .address;
+        assert!(used_set.insert(external_addr));
 
-//         let internal_addr = wallet.reveal_next_address(KeychainKind::Internal).address;
-//         assert!(used_set.insert(internal_addr));
-//     });
-// }
+        let internal_addr = wallet
+            .reveal_next_address(KeychainKind::Internal)
+            .expect("Keychain must exist.")
+            .address;
+        assert!(used_set.insert(internal_addr));
+    });
+}
 
 // #[test]
 // fn test_taproot_psbt_populate_tap_key_origins() {
@@ -2755,62 +2961,64 @@ macro_rules! from_str {
 //     assert_fee_rate!(psbt, fee, fee_rate);
 // }
 
-// #[test]
-// fn test_taproot_load_descriptor_duplicated_keys() {
-//     // Added after issue https://github.com/bitcoindevkit/bdk/issues/760
-//     //
-//     // Having the same key in multiple taproot leaves is safe and should be accepted by BDK
+#[test]
+fn test_taproot_load_descriptor_duplicated_keys() {
+    // Added after issue https://github.com/bitcoindevkit/bdk/issues/760
+    //
+    // Having the same key in multiple taproot leaves is safe and should be accepted by BDK
 
-//     let (wallet, _) = get_funded_wallet_single(get_test_tr_dup_keys());
-//     let addr = wallet.peek_address(KeychainKind::External, 0);
+    let (wallet, _) = get_funded_wallet_single(get_test_tr_dup_keys());
+    let addr = wallet
+        .peek_address(KeychainKind::External, 0)
+        .expect("Keychain must exist.");
 
-//     assert_eq!(
-//         addr.to_string(),
-//         "bcrt1pvysh4nmh85ysrkpwtrr8q8gdadhgdejpy6f9v424a8v9htjxjhyqw9c5s5"
-//     );
-// }
+    assert_eq!(
+        addr.to_string(),
+        "bcrt1pvysh4nmh85ysrkpwtrr8q8gdadhgdejpy6f9v424a8v9htjxjhyqw9c5s5"
+    );
+}
 
-// /// In dev mode this test panics, but in release mode, or if the `debug_panic` in
-// /// `TxOutIndex::replenish_inner_index` is commented out, there is no panic and the balance is
-// /// calculated correctly. See issue [#1483] and PR [#1486] for discussion on mixing non-wildcard
-// and /// wildcard descriptors.
-// ///
-// /// [#1483]: https://github.com/bitcoindevkit/bdk/issues/1483
-// /// [#1486]: https://github.com/bitcoindevkit/bdk/pull/1486
-// #[test]
-// #[cfg(debug_assertions)]
-// #[should_panic(
-//     expected = "replenish lookahead: must not have existing spk: keychain=Internal, lookahead=25,
-// next_index=0" )]
-// fn test_keychains_with_overlapping_spks() {
-//     // this can happen if a non-wildcard descriptor keychain derives an spk that a
-//     // wildcard descriptor keychain in the same wallet also derives.
+/// In dev mode this test panics, but in release mode, or if the `debug_panic` in
+/// `TxOutIndex::replenish_inner_index` is commented out, there is no panic and the balance is
+/// calculated correctly. See issue [#1483] and PR [#1486] for discussion on mixing non-wildcard and
+/// wildcard descriptors.
+///
+/// [#1483]: https://github.com/bitcoindevkit/bdk/issues/1483
+/// [#1486]: https://github.com/bitcoindevkit/bdk/pull/1486
+#[test]
+#[cfg(debug_assertions)]
+#[should_panic(
+    expected = "replenish lookahead: must not have existing spk: keychain=Internal, lookahead=25, next_index=0"
+)]
+fn test_keychains_with_overlapping_spks() {
+    // this can happen if a non-wildcard descriptor keychain derives an spk that a
+    // wildcard descriptor keychain in the same wallet also derives.
 
-//     // index 1 spk overlaps with non-wildcard change descriptor
-//     let wildcard_keychain =
-// "wpkh(tprv8ZgxMBicQKsPdDArR4xSAECuVxeX1jwwSXR4ApKbkYgZiziDc4LdBy2WvJeGDfUSE4UT4hHhbgEwbdq8ajjUHiKDegkwrNU6V55CxcxonVN/
-// *)";     let non_wildcard_keychain =
-// "wpkh(tprv8ZgxMBicQKsPdDArR4xSAECuVxeX1jwwSXR4ApKbkYgZiziDc4LdBy2WvJeGDfUSE4UT4hHhbgEwbdq8ajjUHiKDegkwrNU6V55CxcxonVN/
-// 1)";
+    // index 1 spk overlaps with non-wildcard change descriptor
+    let wildcard_keychain =
+"wpkh(tprv8ZgxMBicQKsPdDArR4xSAECuVxeX1jwwSXR4ApKbkYgZiziDc4LdBy2WvJeGDfUSE4UT4hHhbgEwbdq8ajjUHiKDegkwrNU6V55CxcxonVN/*)";
+    let non_wildcard_keychain =
+"wpkh(tprv8ZgxMBicQKsPdDArR4xSAECuVxeX1jwwSXR4ApKbkYgZiziDc4LdBy2WvJeGDfUSE4UT4hHhbgEwbdq8ajjUHiKDegkwrNU6V55CxcxonVN/1)";
 
-//     let (mut wallet, _) = get_funded_wallet(wildcard_keychain, non_wildcard_keychain);
-//     assert_eq!(wallet.balance().confirmed, Amount::from_sat(50000));
+    let (mut wallet, _) = get_funded_wallet(wildcard_keychain, non_wildcard_keychain);
+    assert_eq!(wallet.balance().confirmed, Amount::from_sat(50000));
 
-//     let addr = wallet
-//         .reveal_addresses_to(KeychainKind::External, 1)
-//         .last()
-//         .unwrap()
-//         .address;
-//     let anchor = ConfirmationBlockTime {
-//         block_id: BlockId {
-//             height: 2000,
-//             hash: BlockHash::all_zeros(),
-//         },
-//         confirmation_time: 0,
-//     };
-//     let _outpoint = receive_output_to_address(&mut wallet, addr, Amount::from_sat(8000), anchor);
-//     assert_eq!(wallet.balance().confirmed, Amount::from_sat(58000));
-// }
+    let addr = wallet
+        .reveal_addresses_to(KeychainKind::External, 1)
+        .expect("Keychain must exist.")
+        .last()
+        .unwrap()
+        .address;
+    let anchor = ConfirmationBlockTime {
+        block_id: BlockId {
+            height: 2000,
+            hash: BlockHash::all_zeros(),
+        },
+        confirmation_time: 0,
+    };
+    let _outpoint = receive_output_to_address(&mut wallet, addr, Amount::from_sat(8000), anchor);
+    assert_eq!(wallet.balance().confirmed, Amount::from_sat(58000));
+}
 
 // #[test]
 // fn test_thread_safety() {
