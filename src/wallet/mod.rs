@@ -86,6 +86,8 @@ pub use persisted::*;
 pub use utils::IsDust;
 pub use utils::TxDetails;
 
+type KeychainTxGraph<K> = IndexedTxGraph<ConfirmationBlockTime, KeychainTxOutIndex<K>>;
+
 /// A Bitcoin wallet
 ///
 /// The `Wallet` acts as a way of coherently interfacing with output descriptors and related
@@ -108,7 +110,7 @@ pub struct Wallet {
     signers: Arc<SignersContainer>,
     change_signers: Arc<SignersContainer>,
     chain: LocalChain,
-    indexed_graph: IndexedTxGraph<ConfirmationBlockTime, KeychainTxOutIndex<KeychainKind>>,
+    tx_graph: KeychainTxGraph<KeychainKind>,
     stage: ChangeSet,
     network: Network,
     secp: SecpCtx,
@@ -488,7 +490,7 @@ impl Wallet {
             ..Default::default()
         };
 
-        let indexed_graph = make_indexed_graph(
+        let tx_graph = make_indexed_graph(
             &mut stage,
             Default::default(),
             Default::default(),
@@ -503,7 +505,7 @@ impl Wallet {
             change_signers,
             network,
             chain,
-            indexed_graph,
+            tx_graph,
             stage,
             secp,
             locked_outpoints,
@@ -694,7 +696,7 @@ impl Wallet {
 
         let mut stage = ChangeSet::default();
 
-        let indexed_graph = make_indexed_graph(
+        let tx_graph = make_indexed_graph(
             &mut stage,
             changeset.tx_graph,
             changeset.indexer,
@@ -709,7 +711,7 @@ impl Wallet {
             signers,
             change_signers,
             chain,
-            indexed_graph,
+            tx_graph,
             stage,
             network,
             secp,
@@ -724,7 +726,7 @@ impl Wallet {
 
     /// Iterator over all keychains in this wallet
     pub fn keychains(&self) -> impl Iterator<Item = (KeychainKind, &ExtendedDescriptor)> {
-        self.indexed_graph.index.keychains()
+        self.tx_graph.index.keychains()
     }
 
     /// Peek an address of the given `keychain` at `index` without revealing it.
@@ -738,7 +740,7 @@ impl Wallet {
     pub fn peek_address(&self, keychain: KeychainKind, mut index: u32) -> AddressInfo {
         let keychain = self.map_keychain(keychain);
         let mut spk_iter = self
-            .indexed_graph
+            .tx_graph
             .index
             .unbounded_spk_iter(keychain)
             .expect("keychain must exist");
@@ -783,7 +785,7 @@ impl Wallet {
     /// ```
     pub fn reveal_next_address(&mut self, keychain: KeychainKind) -> AddressInfo {
         let keychain = self.map_keychain(keychain);
-        let index = &mut self.indexed_graph.index;
+        let index = &mut self.tx_graph.index;
         let stage = &mut self.stage;
 
         let ((index, spk), index_changeset) = index
@@ -816,7 +818,7 @@ impl Wallet {
     ) -> impl Iterator<Item = AddressInfo> + '_ {
         let keychain = self.map_keychain(keychain);
         let (spks, index_changeset) = self
-            .indexed_graph
+            .tx_graph
             .index
             .reveal_to_target(keychain, index)
             .expect("keychain must exist");
@@ -841,7 +843,7 @@ impl Wallet {
     /// calls to this method before closing the wallet. See [`Wallet::reveal_next_address`].
     pub fn next_unused_address(&mut self, keychain: KeychainKind) -> AddressInfo {
         let keychain = self.map_keychain(keychain);
-        let index = &mut self.indexed_graph.index;
+        let index = &mut self.tx_graph.index;
 
         let ((index, spk), index_changeset) = index
             .next_unused_spk(keychain)
@@ -862,7 +864,7 @@ impl Wallet {
     ///
     /// Returns whether the given index was present and then removed from the unused set.
     pub fn mark_used(&mut self, keychain: KeychainKind, index: u32) -> bool {
-        self.indexed_graph.index.mark_used(keychain, index)
+        self.tx_graph.index.mark_used(keychain, index)
     }
 
     /// Undoes the effect of [`mark_used`] and returns whether the `index` was inserted
@@ -874,7 +876,7 @@ impl Wallet {
     ///
     /// [`mark_used`]: Self::mark_used
     pub fn unmark_used(&mut self, keychain: KeychainKind, index: u32) -> bool {
-        self.indexed_graph.index.unmark_used(keychain, index)
+        self.tx_graph.index.unmark_used(keychain, index)
     }
 
     /// List addresses that are revealed but unused.
@@ -886,7 +888,7 @@ impl Wallet {
         &self,
         keychain: KeychainKind,
     ) -> impl DoubleEndedIterator<Item = AddressInfo> + '_ {
-        self.indexed_graph
+        self.tx_graph
             .index
             .unused_keychain_spks(self.map_keychain(keychain))
             .map(move |(index, spk)| AddressInfo {
@@ -899,25 +901,25 @@ impl Wallet {
 
     /// Return whether or not a `script` is part of this wallet (either internal or external)
     pub fn is_mine(&self, script: ScriptBuf) -> bool {
-        self.indexed_graph.index.index_of_spk(script).is_some()
+        self.tx_graph.index.index_of_spk(script).is_some()
     }
 
     /// Finds how the wallet derived the script pubkey `spk`.
     ///
     /// Will only return `Some(_)` if the wallet has given out the spk.
     pub fn derivation_of_spk(&self, spk: ScriptBuf) -> Option<(KeychainKind, u32)> {
-        self.indexed_graph.index.index_of_spk(spk).cloned()
+        self.tx_graph.index.index_of_spk(spk).cloned()
     }
 
     /// Return the list of unspent outputs of this wallet
     pub fn list_unspent(&self) -> impl Iterator<Item = LocalOutput> + '_ {
-        self.indexed_graph
+        self.tx_graph
             .graph()
             .filter_chain_unspents(
                 &self.chain,
                 self.chain.tip().block_id(),
                 CanonicalizationParams::default(),
-                self.indexed_graph.index.outpoints().iter().cloned(),
+                self.tx_graph.index.outpoints().iter().cloned(),
             )
             .map(|((k, i), full_txo)| new_local_utxo(k, i, full_txo))
     }
@@ -932,7 +934,7 @@ impl Wallet {
         let (sent, received) = self.sent_and_received(&tx.tx_node.tx);
         let fee: Option<Amount> = self.calculate_fee(&tx.tx_node.tx).ok();
         let fee_rate: Option<FeeRate> = self.calculate_fee_rate(&tx.tx_node.tx).ok();
-        let balance_delta: SignedAmount = self.indexed_graph.index.net_value(&tx.tx_node.tx, ..);
+        let balance_delta: SignedAmount = self.tx_graph.index.net_value(&tx.tx_node.tx, ..);
         let chain_position = tx.chain_position;
 
         let tx_details: TxDetails = TxDetails {
@@ -953,13 +955,13 @@ impl Wallet {
     ///
     /// To list only unspent outputs (UTXOs), use [`Wallet::list_unspent`] instead.
     pub fn list_output(&self) -> impl Iterator<Item = LocalOutput> + '_ {
-        self.indexed_graph
+        self.tx_graph
             .graph()
             .filter_chain_txouts(
                 &self.chain,
                 self.chain.tip().block_id(),
                 CanonicalizationParams::default(),
-                self.indexed_graph.index.outpoints().iter().cloned(),
+                self.tx_graph.index.outpoints().iter().cloned(),
             )
             .map(|((k, i), full_txo)| new_local_utxo(k, i, full_txo))
     }
@@ -985,7 +987,7 @@ impl Wallet {
     pub fn all_unbounded_spk_iters(
         &self,
     ) -> BTreeMap<KeychainKind, impl Iterator<Item = Indexed<ScriptBuf>> + Clone> {
-        self.indexed_graph.index.all_unbounded_spk_iters()
+        self.tx_graph.index.all_unbounded_spk_iters()
     }
 
     /// Get an unbounded script pubkey iterator for the given `keychain`.
@@ -997,7 +999,7 @@ impl Wallet {
         &self,
         keychain: KeychainKind,
     ) -> impl Iterator<Item = Indexed<ScriptBuf>> + Clone {
-        self.indexed_graph
+        self.tx_graph
             .index
             .unbounded_spk_iter(self.map_keychain(keychain))
             .expect("keychain must exist")
@@ -1006,8 +1008,8 @@ impl Wallet {
     /// Returns the utxo owned by this wallet corresponding to `outpoint` if it exists in the
     /// wallet's database.
     pub fn get_utxo(&self, op: OutPoint) -> Option<LocalOutput> {
-        let ((keychain, index), _) = self.indexed_graph.index.txout(op)?;
-        self.indexed_graph
+        let ((keychain, index), _) = self.tx_graph.index.txout(op)?;
+        self.tx_graph
             .graph()
             .filter_chain_unspents(
                 &self.chain,
@@ -1037,7 +1039,7 @@ impl Wallet {
     /// [`list_unspent`]: Self::list_unspent
     /// [`list_output`]: Self::list_output
     pub fn insert_txout(&mut self, outpoint: OutPoint, txout: TxOut) {
-        let additions = self.indexed_graph.insert_txout(outpoint, txout);
+        let additions = self.tx_graph.insert_txout(outpoint, txout);
         self.stage.merge(additions.into());
     }
 
@@ -1070,7 +1072,7 @@ impl Wallet {
     /// ```
     /// [`insert_txout`]: Self::insert_txout
     pub fn calculate_fee(&self, tx: &Transaction) -> Result<Amount, CalculateFeeError> {
-        self.indexed_graph.graph().calculate_fee(tx)
+        self.tx_graph.graph().calculate_fee(tx)
     }
 
     /// Calculate the [`FeeRate`] for a given transaction.
@@ -1130,7 +1132,7 @@ impl Wallet {
     /// let (sent, received) = wallet.sent_and_received(tx);
     /// ```
     pub fn sent_and_received(&self, tx: &Transaction) -> (Amount, Amount) {
-        self.indexed_graph.index.sent_and_received(tx, ..)
+        self.tx_graph.index.sent_and_received(tx, ..)
     }
 
     /// Get a single transaction from the wallet as a [`WalletTx`] (if the transaction exists).
@@ -1187,7 +1189,7 @@ impl Wallet {
     ///
     /// [`Anchor`]: bdk_chain::Anchor
     pub fn get_tx(&self, txid: Txid) -> Option<WalletTx<'_>> {
-        let graph = self.indexed_graph.graph();
+        let graph = self.tx_graph.graph();
         graph
             .list_canonical_txs(
                 &self.chain,
@@ -1209,8 +1211,8 @@ impl Wallet {
     /// To iterate over all canonical transactions, including those that are irrelevant, use
     /// [`TxGraph::list_canonical_txs`].
     pub fn transactions<'a>(&'a self) -> impl Iterator<Item = WalletTx<'a>> + 'a {
-        let tx_graph = self.indexed_graph.graph();
-        let tx_index = &self.indexed_graph.index;
+        let tx_graph = self.tx_graph.graph();
+        let tx_index = &self.tx_graph.index;
         tx_graph
             .list_canonical_txs(
                 &self.chain,
@@ -1248,11 +1250,11 @@ impl Wallet {
     /// Return the balance, separated into available, trusted-pending, untrusted-pending, and
     /// immature values.
     pub fn balance(&self) -> Balance {
-        self.indexed_graph.graph().balance(
+        self.tx_graph.graph().balance(
             &self.chain,
             self.chain.tip().block_id(),
             CanonicalizationParams::default(),
-            self.indexed_graph.index.outpoints().iter().cloned(),
+            self.tx_graph.index.outpoints().iter().cloned(),
             |&(k, _), _| k == KeychainKind::Internal,
         )
     }
@@ -1283,7 +1285,7 @@ impl Wallet {
             KeychainKind::External => Arc::make_mut(&mut self.signers),
             KeychainKind::Internal => Arc::make_mut(&mut self.change_signers),
         };
-        if let Some(descriptor) = self.indexed_graph.index.get_descriptor(keychain) {
+        if let Some(descriptor) = self.tx_graph.index.get_descriptor(keychain) {
             *wallet_signers = SignersContainer::build(keymap, descriptor, &self.secp)
         }
     }
@@ -1364,7 +1366,7 @@ impl Wallet {
         params: TxParams,
         rng: &mut impl RngCore,
     ) -> Result<Psbt, CreateTxError> {
-        let keychains: BTreeMap<_, _> = self.indexed_graph.index.keychains().collect();
+        let keychains: BTreeMap<_, _> = self.tx_graph.index.keychains().collect();
         let external_descriptor = keychains.get(&KeychainKind::External).expect("must exist");
         let internal_descriptor = keychains.get(&KeychainKind::Internal);
 
@@ -1580,13 +1582,13 @@ impl Wallet {
             None => {
                 let change_keychain = self.map_keychain(KeychainKind::Internal);
                 let (index, spk) = self
-                    .indexed_graph
+                    .tx_graph
                     .index
                     .unused_keychain_spks(change_keychain)
                     .next()
                     .unwrap_or_else(|| {
                         let (next_index, _) = self
-                            .indexed_graph
+                            .tx_graph
                             .index
                             .next_index(change_keychain)
                             .expect("keychain must exist");
@@ -1672,7 +1674,7 @@ impl Wallet {
         // Recording changes to the change keychain.
         if let (Excess::Change { .. }, Some((keychain, index))) = (excess, drain_index) {
             if let Some((_, index_changeset)) =
-                self.indexed_graph.index.reveal_to_target(keychain, index)
+                self.tx_graph.index.reveal_to_target(keychain, index)
             {
                 self.stage.merge(index_changeset.into());
                 self.mark_used(keychain, index);
@@ -1727,8 +1729,8 @@ impl Wallet {
         &mut self,
         txid: Txid,
     ) -> Result<TxBuilder<'_, DefaultCoinSelectionAlgorithm>, BuildFeeBumpError> {
-        let tx_graph = self.indexed_graph.graph();
-        let txout_index = &self.indexed_graph.index;
+        let tx_graph = self.tx_graph.graph();
+        let txout_index = &self.tx_graph.index;
         let chain_tip = self.chain.tip().block_id();
         let chain_positions: HashMap<Txid, ChainPosition<_>> = tx_graph
             .list_canonical_txs(&self.chain, chain_tip, CanonicalizationParams::default())
@@ -1955,7 +1957,7 @@ impl Wallet {
     /// the same structure but with the all secret keys replaced by their corresponding public key.
     /// This can be used to build a watch-only version of a wallet.
     pub fn public_descriptor(&self, keychain: KeychainKind) -> &ExtendedDescriptor {
-        self.indexed_graph
+        self.tx_graph
             .index
             .get_descriptor(self.map_keychain(keychain))
             .expect("keychain must exist")
@@ -1983,7 +1985,7 @@ impl Wallet {
             .map(|txin| txin.previous_output.txid)
             .collect::<HashSet<Txid>>();
         let confirmation_heights = self
-            .indexed_graph
+            .tx_graph
             .graph()
             .list_canonical_txs(&self.chain, chain_tip, CanonicalizationParams::default())
             .filter(|canon_tx| prev_txids.contains(&canon_tx.tx_node.txid))
@@ -2027,7 +2029,7 @@ impl Wallet {
                 .get_utxo_for(n)
                 .and_then(|txout| self.get_descriptor_for_txout(&txout))
                 .or_else(|| {
-                    self.indexed_graph.index.keychains().find_map(|(_, desc)| {
+                    self.tx_graph.index.keychains().find_map(|(_, desc)| {
                         desc.derive_from_psbt_input(psbt_input, psbt.get_utxo_for(n), &self.secp)
                     })
                 });
@@ -2087,13 +2089,13 @@ impl Wallet {
     /// The derivation index of this wallet. It will return `None` if it has not derived any
     /// addresses. Otherwise, it will return the index of the highest address it has derived.
     pub fn derivation_index(&self, keychain: KeychainKind) -> Option<u32> {
-        self.indexed_graph.index.last_revealed_index(keychain)
+        self.tx_graph.index.last_revealed_index(keychain)
     }
 
     /// The index of the next address that you would get if you were to ask the wallet for a new
     /// address.
     pub fn next_derivation_index(&self, keychain: KeychainKind) -> u32 {
-        self.indexed_graph
+        self.tx_graph
             .index
             .next_index(self.map_keychain(keychain))
             .expect("keychain must exist")
@@ -2105,7 +2107,7 @@ impl Wallet {
     /// This frees up the change address used when creating the tx for use in future transactions.
     // TODO: Make this free up reserved utxos when that's implemented
     pub fn cancel_tx(&mut self, tx: &Transaction) {
-        let txout_index = &mut self.indexed_graph.index;
+        let txout_index = &mut self.tx_graph.index;
         for txout in &tx.output {
             if let Some((keychain, index)) = txout_index.index_of_spk(txout.script_pubkey.clone()) {
                 // NOTE: unmark_used will **not** make something unused if it has actually been used
@@ -2117,7 +2119,7 @@ impl Wallet {
 
     fn get_descriptor_for_txout(&self, txout: &TxOut) -> Option<DerivedDescriptor> {
         let &(keychain, child) = self
-            .indexed_graph
+            .tx_graph
             .index
             .index_of_spk(txout.script_pubkey.clone())?;
         let descriptor = self.public_descriptor(keychain);
@@ -2136,7 +2138,7 @@ impl Wallet {
                 .iter()
                 .map(|wutxo| wutxo.utxo.outpoint())
                 .collect::<HashSet<OutPoint>>();
-            self.indexed_graph
+            self.tx_graph
                 .graph()
                 // Get all unspent UTxOs from wallet.
                 // NOTE: the UTxOs returned by the following method already belong to wallet as the
@@ -2145,7 +2147,7 @@ impl Wallet {
                     &self.chain,
                     self.chain.tip().block_id(),
                     CanonicalizationParams::default(),
-                    self.indexed_graph.index.outpoints().iter().cloned(),
+                    self.tx_graph.index.outpoints().iter().cloned(),
                 )
                 // Filter out locked outpoints.
                 .filter(|(_, txo)| !self.is_outpoint_locked(txo.outpoint))
@@ -2271,7 +2273,7 @@ impl Wallet {
         // Try to find the prev_script in our db to figure out if this is internal or external,
         // and the derivation index.
         let &(keychain, child) = self
-            .indexed_graph
+            .tx_graph
             .index
             .index_of_spk(utxo.txout.script_pubkey)
             .ok_or(CreateTxError::UnknownUtxo)?;
@@ -2291,7 +2293,7 @@ impl Wallet {
             .map_err(MiniscriptPsbtError::Conversion)?;
 
         let prev_output = utxo.outpoint;
-        if let Some(prev_tx) = self.indexed_graph.graph().get_tx(prev_output.txid) {
+        if let Some(prev_tx) = self.tx_graph.graph().get_tx(prev_output.txid) {
             // We want to check that the prevout actually exists in the transaction before
             // continuing.
             let prevout = prev_tx.output.get(prev_output.vout as usize).ok_or(
@@ -2323,9 +2325,7 @@ impl Wallet {
 
         // Try to figure out the keychain and derivation for every input and output.
         for (is_input, index, out) in utxos.into_iter() {
-            if let Some(&(keychain, child)) =
-                self.indexed_graph.index.index_of_spk(out.script_pubkey)
-            {
+            if let Some(&(keychain, child)) = self.tx_graph.index.index_of_spk(out.script_pubkey) {
                 let desc = self.public_descriptor(keychain);
                 let desc = desc
                     .at_derivation_index(child)
@@ -2371,11 +2371,11 @@ impl Wallet {
         };
 
         let index_changeset = self
-            .indexed_graph
+            .tx_graph
             .index
             .reveal_to_target_multi(&update.last_active_indices);
         changeset.merge(index_changeset.into());
-        changeset.merge(self.indexed_graph.apply_update(update.tx_update).into());
+        changeset.merge(self.tx_graph.apply_update(update.tx_update).into());
         self.stage.merge(changeset);
         Ok(())
     }
@@ -2525,12 +2525,12 @@ impl Wallet {
 
     /// Get a reference to the inner [`TxGraph`].
     pub fn tx_graph(&self) -> &TxGraph<ConfirmationBlockTime> {
-        self.indexed_graph.graph()
+        self.tx_graph.graph()
     }
 
     /// Get a reference to the inner [`KeychainTxOutIndex`].
     pub fn spk_index(&self) -> &KeychainTxOutIndex<KeychainKind> {
-        &self.indexed_graph.index
+        &self.tx_graph.index
     }
 
     /// Get a reference to the inner [`LocalChain`].
@@ -2683,11 +2683,7 @@ impl Wallet {
                 .apply_header_connected_to(&block.header, height, connected_to)?
                 .into(),
         );
-        changeset.merge(
-            self.indexed_graph
-                .apply_block_relevant(block, height)
-                .into(),
-        );
+        changeset.merge(self.tx_graph.apply_block_relevant(block, height).into());
         self.stage.merge(changeset);
         Ok(())
     }
@@ -2759,7 +2755,7 @@ impl Wallet {
         unconfirmed_txs: impl IntoIterator<Item = (T, u64)>,
     ) {
         let indexed_graph_changeset = self
-            .indexed_graph
+            .tx_graph
             .batch_insert_relevant_unconfirmed(unconfirmed_txs);
         self.stage.merge(indexed_graph_changeset.into());
     }
@@ -2805,7 +2801,7 @@ impl Wallet {
     pub fn apply_evicted_txs(&mut self, evicted_txs: impl IntoIterator<Item = (Txid, u64)>) {
         let chain = &self.chain;
         let canon_txids: Vec<Txid> = self
-            .indexed_graph
+            .tx_graph
             .graph()
             .list_canonical_txs(
                 chain,
@@ -2815,7 +2811,7 @@ impl Wallet {
             .map(|c| c.tx_node.txid)
             .collect();
 
-        let changeset = self.indexed_graph.batch_insert_relevant_evicted_at(
+        let changeset = self.tx_graph.batch_insert_relevant_evicted_at(
             evicted_txs
                 .into_iter()
                 .filter(|(txid, _)| canon_txids.contains(txid)),
@@ -2850,8 +2846,8 @@ impl Wallet {
         use bdk_chain::keychain_txout::SyncRequestBuilderExt;
         SyncRequest::builder_at(start_time)
             .chain_tip(self.chain.tip())
-            .revealed_spks_from_indexer(&self.indexed_graph.index, ..)
-            .expected_spk_txids(self.indexed_graph.list_expected_spk_txids(
+            .revealed_spks_from_indexer(&self.tx_graph.index, ..)
+            .expected_spk_txids(self.tx_graph.list_expected_spk_txids(
                 &self.chain,
                 self.chain.tip().block_id(),
                 ..,
@@ -2875,8 +2871,8 @@ impl Wallet {
         use bdk_chain::keychain_txout::SyncRequestBuilderExt;
         SyncRequest::builder()
             .chain_tip(self.chain.tip())
-            .revealed_spks_from_indexer(&self.indexed_graph.index, ..)
-            .expected_spk_txids(self.indexed_graph.list_expected_spk_txids(
+            .revealed_spks_from_indexer(&self.tx_graph.index, ..)
+            .expected_spk_txids(self.tx_graph.list_expected_spk_txids(
                 &self.chain,
                 self.chain.tip().block_id(),
                 ..,
@@ -2900,7 +2896,7 @@ impl Wallet {
         use bdk_chain::keychain_txout::FullScanRequestBuilderExt;
         FullScanRequest::builder()
             .chain_tip(self.chain.tip())
-            .spks_from_indexer(&self.indexed_graph.index)
+            .spks_from_indexer(&self.tx_graph.index)
     }
 
     /// Create a [`FullScanRequest`] builder at `start_time`.
@@ -2908,13 +2904,13 @@ impl Wallet {
         use bdk_chain::keychain_txout::FullScanRequestBuilderExt;
         FullScanRequest::builder_at(start_time)
             .chain_tip(self.chain.tip())
-            .spks_from_indexer(&self.indexed_graph.index)
+            .spks_from_indexer(&self.tx_graph.index)
     }
 }
 
 impl AsRef<bdk_chain::tx_graph::TxGraph<ConfirmationBlockTime>> for Wallet {
     fn as_ref(&self) -> &bdk_chain::tx_graph::TxGraph<ConfirmationBlockTime> {
-        self.indexed_graph.graph()
+        self.tx_graph.graph()
     }
 }
 
@@ -2970,8 +2966,7 @@ fn make_indexed_graph(
     change_descriptor: Option<ExtendedDescriptor>,
     lookahead: u32,
     use_spk_cache: bool,
-) -> Result<IndexedTxGraph<ConfirmationBlockTime, KeychainTxOutIndex<KeychainKind>>, DescriptorError>
-{
+) -> Result<KeychainTxGraph<KeychainKind>, DescriptorError> {
     let (indexed_graph, changeset) = IndexedTxGraph::from_changeset(
         chain::indexed_tx_graph::ChangeSet {
             tx_graph: tx_graph_changeset,
