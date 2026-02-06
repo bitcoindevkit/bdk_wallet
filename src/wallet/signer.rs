@@ -918,6 +918,7 @@ impl PartialEq for SignersContainerKey {
 
 impl Eq for SignersContainerKey {}
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 #[cfg(test)]
 mod signers_container_tests {
     use super::*;

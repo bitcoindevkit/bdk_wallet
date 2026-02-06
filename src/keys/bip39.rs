@@ -149,6 +149,7 @@ impl<Ctx: ScriptContext> GeneratableKey<Ctx> for Mnemonic {
     }
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 #[cfg(test)]
 mod test {
     use super::WordCount;
