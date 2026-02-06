@@ -1,6 +1,7 @@
 use bdk_chain::{
     indexed_tx_graph, keychain_txout, local_chain, tx_graph, ConfirmationBlockTime, Merge,
 };
+use chain::BlockId;
 use miniscript::{Descriptor, DescriptorPublicKey};
 use serde::{Deserialize, Serialize};
 
@@ -110,6 +111,9 @@ pub struct ChangeSet {
     pub change_descriptor: Option<Descriptor<DescriptorPublicKey>>,
     /// Stores the network type of the transaction data.
     pub network: Option<bitcoin::Network>,
+    /// Stores the [`Wallet`]'s birthday, defined as the first
+    /// [`Block`] with relevant transactions to this [`Wallet`].
+    pub birthday: Option<BlockId>,
     /// Changes to the [`LocalChain`](local_chain::LocalChain).
     pub local_chain: local_chain::ChangeSet,
     /// Changes to [`TxGraph`](tx_graph::TxGraph).
@@ -145,6 +149,14 @@ impl Merge for ChangeSet {
             );
             self.network = other.network;
         }
+        // TODO(@luisschwab): should merging [`ChangeSet`]s with distinct birthdays be possible?
+        if other.birthday.is_some() {
+            debug_assert!(
+                self.birthday.is_none() || self.birthday == other.birthday,
+                "birthday must never change"
+            );
+            self.birthday = other.birthday;
+        }
 
         // merge locked outpoints
         self.locked_outpoints.merge(other.locked_outpoints);
@@ -158,6 +170,7 @@ impl Merge for ChangeSet {
         self.descriptor.is_none()
             && self.change_descriptor.is_none()
             && self.network.is_none()
+            && self.birthday.is_none()
             && self.local_chain.is_empty()
             && self.tx_graph.is_empty()
             && self.indexer.is_empty()
@@ -174,7 +187,7 @@ impl ChangeSet {
     /// Name of table to store wallet locked outpoints.
     pub const WALLET_OUTPOINT_LOCK_TABLE_NAME: &'static str = "bdk_wallet_locked_outpoints";
 
-    /// Get v0 sqlite [ChangeSet] schema
+    /// Get v0 sqlite [`ChangeSet`] schema.
     pub fn schema_v0() -> alloc::string::String {
         format!(
             "CREATE TABLE {} ( \
@@ -199,12 +212,19 @@ impl ChangeSet {
         )
     }
 
+    pub fn schema_v2() -> alloc::string::String {
+        format!(
+            "ALTER TABLE {} ADD COLUMN birthday TEXT",
+            Self::WALLET_TABLE_NAME,
+        )
+    }
+
     /// Initialize sqlite tables for wallet tables.
     pub fn init_sqlite_tables(db_tx: &chain::rusqlite::Transaction) -> chain::rusqlite::Result<()> {
         crate::rusqlite_impl::migrate_schema(
             db_tx,
             Self::WALLET_SCHEMA_NAME,
-            &[&Self::schema_v0(), &Self::schema_v1()],
+            &[&Self::schema_v0(), &Self::schema_v1(), &Self::schema_v2()],
         )?;
 
         bdk_chain::local_chain::ChangeSet::init_sqlite_tables(db_tx)?;
@@ -223,7 +243,7 @@ impl ChangeSet {
         let mut changeset = Self::default();
 
         let mut wallet_statement = db_tx.prepare(&format!(
-            "SELECT descriptor, change_descriptor, network FROM {}",
+            "SELECT descriptor, change_descriptor, network, birthday FROM {}",
             Self::WALLET_TABLE_NAME,
         ))?;
         let row = wallet_statement
@@ -234,13 +254,16 @@ impl ChangeSet {
                         "change_descriptor",
                     )?,
                     row.get::<_, Option<Impl<bitcoin::Network>>>("network")?,
+                    // TODO(@luisschwab): merge bdk#2097, publish new bdk_chain version and bump it here for [`BlockId`] impls.
+                    row.get::<_, Option<Impl<BlockId>>>("birthday")?,
                 ))
             })
             .optional()?;
-        if let Some((desc, change_desc, network)) = row {
+        if let Some((desc, change_desc, network, birthday)) = row {
             changeset.descriptor = desc.map(Impl::into_inner);
             changeset.change_descriptor = change_desc.map(Impl::into_inner);
             changeset.network = network.map(Impl::into_inner);
+            changeset.birthday = birthday.map(Impl::into_inner);
         }
 
         // Select locked outpoints.
@@ -306,6 +329,17 @@ impl ChangeSet {
             network_statement.execute(named_params! {
                 ":id": 0,
                 ":network": Impl(network),
+            })?;
+        }
+
+        let mut birthday_statement = db_tx.prepare_cached(&format!(
+            "INSERT INTO {}(id, birthday) VALUES(:id, :birthday) ON CONFLICT(id) DO UPDATE SET birthday=:birthday",
+            Self::WALLET_TABLE_NAME,
+        ))?;
+        if let Some(birthday) = self.birthday {
+            birthday_statement.execute(named_params! {
+                ":id": 0,
+                ":birthday": Impl(birthday),
             })?;
         }
 
