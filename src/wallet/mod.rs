@@ -40,8 +40,8 @@ use bitcoin::{
     psbt,
     secp256k1::Secp256k1,
     sighash::{EcdsaSighashType, TapSighashType},
-    transaction, Address, Amount, Block, BlockHash, FeeRate, Network, NetworkKind, OutPoint, Psbt,
-    ScriptBuf, Sequence, SignedAmount, Transaction, TxOut, Txid, Weight, Witness,
+    transaction, Address, Amount, Block, FeeRate, Network, NetworkKind, OutPoint, Psbt, ScriptBuf,
+    Sequence, SignedAmount, Transaction, TxOut, Txid, Weight, Witness,
 };
 use miniscript::{
     descriptor::KeyMap,
@@ -80,6 +80,7 @@ use crate::wallet::{
 // re-exports
 pub use bdk_chain::Balance;
 pub use changeset::ChangeSet;
+pub use error::{ApplyBlockError, LoadError, LoadMismatch};
 pub use event::*;
 pub use params::*;
 pub use persisted::*;
@@ -176,143 +177,6 @@ impl fmt::Display for AddressInfo {
         write!(f, "{}", self.address)
     }
 }
-
-/// The error type when loading a [`Wallet`] from a [`ChangeSet`].
-#[derive(Debug, PartialEq)]
-pub enum LoadError {
-    /// There was a problem with the passed-in descriptor(s).
-    Descriptor(crate::descriptor::DescriptorError),
-    /// Data loaded from persistence is missing network type.
-    MissingNetwork,
-    /// Data loaded from persistence is missing genesis hash.
-    MissingGenesis,
-    /// Data loaded from persistence is missing descriptor.
-    MissingDescriptor(KeychainKind),
-    /// Data loaded is unexpected.
-    Mismatch(LoadMismatch),
-}
-
-impl fmt::Display for LoadError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            LoadError::Descriptor(e) => e.fmt(f),
-            LoadError::MissingNetwork => write!(f, "loaded data is missing network type"),
-            LoadError::MissingGenesis => write!(f, "loaded data is missing genesis hash"),
-            LoadError::MissingDescriptor(k) => {
-                write!(f, "loaded data is missing descriptor for {k} keychain")
-            }
-            LoadError::Mismatch(e) => write!(f, "{e}"),
-        }
-    }
-}
-
-#[cfg(feature = "std")]
-impl std::error::Error for LoadError {}
-
-/// Represents a mismatch with what is loaded and what is expected from [`LoadParams`].
-#[derive(Debug, PartialEq)]
-pub enum LoadMismatch {
-    /// Network does not match.
-    Network {
-        /// The network that is loaded.
-        loaded: Network,
-        /// The expected network.
-        expected: Network,
-    },
-    /// Genesis hash does not match.
-    Genesis {
-        /// The genesis hash that is loaded.
-        loaded: BlockHash,
-        /// The expected genesis hash.
-        expected: BlockHash,
-    },
-    /// Descriptor's [`DescriptorId`](bdk_chain::DescriptorId) does not match.
-    Descriptor {
-        /// Keychain identifying the descriptor.
-        keychain: KeychainKind,
-        /// The loaded descriptor.
-        loaded: Option<Box<ExtendedDescriptor>>,
-        /// The expected descriptor.
-        expected: Option<Box<ExtendedDescriptor>>,
-    },
-}
-
-impl fmt::Display for LoadMismatch {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            LoadMismatch::Network { loaded, expected } => {
-                write!(f, "Network mismatch: loaded {loaded}, expected {expected}")
-            }
-            LoadMismatch::Genesis { loaded, expected } => {
-                write!(
-                    f,
-                    "Genesis hash mismatch: loaded {loaded}, expected {expected}"
-                )
-            }
-            LoadMismatch::Descriptor {
-                keychain,
-                loaded,
-                expected,
-            } => {
-                write!(
-                    f,
-                    "Descriptor mismatch for {} keychain: loaded {}, expected {}",
-                    keychain,
-                    loaded
-                        .as_ref()
-                        .map_or("None".to_string(), |d| d.to_string()),
-                    expected
-                        .as_ref()
-                        .map_or("None".to_string(), |d| d.to_string())
-                )
-            }
-        }
-    }
-}
-
-impl From<LoadMismatch> for LoadError {
-    fn from(mismatch: LoadMismatch) -> Self {
-        Self::Mismatch(mismatch)
-    }
-}
-
-impl<E> From<LoadMismatch> for LoadWithPersistError<E> {
-    fn from(mismatch: LoadMismatch) -> Self {
-        Self::InvalidChangeSet(LoadError::Mismatch(mismatch))
-    }
-}
-
-/// An error that may occur when applying a block to [`Wallet`].
-#[derive(Debug)]
-pub enum ApplyBlockError {
-    /// Occurs when the update chain cannot connect with original chain.
-    CannotConnect(CannotConnectError),
-    /// Occurs when the `connected_to` hash does not match the hash derived from `block`.
-    UnexpectedConnectedToHash {
-        /// Block hash of `connected_to`.
-        connected_to_hash: BlockHash,
-        /// Expected block hash of `connected_to`, as derived from `block`.
-        expected_hash: BlockHash,
-    },
-}
-
-impl fmt::Display for ApplyBlockError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ApplyBlockError::CannotConnect(err) => err.fmt(f),
-            ApplyBlockError::UnexpectedConnectedToHash {
-                expected_hash: block_hash,
-                connected_to_hash: checkpoint_hash,
-            } => write!(
-                f,
-                "`connected_to` hash {checkpoint_hash} differs from the expected hash {block_hash} (which is derived from `block`)"
-            ),
-        }
-    }
-}
-
-#[cfg(feature = "std")]
-impl std::error::Error for ApplyBlockError {}
 
 /// A `CanonicalTx` managed by a `Wallet`.
 pub type WalletTx<'a> = CanonicalTx<'a, Arc<Transaction>, ConfirmationBlockTime>;

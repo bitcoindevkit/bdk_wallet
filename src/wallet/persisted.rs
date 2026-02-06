@@ -9,6 +9,7 @@ use core::{
 use alloc::{boxed::Box, string::ToString};
 use chain::Merge;
 
+use crate::error::LoadError;
 use crate::{
     descriptor::{calc_checksum, DescriptorError},
     ChangeSet, CreateParams, LoadParams, Wallet,
@@ -344,7 +345,7 @@ pub enum LoadWithPersistError<E> {
     /// Error from persistence.
     Persist(E),
     /// Occurs when the loaded changeset cannot construct [`Wallet`].
-    InvalidChangeSet(crate::LoadError),
+    InvalidChangeSet(LoadError),
 }
 
 impl<E: fmt::Display> fmt::Display for LoadWithPersistError<E> {
