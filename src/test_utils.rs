@@ -1,7 +1,8 @@
 //! `bdk_wallet` test utilities
-
+#![allow(unused)]
 use alloc::string::ToString;
 use alloc::sync::Arc;
+use core::fmt;
 use core::str::FromStr;
 
 use bdk_chain::{BlockId, CheckPoint, ConfirmationBlockTime, TxUpdate};
@@ -12,124 +13,124 @@ use bitcoin::{
 
 use crate::{KeychainKind, Update, Wallet};
 
-/// Return a fake wallet that appears to be funded for testing.
-///
-/// The funded wallet contains a tx with a 76_000 sats input and two outputs, one spending 25_000
-/// to a foreign address and one returning 50_000 back to the wallet. The remaining 1000
-/// sats are the transaction fee.
-pub fn get_funded_wallet(descriptor: &str, change_descriptor: &str) -> (Wallet, Txid) {
-    new_funded_wallet(descriptor, Some(change_descriptor))
-}
+// /// Return a fake wallet that appears to be funded for testing.
+// ///
+// /// The funded wallet contains a tx with a 76_000 sats input and two outputs, one spending 25_000
+// /// to a foreign address and one returning 50_000 back to the wallet. The remaining 1000
+// /// sats are the transaction fee.
+// pub fn get_funded_wallet(descriptor: &str, change_descriptor: &str) -> (Wallet, Txid) {
+//     new_funded_wallet(descriptor, Some(change_descriptor))
+// }
 
-fn new_funded_wallet(descriptor: &str, change_descriptor: Option<&str>) -> (Wallet, Txid) {
-    let (mut wallet, txid, update) = new_wallet_and_funding_update(descriptor, change_descriptor);
-    wallet.apply_update(update).unwrap();
-    (wallet, txid)
-}
-
-/// Return a fake wallet that appears to be funded for testing.
-///
-/// The funded wallet contains a tx with a 76_000 sats input and two outputs, one spending 25_000
-/// to a foreign address and one returning 50_000 back to the wallet. The remaining 1000
-/// sats are the transaction fee.
-pub fn get_funded_wallet_single(descriptor: &str) -> (Wallet, Txid) {
-    new_funded_wallet(descriptor, None)
-}
-
-/// Get funded segwit wallet
-pub fn get_funded_wallet_wpkh() -> (Wallet, Txid) {
-    let (desc, change_desc) = get_test_wpkh_and_change_desc();
-    get_funded_wallet(desc, change_desc)
-}
-
-/// Get unfunded wallet and wallet update that funds it
-///
-/// The funding update contains a tx with a 76_000 sats input and two outputs, one spending
-/// 25_000 to a foreign address and one returning 50_000 back to the wallet as
-/// change. The remaining 1000 sats are the transaction fee.
-pub fn new_wallet_and_funding_update(
-    descriptor: &str,
-    change_descriptor: Option<&str>,
-) -> (Wallet, Txid, Update) {
-    let params = if let Some(change_desc) = change_descriptor {
-        Wallet::create(descriptor.to_string(), change_desc.to_string())
-    } else {
-        Wallet::create_single(descriptor.to_string())
-    };
-
-    let wallet = params
-        .network(Network::Regtest)
-        .create_wallet_no_persist()
-        .expect("descriptors must be valid");
-
-    let receive_address = wallet.peek_address(KeychainKind::External, 0).address;
-    let sendto_address = Address::from_str("bcrt1q3qtze4ys45tgdvguj66zrk4fu6hq3a3v9pfly5")
-        .expect("address")
-        .require_network(Network::Regtest)
-        .unwrap();
-
-    let mut update = Update::default();
-
-    let tx0 = Transaction {
-        output: vec![TxOut {
-            value: Amount::from_sat(76_000),
-            script_pubkey: receive_address.script_pubkey(),
-        }],
-        ..new_tx(0)
-    };
-
-    let tx1 = Transaction {
-        input: vec![TxIn {
-            previous_output: OutPoint {
-                txid: tx0.compute_txid(),
-                vout: 0,
-            },
-            ..Default::default()
-        }],
-        output: vec![
-            TxOut {
-                value: Amount::from_sat(50_000),
-                script_pubkey: receive_address.script_pubkey(),
-            },
-            TxOut {
-                value: Amount::from_sat(25_000),
-                script_pubkey: sendto_address.script_pubkey(),
-            },
-        ],
-        ..new_tx(0)
-    };
-    let txid1 = tx1.compute_txid();
-
-    let b0 = BlockId {
-        height: 0,
-        hash: BlockHash::from_slice(wallet.network().chain_hash().as_bytes()).unwrap(),
-    };
-    let b1 = BlockId {
-        height: 42,
-        hash: BlockHash::all_zeros(),
-    };
-    let b2 = BlockId {
-        height: 1000,
-        hash: BlockHash::all_zeros(),
-    };
-    let a2 = ConfirmationBlockTime {
-        block_id: b2,
-        confirmation_time: 100,
-    };
-    let b3 = BlockId {
-        height: 2000,
-        hash: BlockHash::all_zeros(),
-    };
-    let a3 = ConfirmationBlockTime {
-        block_id: b3,
-        confirmation_time: 200,
-    };
-    update.chain = CheckPoint::from_block_ids([b0, b1, b2, b3]).ok();
-    update.tx_update.anchors = [(a2, tx0.compute_txid()), (a3, tx1.compute_txid())].into();
-    update.tx_update.txs = [Arc::new(tx0), Arc::new(tx1)].into();
-
-    (wallet, txid1, update)
-}
+// fn new_funded_wallet(descriptor: &str, change_descriptor: Option<&str>) -> (Wallet, Txid) {
+//     let (mut wallet, txid, update) = new_wallet_and_funding_update(descriptor,
+// change_descriptor);     wallet.apply_update(update).unwrap();
+//     (wallet, txid)
+// }
+//
+// /// Return a fake wallet that appears to be funded for testing.
+// ///
+// /// The funded wallet contains a tx with a 76_000 sats input and two outputs, one spending 25_000
+// /// to a foreign address and one returning 50_000 back to the wallet. The remaining 1000
+// /// sats are the transaction fee.
+// pub fn get_funded_wallet_single(descriptor: &str) -> (Wallet, Txid) {
+//     new_funded_wallet(descriptor, None)
+// }
+//
+// /// Get funded segwit wallet
+// pub fn get_funded_wallet_wpkh() -> (Wallet, Txid) {
+//     let (desc, change_desc) = get_test_wpkh_and_change_desc();
+//     get_funded_wallet(desc, change_desc)
+// }
+//
+// /// Get unfunded wallet and wallet update that funds it
+// ///
+// /// The funding update contains a tx with a 76_000 sats input and two outputs, one spending
+// /// 25_000 to a foreign address and one returning 50_000 back to the wallet as
+// /// change. The remaining 1000 sats are the transaction fee.
+// pub fn new_wallet_and_funding_update(
+//     descriptor: &str,
+//     change_descriptor: Option<&str>,
+// ) -> (Wallet, Txid, Update) {
+//     let params = if let Some(change_desc) = change_descriptor {
+//         Wallet::create(descriptor.to_string(), change_desc.to_string())
+//     } else {
+//         Wallet::create_single(descriptor.to_string())
+//     };
+//
+//     let wallet = params
+//         .network(Network::Regtest)
+//         .create_wallet_no_persist()
+//         .expect("descriptors must be valid");
+//
+//     let receive_address = wallet.peek_address(KeychainKind::External, 0).address;
+//     let sendto_address = Address::from_str("bcrt1q3qtze4ys45tgdvguj66zrk4fu6hq3a3v9pfly5")
+//         .expect("address")
+//         .require_network(Network::Regtest)
+//         .unwrap();
+//
+//     let mut update = Update::default();
+//
+//     let tx0 = Transaction {
+//         output: vec![TxOut {
+//             value: Amount::from_sat(76_000),
+//             script_pubkey: receive_address.script_pubkey(),
+//         }],
+//         ..new_tx(0)
+//     };
+//
+//     let tx1 = Transaction {
+//         input: vec![TxIn {
+//             previous_output: OutPoint {
+//                 txid: tx0.compute_txid(),
+//                 vout: 0,
+//             },
+//             ..Default::default()
+//         }],
+//         output: vec![
+//             TxOut {
+//                 value: Amount::from_sat(50_000),
+//                 script_pubkey: receive_address.script_pubkey(),
+//             },
+//             TxOut {
+//                 value: Amount::from_sat(25_000),
+//                 script_pubkey: sendto_address.script_pubkey(),
+//             },
+//         ],
+//         ..new_tx(0)
+//     };
+//     let txid1 = tx1.compute_txid();
+//
+//     let b0 = BlockId {
+//         height: 0,
+//         hash: BlockHash::from_slice(wallet.network().chain_hash().as_bytes()).unwrap(),
+//     };
+//     let b1 = BlockId {
+//         height: 42,
+//         hash: BlockHash::all_zeros(),
+//     };
+//     let b2 = BlockId {
+//         height: 1000,
+//         hash: BlockHash::all_zeros(),
+//     };
+//     let a2 = ConfirmationBlockTime {
+//         block_id: b2,
+//         confirmation_time: 100,
+//     };
+//     let b3 = BlockId {
+//         height: 2000,
+//         hash: BlockHash::all_zeros(),
+//     };
+//     let a3 = ConfirmationBlockTime {
+//         block_id: b3,
+//         confirmation_time: 200,
+//     };
+//     update.chain = CheckPoint::from_block_ids([b0, b1, b2, b3]).ok();
+//     update.tx_update.anchors = [(a2, tx0.compute_txid()), (a3, tx1.compute_txid())].into();
+//     update.tx_update.txs = [Arc::new(tx0), Arc::new(tx1)].into();
+//
+//     (wallet, txid1, update)
+// }
 
 /// `pkh` single key descriptor
 pub fn get_test_pkh() -> &'static str {
@@ -248,7 +249,14 @@ impl From<ConfirmationBlockTime> for ReceiveTo {
 }
 
 /// Receive a tx output with the given value in the latest block
-pub fn receive_output_in_latest_block(wallet: &mut Wallet, value: Amount) -> OutPoint {
+pub fn receive_output_in_latest_block<K>(
+    wallet: &mut Wallet<K>,
+    value: Amount,
+    keychain: K,
+) -> OutPoint
+where
+    K: Ord + Clone + fmt::Debug,
+{
     let latest_cp = wallet.latest_checkpoint();
     let height = latest_cp.height();
     assert!(height > 0, "cannot receive tx into genesis block");
@@ -259,26 +267,37 @@ pub fn receive_output_in_latest_block(wallet: &mut Wallet, value: Amount) -> Out
             block_id: latest_cp.block_id(),
             confirmation_time: 0,
         },
+        keychain,
     )
 }
 
 /// Receive a tx output with the given value and chain position
-pub fn receive_output(
-    wallet: &mut Wallet,
+pub fn receive_output<K>(
+    wallet: &mut Wallet<K>,
     value: Amount,
     receive_to: impl Into<ReceiveTo>,
-) -> OutPoint {
-    let addr = wallet.next_unused_address(KeychainKind::External).address;
+    keychain: K,
+) -> OutPoint
+where
+    K: Ord + Clone + fmt::Debug,
+{
+    let addr = wallet
+        .next_unused_address(keychain)
+        .expect("keychain should exist")
+        .address;
     receive_output_to_address(wallet, addr, value, receive_to)
 }
 
 /// Receive a tx output to an address with the given value and chain position
-pub fn receive_output_to_address(
-    wallet: &mut Wallet,
+pub fn receive_output_to_address<K>(
+    wallet: &mut Wallet<K>,
     addr: Address,
     value: Amount,
     receive_to: impl Into<ReceiveTo>,
-) -> OutPoint {
+) -> OutPoint
+where
+    K: Ord + Clone + fmt::Debug,
+{
     let tx = Transaction {
         version: transaction::Version::ONE,
         lock_time: absolute::LockTime::ZERO,
@@ -303,7 +322,7 @@ pub fn receive_output_to_address(
 /// Insert a checkpoint into the wallet. This can be used to extend the wallet's local chain
 /// or to insert a block that did not exist previously. Note that if replacing a block with
 /// a different one at the same height, then all later blocks are evicted as well.
-pub fn insert_checkpoint(wallet: &mut Wallet, block: BlockId) {
+pub fn insert_checkpoint<K: Ord + Clone + fmt::Debug>(wallet: &mut Wallet<K>, block: BlockId) {
     let mut cp = wallet.latest_checkpoint();
     cp = cp.insert(block);
     wallet
@@ -317,7 +336,10 @@ pub fn insert_checkpoint(wallet: &mut Wallet, block: BlockId) {
 /// Inserts a transaction into the local view, assuming it is currently present in the mempool.
 ///
 /// This can be used, for example, to track a transaction immediately after it is broadcast.
-pub fn insert_tx(wallet: &mut Wallet, tx: Transaction) {
+pub fn insert_tx<K>(wallet: &mut Wallet<K>, tx: Transaction)
+where
+    K: Ord + fmt::Debug + Clone,
+{
     let txid = tx.compute_txid();
     let seen_at = std::time::UNIX_EPOCH.elapsed().unwrap().as_secs();
     let mut tx_update = TxUpdate::default();
@@ -334,7 +356,11 @@ pub fn insert_tx(wallet: &mut Wallet, tx: Transaction) {
 /// Simulates confirming a tx with `txid` by applying an update to the wallet containing
 /// the given `anchor`. Note: to be considered confirmed the anchor block must exist in
 /// the current active chain.
-pub fn insert_anchor(wallet: &mut Wallet, txid: Txid, anchor: ConfirmationBlockTime) {
+pub fn insert_anchor<K: Ord + fmt::Debug + Clone>(
+    wallet: &mut Wallet<K>,
+    txid: Txid,
+    anchor: ConfirmationBlockTime,
+) {
     let mut tx_update = TxUpdate::default();
     tx_update.anchors = [(anchor, txid)].into();
     wallet
@@ -346,7 +372,10 @@ pub fn insert_anchor(wallet: &mut Wallet, txid: Txid, anchor: ConfirmationBlockT
 }
 
 /// Marks the given `txid` seen as unconfirmed at `seen_at`
-pub fn insert_seen_at(wallet: &mut Wallet, txid: Txid, seen_at: u64) {
+pub fn insert_seen_at<K>(wallet: &mut Wallet<K>, txid: Txid, seen_at: u64)
+where
+    K: Ord + Clone + fmt::Debug,
+{
     let mut tx_update = TxUpdate::default();
     tx_update.seen_ats = [(txid, seen_at)].into();
     wallet
