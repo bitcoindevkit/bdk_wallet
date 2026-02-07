@@ -99,88 +99,10 @@ where
     }
 
     // create changeset
-    let descriptor: Descriptor<DescriptorPublicKey> = DESCRIPTORS[0].parse().unwrap();
-    let change_descriptor: Descriptor<DescriptorPublicKey> = DESCRIPTORS[1].parse().unwrap();
+    let tx1 = create_one_inp_one_out_tx(hash!("We_are_all_Satoshi"), 30_000);
+    let tx2 = create_one_inp_one_out_tx(tx1.compute_txid(), 20_000);
 
-    let local_chain_changeset = local_chain::ChangeSet {
-        blocks: [
-            (910234, Some(hash!("B"))),
-            (910233, Some(hash!("T"))),
-            (910235, Some(hash!("C"))),
-        ]
-        .into(),
-    };
-
-    let tx1 = Arc::new(create_one_inp_one_out_tx(
-        hash!("We_are_all_Satoshi"),
-        30_000,
-    ));
-    let tx2 = Arc::new(create_one_inp_one_out_tx(tx1.compute_txid(), 20_000));
-
-    let conf_anchor: ConfirmationBlockTime = ConfirmationBlockTime {
-        block_id: block_id!(910234, "B"),
-        confirmation_time: 1755317160,
-    };
-
-    let outpoint = OutPoint::new(hash!("Rust"), 0);
-
-    let tx_graph_changeset = tx_graph::ChangeSet::<ConfirmationBlockTime> {
-        txs: [tx1.clone()].into(),
-        txouts: [
-            (
-                outpoint,
-                TxOut {
-                    value: Amount::from_sat(1300),
-                    script_pubkey: spk_at_index(&descriptor, 4),
-                },
-            ),
-            (
-                OutPoint::new(hash!("REDB"), 0),
-                TxOut {
-                    value: Amount::from_sat(1400),
-                    script_pubkey: spk_at_index(&descriptor, 10),
-                },
-            ),
-        ]
-        .into(),
-        anchors: [(conf_anchor, tx1.compute_txid())].into(),
-        last_seen: [(tx1.compute_txid(), 1755317760)].into(),
-        first_seen: [(tx1.compute_txid(), 1755317750)].into(),
-        last_evicted: [(tx1.compute_txid(), 1755317760)].into(),
-    };
-
-    let keychain_txout_changeset = keychain_txout::ChangeSet {
-        last_revealed: [
-            (descriptor.descriptor_id(), 12),
-            (change_descriptor.descriptor_id(), 10),
-        ]
-        .into(),
-        spk_cache: [
-            (
-                descriptor.descriptor_id(),
-                SpkIterator::new_with_range(&descriptor, 0..=37).collect(),
-            ),
-            (
-                change_descriptor.descriptor_id(),
-                SpkIterator::new_with_range(&change_descriptor, 0..=35).collect(),
-            ),
-        ]
-        .into(),
-    };
-
-    let locked_outpoints_changeset = locked_outpoints::ChangeSet {
-        outpoints: [(outpoint, true)].into(),
-    };
-
-    let mut changeset = ChangeSet {
-        descriptor: Some(descriptor.clone()),
-        change_descriptor: Some(change_descriptor.clone()),
-        network: Some(Network::Testnet),
-        local_chain: local_chain_changeset,
-        tx_graph: tx_graph_changeset,
-        indexer: keychain_txout_changeset,
-        locked_outpoints: locked_outpoints_changeset,
-    };
+    let mut changeset = get_changeset(tx1);
 
     // persist and load
     WalletPersister::persist(&mut store, &changeset).map_err(E::persister)?;
@@ -195,55 +117,7 @@ where
     }
 
     // create another changeset
-    let local_chain_changeset = local_chain::ChangeSet {
-        blocks: [(910236, Some(hash!("BDK")))].into(),
-    };
-
-    let conf_anchor: ConfirmationBlockTime = ConfirmationBlockTime {
-        block_id: block_id!(910236, "BDK"),
-        confirmation_time: 1755317760,
-    };
-
-    let outpoint = OutPoint::new(hash!("Bitcoin_fixes_things"), 1);
-
-    let tx_graph_changeset = tx_graph::ChangeSet::<ConfirmationBlockTime> {
-        txs: [tx2.clone()].into(),
-        txouts: [(
-            outpoint,
-            TxOut {
-                value: Amount::from_sat(10000),
-                script_pubkey: spk_at_index(&descriptor, 21),
-            },
-        )]
-        .into(),
-        anchors: [(conf_anchor, tx2.compute_txid())].into(),
-        last_seen: [(tx2.compute_txid(), 1755317700)].into(),
-        first_seen: [(tx2.compute_txid(), 1755317700)].into(),
-        last_evicted: [(tx2.compute_txid(), 1755317760)].into(),
-    };
-
-    let keychain_txout_changeset = keychain_txout::ChangeSet {
-        last_revealed: [(descriptor.descriptor_id(), 14)].into(),
-        spk_cache: [(
-            descriptor.descriptor_id(),
-            SpkIterator::new_with_range(&descriptor, 37..=39).collect(),
-        )]
-        .into(),
-    };
-
-    let locked_outpoints_changeset = locked_outpoints::ChangeSet {
-        outpoints: [(outpoint, true)].into(),
-    };
-
-    let changeset_new = ChangeSet {
-        descriptor: None,
-        change_descriptor: None,
-        network: None,
-        local_chain: local_chain_changeset,
-        tx_graph: tx_graph_changeset,
-        indexer: keychain_txout_changeset,
-        locked_outpoints: locked_outpoints_changeset,
-    };
+    let changeset_new = get_changeset_two(tx2);
 
     // persist, load and check if same as merged
     WalletPersister::persist(&mut store, &changeset_new).map_err(E::persister)?;
