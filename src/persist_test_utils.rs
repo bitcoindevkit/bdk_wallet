@@ -1,5 +1,10 @@
 //! Utilities for testing custom persistence backends for `bdk_wallet`
 
+use alloc::boxed::Box;
+use core::fmt;
+#[cfg(feature = "std")]
+use std::error::Error as StdErr;
+
 use crate::{
     bitcoin::{
         absolute, key::Secp256k1, transaction, Address, Amount, Network, OutPoint, ScriptBuf,
@@ -11,7 +16,7 @@ use crate::{
     },
     locked_outpoints,
     miniscript::descriptor::{Descriptor, DescriptorPublicKey},
-    ChangeSet, WalletPersister,
+    AsyncWalletPersister, ChangeSet, WalletPersister,
 };
 
 macro_rules! block_id {
@@ -431,4 +436,256 @@ where
 
     assert_eq!(changeset_read.descriptor.unwrap(), descriptor);
     assert_eq!(changeset_read.change_descriptor, None);
+}
+
+/// Creates a [`ChangeSet`].
+fn get_changeset(tx1: Transaction) -> ChangeSet {
+    let descriptor: Descriptor<DescriptorPublicKey> = DESCRIPTORS[0].parse().unwrap();
+    let change_descriptor: Descriptor<DescriptorPublicKey> = DESCRIPTORS[1].parse().unwrap();
+
+    let local_chain_changeset = local_chain::ChangeSet {
+        blocks: [
+            (910234, Some(hash!("B"))),
+            (910233, Some(hash!("T"))),
+            (910235, Some(hash!("C"))),
+        ]
+        .into(),
+    };
+
+    let txid1 = tx1.compute_txid();
+
+    let conf_anchor: ConfirmationBlockTime = ConfirmationBlockTime {
+        block_id: block_id!(910234, "B"),
+        confirmation_time: 1755317160,
+    };
+
+    let outpoint = OutPoint::new(hash!("Rust"), 0);
+
+    let tx_graph_changeset = tx_graph::ChangeSet::<ConfirmationBlockTime> {
+        txs: [Arc::new(tx1)].into(),
+        txouts: [
+            (
+                outpoint,
+                TxOut {
+                    value: Amount::from_sat(1300),
+                    script_pubkey: spk_at_index(&descriptor, 4),
+                },
+            ),
+            (
+                OutPoint::new(hash!("REDB"), 0),
+                TxOut {
+                    value: Amount::from_sat(1400),
+                    script_pubkey: spk_at_index(&descriptor, 10),
+                },
+            ),
+        ]
+        .into(),
+        anchors: [(conf_anchor, txid1)].into(),
+        last_seen: [(txid1, 1755317760)].into(),
+        first_seen: [(txid1, 1755317750)].into(),
+        last_evicted: [(txid1, 1755317760)].into(),
+    };
+
+    let keychain_txout_changeset = keychain_txout::ChangeSet {
+        last_revealed: [
+            (descriptor.descriptor_id(), 12),
+            (change_descriptor.descriptor_id(), 10),
+        ]
+        .into(),
+        spk_cache: [
+            (
+                descriptor.descriptor_id(),
+                SpkIterator::new_with_range(&descriptor, 0..=37).collect(),
+            ),
+            (
+                change_descriptor.descriptor_id(),
+                SpkIterator::new_with_range(&change_descriptor, 0..=35).collect(),
+            ),
+        ]
+        .into(),
+    };
+
+    let locked_outpoints_changeset = locked_outpoints::ChangeSet {
+        outpoints: [(outpoint, true)].into(),
+    };
+
+    ChangeSet {
+        descriptor: Some(descriptor.clone()),
+        change_descriptor: Some(change_descriptor.clone()),
+        network: Some(Network::Testnet),
+        local_chain: local_chain_changeset,
+        tx_graph: tx_graph_changeset,
+        indexer: keychain_txout_changeset,
+        locked_outpoints: locked_outpoints_changeset,
+    }
+}
+
+/// Creates another [`ChangeSet`].
+fn get_changeset_two(tx2: Transaction) -> ChangeSet {
+    let descriptor: Descriptor<DescriptorPublicKey> = DESCRIPTORS[0].parse().unwrap();
+
+    let local_chain_changeset = local_chain::ChangeSet {
+        blocks: [(910236, Some(hash!("BDK")))].into(),
+    };
+
+    let conf_anchor: ConfirmationBlockTime = ConfirmationBlockTime {
+        block_id: block_id!(910236, "BDK"),
+        confirmation_time: 1755317760,
+    };
+
+    let txid2 = tx2.compute_txid();
+
+    let outpoint = OutPoint::new(hash!("Bitcoin_fixes_things"), 0);
+
+    let tx_graph_changeset = tx_graph::ChangeSet::<ConfirmationBlockTime> {
+        txs: [Arc::new(tx2)].into(),
+        txouts: [(
+            outpoint,
+            TxOut {
+                value: Amount::from_sat(10000),
+                script_pubkey: spk_at_index(&descriptor, 21),
+            },
+        )]
+        .into(),
+        anchors: [(conf_anchor, txid2)].into(),
+        last_seen: [(txid2, 1755317700)].into(),
+        first_seen: [(txid2, 1755317700)].into(),
+        last_evicted: [(txid2, 1755317760)].into(),
+    };
+
+    let keychain_txout_changeset = keychain_txout::ChangeSet {
+        last_revealed: [(descriptor.descriptor_id(), 14)].into(),
+        spk_cache: [(
+            descriptor.descriptor_id(),
+            SpkIterator::new_with_range(&descriptor, 37..=39).collect(),
+        )]
+        .into(),
+    };
+
+    let locked_outpoints_changeset = locked_outpoints::ChangeSet {
+        outpoints: [(outpoint, true)].into(),
+    };
+
+    ChangeSet {
+        descriptor: None,
+        change_descriptor: None,
+        network: None,
+        local_chain: local_chain_changeset,
+        tx_graph: tx_graph_changeset,
+        indexer: keychain_txout_changeset,
+        locked_outpoints: locked_outpoints_changeset,
+    }
+}
+
+/// Errors caused by a failed wallet persister test.
+#[derive(Debug)]
+pub enum PersistError {
+    /// Change set mismatch
+    ChangeSetMismatch {
+        /// the resulting changeset
+        got: Box<ChangeSet>,
+        /// the expected changeset
+        expected: Box<ChangeSet>,
+    },
+    /// The wallet persister implementation failed
+    Persister(Box<dyn StdErr + 'static>),
+}
+
+impl fmt::Display for PersistError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Persister(e) => write!(f, "{e}"),
+            Self::ChangeSetMismatch { got, expected } => {
+                write!(f, "expected: {expected:?}, got: {got:?}")
+            }
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl StdErr for PersistError {}
+
+impl PersistError {
+    /// Converts `e` to a [`PersistError::Persister`].
+    fn persister<E>(e: E) -> Self
+    where
+        E: StdErr + 'static,
+    {
+        Self::Persister(Box::new(e))
+    }
+}
+
+/// Test the functionality of an [`AsyncWalletPersister`].
+///
+/// # Errors
+///
+/// If any of the following doesn't occur:
+///
+/// - The store must initially be empty
+/// - The store must persist non-empty changesets
+/// - The store must return the expected changeset after being persisted
+pub async fn persist_wallet_changeset_async<F, P>(create_store: F) -> Result<(), PersistError>
+where
+    F: AsyncFn() -> Result<P, P::Error>,
+    P: AsyncWalletPersister,
+    P::Error: StdErr + 'static,
+{
+    use PersistError as E;
+
+    // Create store
+    let mut store = create_store().await.map_err(E::persister)?;
+    let changeset = AsyncWalletPersister::initialize(&mut store)
+        .await
+        .map_err(E::persister)?;
+
+    // A newly created store must return an empty changeset
+    if !changeset.is_empty() {
+        return Err(PersistError::ChangeSetMismatch {
+            got: Box::new(changeset),
+            expected: Box::new(ChangeSet::default()),
+        });
+    }
+
+    let tx1 = create_one_inp_one_out_tx(hash!("We_are_all_Satoshi"), 30_000);
+    let tx2 = create_one_inp_one_out_tx(tx1.compute_txid(), 20_000);
+
+    // Persist changeset
+    let mut expected_changeset = get_changeset(tx1);
+
+    AsyncWalletPersister::persist(&mut store, &expected_changeset)
+        .await
+        .map_err(E::persister)?;
+
+    let changeset_read = AsyncWalletPersister::initialize(&mut store)
+        .await
+        .map_err(E::persister)?;
+
+    if changeset_read != expected_changeset {
+        return Err(E::ChangeSetMismatch {
+            got: Box::new(changeset_read),
+            expected: Box::new(expected_changeset),
+        });
+    }
+
+    // Persist another changeset
+    let changeset_2 = get_changeset_two(tx2);
+
+    AsyncWalletPersister::persist(&mut store, &changeset_2)
+        .await
+        .map_err(E::persister)?;
+
+    let changeset_read = AsyncWalletPersister::initialize(&mut store)
+        .await
+        .map_err(E::persister)?;
+
+    expected_changeset.merge(changeset_2);
+
+    if changeset_read != expected_changeset {
+        return Err(E::ChangeSetMismatch {
+            got: Box::new(changeset_read),
+            expected: Box::new(expected_changeset),
+        });
+    }
+
+    Ok(())
 }
