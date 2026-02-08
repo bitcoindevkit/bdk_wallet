@@ -232,7 +232,7 @@ fn test_create_tx_custom_version() {
         .version(42);
     let psbt = builder.finish().unwrap();
 
-    assert_eq!(psbt.unsigned_tx.version.0, 42);
+    assert_eq!(psbt.psbt.unsigned_tx.version.0, 42);
 }
 
 #[test]
@@ -246,7 +246,7 @@ fn test_create_tx_default_locktime_is_last_sync_height() {
 
     // Since we never synced the wallet we don't have a last_sync_height
     // we could use to try to prevent fee sniping. We default to 0.
-    assert_eq!(psbt.unsigned_tx.lock_time.to_consensus_u32(), 2_000);
+    assert_eq!(psbt.psbt.unsigned_tx.lock_time.to_consensus_u32(), 2_000);
 }
 
 #[test]
@@ -260,7 +260,7 @@ fn test_create_tx_fee_sniping_locktime_last_sync() {
 
     // If there's no current_height we're left with using the last sync height
     assert_eq!(
-        psbt.unsigned_tx.lock_time.to_consensus_u32(),
+        psbt.psbt.unsigned_tx.lock_time.to_consensus_u32(),
         wallet.latest_checkpoint().height()
     );
 }
@@ -273,7 +273,7 @@ fn test_create_tx_default_locktime_cltv() {
     builder.add_recipient(addr.script_pubkey(), Amount::from_sat(25_000));
     let psbt = builder.finish().unwrap();
 
-    assert_eq!(psbt.unsigned_tx.lock_time.to_consensus_u32(), 100_000);
+    assert_eq!(psbt.psbt.unsigned_tx.lock_time.to_consensus_u32(), 100_000);
 }
 
 #[test]
@@ -284,9 +284,9 @@ fn test_create_tx_locktime_cltv_timestamp() {
     builder.add_recipient(addr.script_pubkey(), Amount::from_sat(25_000));
     let mut psbt = builder.finish().unwrap();
 
-    assert_eq!(psbt.unsigned_tx.lock_time.to_consensus_u32(), 1_734_230_218);
+    assert_eq!(psbt.psbt.unsigned_tx.lock_time.to_consensus_u32(), 1_734_230_218);
 
-    let finalized = wallet.sign(&mut psbt, SignOptions::default()).unwrap();
+    let finalized = wallet.sign(&mut psbt.psbt, SignOptions::default()).unwrap();
 
     assert!(finalized);
 }
@@ -305,7 +305,7 @@ fn test_create_tx_custom_locktime() {
     // When we explicitly specify a nlocktime
     // we don't try any fee sniping prevention trick
     // (we ignore the current_height)
-    assert_eq!(psbt.unsigned_tx.lock_time.to_consensus_u32(), 630_000);
+    assert_eq!(psbt.psbt.unsigned_tx.lock_time.to_consensus_u32(), 630_000);
 }
 
 #[test]
@@ -318,7 +318,7 @@ fn test_create_tx_custom_locktime_compatible_with_cltv() {
         .nlocktime(absolute::LockTime::from_height(630_000).unwrap());
     let psbt = builder.finish().unwrap();
 
-    assert_eq!(psbt.unsigned_tx.lock_time.to_consensus_u32(), 630_000);
+    assert_eq!(psbt.psbt.unsigned_tx.lock_time.to_consensus_u32(), 630_000);
 }
 
 #[test]
@@ -345,7 +345,7 @@ fn test_create_tx_custom_csv() {
         .add_recipient(addr.script_pubkey(), Amount::from_sat(25_000));
     let psbt = builder.finish().unwrap();
     // we allow setting a sequence higher than required
-    assert_eq!(psbt.unsigned_tx.input[0].sequence, Sequence(42));
+    assert_eq!(psbt.psbt.unsigned_tx.input[0].sequence, Sequence(42));
 }
 
 #[test]
@@ -356,7 +356,7 @@ fn test_create_tx_no_rbf_csv() {
     builder.add_recipient(addr.script_pubkey(), Amount::from_sat(25_000));
     let psbt = builder.finish().unwrap();
 
-    assert_eq!(psbt.unsigned_tx.input[0].sequence, Sequence(6));
+    assert_eq!(psbt.psbt.unsigned_tx.input[0].sequence, Sequence(6));
 }
 
 #[test]
@@ -381,7 +381,7 @@ fn test_create_tx_with_default_rbf_csv() {
     let psbt = builder.finish().unwrap();
     // When CSV is enabled it takes precedence over the rbf value (unless forced by the user).
     // It will be set to the OP_CSV value, in this case 6
-    assert_eq!(psbt.unsigned_tx.input[0].sequence, Sequence(6));
+    assert_eq!(psbt.psbt.unsigned_tx.input[0].sequence, Sequence(6));
 }
 
 #[test]
@@ -393,7 +393,7 @@ fn test_create_tx_no_rbf_cltv() {
     builder.set_exact_sequence(Sequence(0xFFFFFFFE));
     let psbt = builder.finish().unwrap();
 
-    assert_eq!(psbt.unsigned_tx.input[0].sequence, Sequence(0xFFFFFFFE));
+    assert_eq!(psbt.psbt.unsigned_tx.input[0].sequence, Sequence(0xFFFFFFFE));
 }
 
 #[test]
@@ -406,7 +406,7 @@ fn test_create_tx_custom_rbf_sequence() {
         .set_exact_sequence(Sequence(0xDEADBEEF));
     let psbt = builder.finish().unwrap();
 
-    assert_eq!(psbt.unsigned_tx.input[0].sequence, Sequence(0xDEADBEEF));
+    assert_eq!(psbt.psbt.unsigned_tx.input[0].sequence, Sequence(0xDEADBEEF));
 }
 
 #[test]
@@ -441,7 +441,7 @@ fn test_create_tx_default_sequence() {
     builder.add_recipient(addr.script_pubkey(), Amount::from_sat(25_000));
     let psbt = builder.finish().unwrap();
 
-    assert_eq!(psbt.unsigned_tx.input[0].sequence, Sequence(0xFFFFFFFD));
+    assert_eq!(psbt.psbt.unsigned_tx.input[0].sequence, Sequence(0xFFFFFFFD));
 }
 
 #[test]
@@ -453,9 +453,9 @@ fn test_create_tx_drain_wallet_and_drain_to() {
     let psbt = builder.finish().unwrap();
     let fee = check_fee!(wallet, psbt);
 
-    assert_eq!(psbt.unsigned_tx.output.len(), 1);
+    assert_eq!(psbt.psbt.unsigned_tx.output.len(), 1);
     assert_eq!(
-        psbt.unsigned_tx.output[0].value,
+        psbt.psbt.unsigned_tx.output[0].value,
         Amount::from_sat(50_000) - fee
     );
 }
@@ -474,7 +474,7 @@ fn test_create_tx_drain_wallet_and_drain_to_and_with_recipient() {
         .drain_wallet();
     let psbt = builder.finish().unwrap();
     let fee = check_fee!(wallet, psbt);
-    let outputs = psbt.unsigned_tx.output;
+    let outputs = psbt.psbt.unsigned_tx.output;
 
     assert_eq!(outputs.len(), 2);
     let main_output = outputs
@@ -502,9 +502,9 @@ fn test_create_tx_drain_to_and_utxos() {
     let psbt = builder.finish().unwrap();
     let fee = check_fee!(wallet, psbt);
 
-    assert_eq!(psbt.unsigned_tx.output.len(), 1);
+    assert_eq!(psbt.psbt.unsigned_tx.output.len(), 1);
     assert_eq!(
-        psbt.unsigned_tx.output[0].value,
+        psbt.psbt.unsigned_tx.output[0].value,
         Amount::from_sat(50_000) - fee
     );
 }
@@ -572,9 +572,9 @@ fn test_create_tx_absolute_fee() {
     let fee = check_fee!(wallet, psbt);
 
     assert_eq!(fee, Amount::from_sat(100));
-    assert_eq!(psbt.unsigned_tx.output.len(), 1);
+    assert_eq!(psbt.psbt.unsigned_tx.output.len(), 1);
     assert_eq!(
-        psbt.unsigned_tx.output[0].value,
+        psbt.psbt.unsigned_tx.output[0].value,
         Amount::from_sat(50_000) - fee
     );
 }
@@ -592,9 +592,9 @@ fn test_legacy_create_tx_absolute_fee() {
     let fee = check_fee!(wallet, psbt);
 
     assert_eq!(fee, Amount::from_sat(100));
-    assert_eq!(psbt.unsigned_tx.output.len(), 1);
+    assert_eq!(psbt.psbt.unsigned_tx.output.len(), 1);
     assert_eq!(
-        psbt.unsigned_tx.output[0].value,
+        psbt.psbt.unsigned_tx.output[0].value,
         Amount::from_sat(50_000) - fee
     );
 }
@@ -612,9 +612,9 @@ fn test_create_tx_absolute_zero_fee() {
     let fee = check_fee!(wallet, psbt);
 
     assert_eq!(fee, Amount::ZERO);
-    assert_eq!(psbt.unsigned_tx.output.len(), 1);
+    assert_eq!(psbt.psbt.unsigned_tx.output.len(), 1);
     assert_eq!(
-        psbt.unsigned_tx.output[0].value,
+        psbt.psbt.unsigned_tx.output[0].value,
         Amount::from_sat(50_000) - fee
     );
 }
@@ -632,9 +632,9 @@ fn test_legacy_create_tx_absolute_zero_fee() {
     let fee = check_fee!(wallet, psbt);
 
     assert_eq!(fee, Amount::ZERO);
-    assert_eq!(psbt.unsigned_tx.output.len(), 1);
+    assert_eq!(psbt.psbt.unsigned_tx.output.len(), 1);
     assert_eq!(
-        psbt.unsigned_tx.output[0].value,
+        psbt.psbt.unsigned_tx.output[0].value,
         Amount::from_sat(50_000) - fee
     );
 }
@@ -679,10 +679,10 @@ fn test_create_tx_add_change() {
     let psbt = builder.finish_with_aux_rand(&mut rng).unwrap();
     let fee = check_fee!(wallet, psbt);
 
-    assert_eq!(psbt.unsigned_tx.output.len(), 2);
-    assert_eq!(psbt.unsigned_tx.output[0].value, Amount::from_sat(25_000));
+    assert_eq!(psbt.psbt.unsigned_tx.output.len(), 2);
+    assert_eq!(psbt.psbt.unsigned_tx.output[0].value, Amount::from_sat(25_000));
     assert_eq!(
-        psbt.unsigned_tx.output[1].value,
+        psbt.psbt.unsigned_tx.output[1].value,
         Amount::from_sat(25_000) - fee
     );
 }
@@ -696,8 +696,8 @@ fn test_create_tx_skip_change_dust() {
     let psbt = builder.finish().unwrap();
     let fee = check_fee!(wallet, psbt);
 
-    assert_eq!(psbt.unsigned_tx.output.len(), 1);
-    assert_eq!(psbt.unsigned_tx.output[0].value.to_sat(), 49_800);
+    assert_eq!(psbt.psbt.unsigned_tx.output.len(), 1);
+    assert_eq!(psbt.psbt.unsigned_tx.output[0].value.to_sat(), 49_800);
     assert_eq!(fee, Amount::from_sat(200));
 }
 
@@ -744,13 +744,13 @@ fn test_create_tx_ordering_respected() {
     let psbt = builder.finish().unwrap();
     let fee = check_fee!(wallet, psbt);
 
-    assert_eq!(psbt.unsigned_tx.output.len(), 3);
+    assert_eq!(psbt.psbt.unsigned_tx.output.len(), 3);
     assert_eq!(
-        psbt.unsigned_tx.output[0].value,
+        psbt.psbt.unsigned_tx.output[0].value,
         Amount::from_sat(10_000) - fee
     );
-    assert_eq!(psbt.unsigned_tx.output[1].value, Amount::from_sat(10_000));
-    assert_eq!(psbt.unsigned_tx.output[2].value, Amount::from_sat(30_000));
+    assert_eq!(psbt.psbt.unsigned_tx.output[1].value, Amount::from_sat(10_000));
+    assert_eq!(psbt.psbt.unsigned_tx.output[2].value, Amount::from_sat(30_000));
 }
 
 #[test]
@@ -761,7 +761,7 @@ fn test_create_tx_default_sighash() {
     builder.add_recipient(addr.script_pubkey(), Amount::from_sat(30_000));
     let psbt = builder.finish().unwrap();
 
-    assert_eq!(psbt.inputs[0].sighash_type, None);
+    assert_eq!(psbt.psbt.inputs[0].sighash_type, None);
 }
 
 #[test]
@@ -772,7 +772,7 @@ fn test_legacy_create_tx_default_sighash() {
     builder.add_recipient(addr.script_pubkey(), Amount::from_sat(30_000));
     let psbt = builder.finish().unwrap();
 
-    assert_eq!(psbt.inputs[0].sighash_type, None);
+    assert_eq!(psbt.psbt.inputs[0].sighash_type, None);
 }
 
 #[test]
@@ -786,7 +786,7 @@ fn test_create_tx_custom_sighash() {
     let psbt = builder.finish().unwrap();
 
     assert_eq!(
-        psbt.inputs[0].sighash_type,
+        psbt.psbt.inputs[0].sighash_type,
         Some(EcdsaSighashType::Single.into())
     );
 }
@@ -802,7 +802,7 @@ fn test_legacy_create_tx_custom_sighash() {
     let psbt = builder.finish().unwrap();
 
     assert_eq!(
-        psbt.inputs[0].sighash_type,
+        psbt.psbt.inputs[0].sighash_type,
         Some(EcdsaSighashType::Single.into())
     );
 }
@@ -818,9 +818,9 @@ fn test_create_tx_input_hd_keypaths() {
     builder.drain_to(addr.script_pubkey()).drain_wallet();
     let psbt = builder.finish().unwrap();
 
-    assert_eq!(psbt.inputs[0].bip32_derivation.len(), 1);
+    assert_eq!(psbt.psbt.inputs[0].bip32_derivation.len(), 1);
     assert_eq!(
-        psbt.inputs[0].bip32_derivation.values().next().unwrap(),
+        psbt.psbt.inputs[0].bip32_derivation.values().next().unwrap(),
         &(
             Fingerprint::from_str("d34db33f").unwrap(),
             DerivationPath::from_str("m/44'/0'/0'/0/0").unwrap()
@@ -840,10 +840,10 @@ fn test_create_tx_output_hd_keypaths() {
     builder.drain_to(addr.script_pubkey()).drain_wallet();
     let psbt = builder.finish().unwrap();
 
-    assert_eq!(psbt.outputs[0].bip32_derivation.len(), 1);
+    assert_eq!(psbt.psbt.outputs[0].bip32_derivation.len(), 1);
     let expected_derivation_path = format!("m/44'/0'/0'/0/{}", addr.index);
     assert_eq!(
-        psbt.outputs[0].bip32_derivation.values().next().unwrap(),
+        psbt.psbt.outputs[0].bip32_derivation.values().next().unwrap(),
         &(
             Fingerprint::from_str("d34db33f").unwrap(),
             DerivationPath::from_str(&expected_derivation_path).unwrap()
@@ -863,7 +863,7 @@ fn test_create_tx_set_redeem_script_p2sh() {
     let psbt = builder.finish().unwrap();
 
     assert_eq!(
-        psbt.inputs[0].redeem_script,
+        psbt.psbt.inputs[0].redeem_script,
         Some(ScriptBuf::from(
             Vec::<u8>::from_hex(
                 "21032b0558078bec38694a84933d659303e2575dae7e91685911454115bfd64487e3ac"
@@ -871,7 +871,7 @@ fn test_create_tx_set_redeem_script_p2sh() {
             .unwrap()
         ))
     );
-    assert_eq!(psbt.inputs[0].witness_script, None);
+    assert_eq!(psbt.psbt.inputs[0].witness_script, None);
 }
 
 #[test]
@@ -885,9 +885,9 @@ fn test_create_tx_set_witness_script_p2wsh() {
     builder.drain_to(addr.script_pubkey()).drain_wallet();
     let psbt = builder.finish().unwrap();
 
-    assert_eq!(psbt.inputs[0].redeem_script, None);
+    assert_eq!(psbt.psbt.inputs[0].redeem_script, None);
     assert_eq!(
-        psbt.inputs[0].witness_script,
+        psbt.psbt.inputs[0].witness_script,
         Some(ScriptBuf::from(
             Vec::<u8>::from_hex(
                 "21032b0558078bec38694a84933d659303e2575dae7e91685911454115bfd64487e3ac"
@@ -912,8 +912,8 @@ fn test_create_tx_set_redeem_witness_script_p2wsh_p2sh() {
     )
     .unwrap();
 
-    assert_eq!(psbt.inputs[0].redeem_script, Some(script.to_p2wsh()));
-    assert_eq!(psbt.inputs[0].witness_script, Some(script));
+    assert_eq!(psbt.psbt.inputs[0].redeem_script, Some(script.to_p2wsh()));
+    assert_eq!(psbt.psbt.inputs[0].witness_script, Some(script));
 }
 
 #[test]
@@ -925,8 +925,8 @@ fn test_create_tx_non_witness_utxo() {
     builder.drain_to(addr.script_pubkey()).drain_wallet();
     let psbt = builder.finish().unwrap();
 
-    assert!(psbt.inputs[0].non_witness_utxo.is_some());
-    assert!(psbt.inputs[0].witness_utxo.is_none());
+    assert!(psbt.psbt.inputs[0].non_witness_utxo.is_some());
+    assert!(psbt.psbt.inputs[0].witness_utxo.is_none());
 }
 
 #[test]
@@ -941,8 +941,8 @@ fn test_create_tx_only_witness_utxo() {
         .drain_wallet();
     let psbt = builder.finish().unwrap();
 
-    assert!(psbt.inputs[0].non_witness_utxo.is_none());
-    assert!(psbt.inputs[0].witness_utxo.is_some());
+    assert!(psbt.psbt.inputs[0].non_witness_utxo.is_none());
+    assert!(psbt.psbt.inputs[0].witness_utxo.is_some());
 }
 
 #[test]
@@ -954,7 +954,7 @@ fn test_create_tx_shwpkh_has_witness_utxo() {
     builder.drain_to(addr.script_pubkey()).drain_wallet();
     let psbt = builder.finish().unwrap();
 
-    assert!(psbt.inputs[0].witness_utxo.is_some());
+    assert!(psbt.psbt.inputs[0].witness_utxo.is_some());
 }
 
 #[test]
@@ -966,8 +966,8 @@ fn test_create_tx_both_non_witness_utxo_and_witness_utxo_default() {
     builder.drain_to(addr.script_pubkey()).drain_wallet();
     let psbt = builder.finish().unwrap();
 
-    assert!(psbt.inputs[0].non_witness_utxo.is_some());
-    assert!(psbt.inputs[0].witness_utxo.is_some());
+    assert!(psbt.psbt.inputs[0].non_witness_utxo.is_some());
+    assert!(psbt.psbt.inputs[0].witness_utxo.is_some());
 }
 
 #[test]
@@ -1002,10 +1002,10 @@ fn test_create_tx_add_utxo() {
         .unwrap();
     let psbt = builder.finish().unwrap();
     let (sent, _received) =
-        wallet.sent_and_received(&psbt.clone().extract_tx().expect("failed to extract tx"));
+        wallet.sent_and_received(&psbt.clone().psbt.extract_tx().expect("failed to extract tx"));
 
     assert_eq!(
-        psbt.unsigned_tx.input.len(),
+        psbt.psbt.unsigned_tx.input.len(),
         2,
         "should add an additional input since 25_000 < 30_000"
     );
@@ -1099,7 +1099,7 @@ fn test_create_tx_policy_path_no_csv() {
         .policy_path(path, KeychainKind::External);
     let psbt = builder.finish().unwrap();
 
-    assert_eq!(psbt.unsigned_tx.input[0].sequence, Sequence(0xFFFFFFFD));
+    assert_eq!(psbt.psbt.unsigned_tx.input[0].sequence, Sequence(0xFFFFFFFD));
 }
 
 #[test]
@@ -1120,7 +1120,7 @@ fn test_create_tx_policy_path_use_csv() {
         .policy_path(path, KeychainKind::External);
     let psbt = builder.finish().unwrap();
 
-    assert_eq!(psbt.unsigned_tx.input[0].sequence, Sequence(144));
+    assert_eq!(psbt.psbt.unsigned_tx.input[0].sequence, Sequence(144));
 }
 
 #[test]
@@ -1141,7 +1141,7 @@ fn test_create_tx_policy_path_ignored_subtree_with_csv() {
         .policy_path(path, KeychainKind::External);
     let psbt = builder.finish().unwrap();
 
-    assert_eq!(psbt.unsigned_tx.input[0].sequence, Sequence(0xFFFFFFFD));
+    assert_eq!(psbt.psbt.unsigned_tx.input[0].sequence, Sequence(0xFFFFFFFD));
 }
 
 #[test]
@@ -1159,8 +1159,8 @@ fn test_create_tx_global_xpubs_with_origin() {
     let fingerprint = bip32::Fingerprint::from_hex("73756c7f").unwrap();
     let path = bip32::DerivationPath::from_str("m/48'/0'/0'/2'").unwrap();
 
-    assert_eq!(psbt.xpub.len(), 1);
-    assert_eq!(psbt.xpub.get(&key), Some(&(fingerprint, path)));
+    assert_eq!(psbt.psbt.xpub.len(), 1);
+    assert_eq!(psbt.psbt.xpub.get(&key), Some(&(fingerprint, path)));
 }
 
 #[test]
@@ -1322,9 +1322,9 @@ fn test_create_tx_global_xpubs_master_without_origin() {
     let key = bip32::Xpub::from_str("tpubD6NzVbkrYhZ4Y55A58Gv9RSNF5hy84b5AJqYy7sCcjFrkcLpPre8kmgfit6kY1Zs3BLgeypTDBZJM222guPpdz7Cup5yzaMu62u7mYGbwFL").unwrap();
     let fingerprint = bip32::Fingerprint::from_hex("997a323b").unwrap();
 
-    assert_eq!(psbt.xpub.len(), 1);
+    assert_eq!(psbt.psbt.xpub.len(), 1);
     assert_eq!(
-        psbt.xpub.get(&key),
+        psbt.psbt.xpub.get(&key),
         Some(&(fingerprint, bip32::DerivationPath::default()))
     );
 }
@@ -1355,7 +1355,7 @@ fn test_fee_amount_negative_drain_val() {
     let psbt = builder.finish().unwrap();
     let fee = check_fee!(wallet, psbt);
 
-    assert_eq!(psbt.inputs.len(), 1);
+    assert_eq!(psbt.psbt.inputs.len(), 1);
     assert_fee_rate!(psbt, fee, fee_rate, @add_signature);
 }
 
@@ -1367,10 +1367,10 @@ fn test_sign_single_xprv() {
     builder.drain_to(addr.script_pubkey()).drain_wallet();
     let mut psbt = builder.finish().unwrap();
 
-    let finalized = wallet.sign(&mut psbt, Default::default()).unwrap();
+    let finalized = wallet.sign(&mut psbt.psbt, Default::default()).unwrap();
     assert!(finalized);
 
-    let extracted = psbt.extract_tx().expect("failed to extract tx");
+    let extracted = psbt.psbt.extract_tx().expect("failed to extract tx");
     assert_eq!(extracted.input[0].witness.len(), 2);
 }
 
@@ -1382,10 +1382,10 @@ fn test_sign_single_xprv_with_master_fingerprint_and_path() {
     builder.drain_to(addr.script_pubkey()).drain_wallet();
     let mut psbt = builder.finish().unwrap();
 
-    let finalized = wallet.sign(&mut psbt, Default::default()).unwrap();
+    let finalized = wallet.sign(&mut psbt.psbt, Default::default()).unwrap();
     assert!(finalized);
 
-    let extracted = psbt.extract_tx().expect("failed to extract tx");
+    let extracted = psbt.psbt.extract_tx().expect("failed to extract tx");
     assert_eq!(extracted.input[0].witness.len(), 2);
 }
 
@@ -1397,10 +1397,10 @@ fn test_sign_single_xprv_bip44_path() {
     builder.drain_to(addr.script_pubkey()).drain_wallet();
     let mut psbt = builder.finish().unwrap();
 
-    let finalized = wallet.sign(&mut psbt, Default::default()).unwrap();
+    let finalized = wallet.sign(&mut psbt.psbt, Default::default()).unwrap();
     assert!(finalized);
 
-    let extracted = psbt.extract_tx().expect("failed to extract tx");
+    let extracted = psbt.psbt.extract_tx().expect("failed to extract tx");
     assert_eq!(extracted.input[0].witness.len(), 2);
 }
 
@@ -1412,10 +1412,10 @@ fn test_sign_single_xprv_sh_wpkh() {
     builder.drain_to(addr.script_pubkey()).drain_wallet();
     let mut psbt = builder.finish().unwrap();
 
-    let finalized = wallet.sign(&mut psbt, Default::default()).unwrap();
+    let finalized = wallet.sign(&mut psbt.psbt, Default::default()).unwrap();
     assert!(finalized);
 
-    let extracted = psbt.extract_tx().expect("failed to extract tx");
+    let extracted = psbt.psbt.extract_tx().expect("failed to extract tx");
     assert_eq!(extracted.input[0].witness.len(), 2);
 }
 
@@ -1428,10 +1428,10 @@ fn test_sign_single_wif() {
     builder.drain_to(addr.script_pubkey()).drain_wallet();
     let mut psbt = builder.finish().unwrap();
 
-    let finalized = wallet.sign(&mut psbt, Default::default()).unwrap();
+    let finalized = wallet.sign(&mut psbt.psbt, Default::default()).unwrap();
     assert!(finalized);
 
-    let extracted = psbt.extract_tx().expect("failed to extract tx");
+    let extracted = psbt.psbt.extract_tx().expect("failed to extract tx");
     assert_eq!(extracted.input[0].witness.len(), 2);
 }
 
@@ -1443,13 +1443,13 @@ fn test_sign_single_xprv_no_hd_keypaths() {
     builder.drain_to(addr.script_pubkey()).drain_wallet();
     let mut psbt = builder.finish().unwrap();
 
-    psbt.inputs[0].bip32_derivation.clear();
-    assert_eq!(psbt.inputs[0].bip32_derivation.len(), 0);
+    psbt.psbt.inputs[0].bip32_derivation.clear();
+    assert_eq!(psbt.psbt.inputs[0].bip32_derivation.len(), 0);
 
-    let finalized = wallet.sign(&mut psbt, Default::default()).unwrap();
+    let finalized = wallet.sign(&mut psbt.psbt, Default::default()).unwrap();
     assert!(finalized);
 
-    let extracted = psbt.extract_tx().expect("failed to extract tx");
+    let extracted = psbt.psbt.extract_tx().expect("failed to extract tx");
     assert_eq!(extracted.input[0].witness.len(), 2);
 }
 
@@ -1499,8 +1499,8 @@ fn test_signing_only_one_of_multiple_inputs() {
         ..Default::default()
     };
 
-    psbt.inputs.push(dud_input);
-    psbt.unsigned_tx.input.push(bitcoin::TxIn::default());
+    psbt.psbt.inputs.push(dud_input);
+    psbt.psbt.unsigned_tx.input.push(bitcoin::TxIn::default());
     let is_final = wallet
         .sign(
             &mut psbt,
@@ -1515,7 +1515,7 @@ fn test_signing_only_one_of_multiple_inputs() {
         "shouldn't be final since we can't sign one of the inputs"
     );
     assert!(
-        psbt.inputs[0].final_script_witness.is_some(),
+        psbt.psbt.inputs[0].final_script_witness.is_some(),
         "should finalized input it signed"
     )
 }
@@ -1540,7 +1540,7 @@ fn test_try_finalize_sign_option() {
             )
             .unwrap();
 
-        psbt.inputs.iter().for_each(|input| {
+        psbt.psbt.inputs.iter().for_each(|input| {
             if *try_finalize {
                 assert!(finalized);
                 assert!(input.final_script_sig.is_none());
@@ -1574,7 +1574,7 @@ fn test_taproot_try_finalize_sign_option() {
             )
             .unwrap();
 
-        psbt.inputs.iter().for_each(|input| {
+        psbt.psbt.inputs.iter().for_each(|input| {
             if *try_finalize {
                 assert!(finalized);
                 assert!(input.final_script_sig.is_none());
@@ -1591,7 +1591,7 @@ fn test_taproot_try_finalize_sign_option() {
                 assert!(input.final_script_witness.is_none());
             }
         });
-        psbt.outputs.iter().for_each(|output| {
+        psbt.psbt.outputs.iter().for_each(|output| {
             if *try_finalize {
                 assert!(finalized);
                 assert!(output.tap_key_origins.is_empty());
@@ -1616,7 +1616,7 @@ fn test_sign_nonstandard_sighash() {
         .drain_wallet();
     let mut psbt = builder.finish().unwrap();
 
-    let result = wallet.sign(&mut psbt, Default::default());
+    let result = wallet.sign(&mut psbt.psbt, Default::default());
     assert!(
         result.is_err(),
         "Signing should have failed because the TX uses non-standard sighashes"
@@ -1641,7 +1641,7 @@ fn test_sign_nonstandard_sighash() {
         "Should finalize the input since we can produce signatures"
     );
 
-    let extracted = psbt.extract_tx().expect("failed to extract tx");
+    let extracted = psbt.psbt.extract_tx().expect("failed to extract tx");
     assert_eq!(
         *extracted.input[0].witness.to_vec()[0].last().unwrap(),
         sighash.to_u32() as u8,
@@ -1955,7 +1955,7 @@ fn test_taproot_psbt_populate_tap_key_origins() {
     let psbt = builder.finish().unwrap();
 
     assert_eq!(
-        psbt.inputs[0]
+        psbt.psbt.inputs[0]
             .tap_key_origins
             .clone()
             .into_iter()
@@ -1967,7 +1967,7 @@ fn test_taproot_psbt_populate_tap_key_origins() {
         "Wrong input tap_key_origins"
     );
     assert_eq!(
-        psbt.outputs[0]
+        psbt.psbt.outputs[0]
             .tap_key_origins
             .clone()
             .into_iter()
@@ -1996,7 +1996,7 @@ fn test_taproot_psbt_populate_tap_key_origins_repeated_key() {
         .policy_path(path, KeychainKind::External);
     let psbt = builder.finish().unwrap();
 
-    let mut input_key_origins = psbt.inputs[0]
+    let mut input_key_origins = psbt.psbt.inputs[0]
         .tap_key_origins
         .clone()
         .into_iter()
@@ -2031,7 +2031,7 @@ fn test_taproot_psbt_populate_tap_key_origins_repeated_key() {
         "Wrong input tap_key_origins"
     );
 
-    let mut output_key_origins = psbt.outputs[0]
+    let mut output_key_origins = psbt.psbt.outputs[0]
         .tap_key_origins
         .clone()
         .into_iter()
@@ -2057,7 +2057,7 @@ fn test_taproot_psbt_input_tap_tree() {
     let psbt = builder.finish().unwrap();
 
     assert_eq!(
-        psbt.inputs[0].tap_merkle_root,
+        psbt.psbt.inputs[0].tap_merkle_root,
         Some(
             TapNodeHash::from_str(
                 "61f81509635053e52d9d1217545916167394490da2287aca4693606e43851986"
@@ -2066,14 +2066,14 @@ fn test_taproot_psbt_input_tap_tree() {
         ),
     );
     assert_eq!(
-        psbt.inputs[0].tap_scripts.clone().into_iter().collect::<Vec<_>>(),
+        psbt.psbt.inputs[0].tap_scripts.clone().into_iter().collect::<Vec<_>>(),
         vec![
             (taproot::ControlBlock::decode(&Vec::<u8>::from_hex("c0b511bd5771e47ee27558b1765e87b541668304ec567721c7b880edc0a010da55b7ef769a745e625ed4b9a4982a4dc08274c59187e73e6f07171108f455081cb2").unwrap()).unwrap(), (ScriptBuf::from_hex("208aee2b8120a5f157f1223f72b5e62b825831a27a9fdf427db7cc697494d4a642ac").unwrap(), taproot::LeafVersion::TapScript)),
             (taproot::ControlBlock::decode(&Vec::<u8>::from_hex("c0b511bd5771e47ee27558b1765e87b541668304ec567721c7b880edc0a010da55b9a515f7be31a70186e3c5937ee4a70cc4b4e1efe876c1d38e408222ffc64834").unwrap()).unwrap(), (ScriptBuf::from_hex("2051494dc22e24a32fe9dcfbd7e85faf345fa1df296fb49d156e859ef345201295ac").unwrap(), taproot::LeafVersion::TapScript)),
         ],
     );
     assert_eq!(
-        psbt.inputs[0].tap_internal_key,
+        psbt.psbt.inputs[0].tap_internal_key,
         Some(from_str!(
             "b511bd5771e47ee27558b1765e87b541668304ec567721c7b880edc0a010da55"
         ))
@@ -2082,12 +2082,12 @@ fn test_taproot_psbt_input_tap_tree() {
     // Since we are creating an output to the same address as the input, assert that the
     // internal_key is the same
     assert_eq!(
-        psbt.inputs[0].tap_internal_key,
-        psbt.outputs[0].tap_internal_key
+        psbt.psbt.inputs[0].tap_internal_key,
+        psbt.psbt.outputs[0].tap_internal_key
     );
 
     let tap_tree: bitcoin::taproot::TapTree = serde_json::from_str(r#"[1,{"Script":["2051494dc22e24a32fe9dcfbd7e85faf345fa1df296fb49d156e859ef345201295ac",192]},1,{"Script":["208aee2b8120a5f157f1223f72b5e62b825831a27a9fdf427db7cc697494d4a642ac",192]}]"#).unwrap();
-    assert_eq!(psbt.outputs[0].tap_tree, Some(tap_tree));
+    assert_eq!(psbt.psbt.outputs[0].tap_tree, Some(tap_tree));
 }
 
 #[test]
@@ -2097,7 +2097,7 @@ fn test_taproot_sign_missing_witness_utxo() {
     let mut builder = wallet.build_tx();
     builder.drain_to(addr.script_pubkey()).drain_wallet();
     let mut psbt = builder.finish().unwrap();
-    let witness_utxo = psbt.inputs[0].witness_utxo.take();
+    let witness_utxo = psbt.psbt.inputs[0].witness_utxo.take();
 
     let result = wallet.sign(
         &mut psbt,
@@ -2113,7 +2113,7 @@ fn test_taproot_sign_missing_witness_utxo() {
     );
 
     // restore the witness_utxo
-    psbt.inputs[0].witness_utxo = witness_utxo;
+    psbt.psbt.inputs[0].witness_utxo = witness_utxo;
 
     let result = wallet.sign(
         &mut psbt,
@@ -2138,15 +2138,15 @@ fn test_taproot_sign_using_non_witness_utxo() {
     builder.drain_to(addr.script_pubkey()).drain_wallet();
     let mut psbt = builder.finish().unwrap();
 
-    psbt.inputs[0].witness_utxo = None;
-    psbt.inputs[0].non_witness_utxo =
+    psbt.psbt.inputs[0].witness_utxo = None;
+    psbt.psbt.inputs[0].non_witness_utxo =
         Some(wallet.get_tx(prev_txid).unwrap().tx_node.as_ref().clone());
     assert!(
-        psbt.inputs[0].non_witness_utxo.is_some(),
+        psbt.psbt.inputs[0].non_witness_utxo.is_some(),
         "Previous tx should be present in the database"
     );
 
-    let result = wallet.sign(&mut psbt, Default::default());
+    let result = wallet.sign(&mut psbt.psbt, Default::default());
     assert!(result.is_ok(), "Signing should have worked");
     assert!(
         result.unwrap(),
@@ -2161,9 +2161,9 @@ fn test_spend_from_wallet(mut wallet: Wallet) {
     builder.add_recipient(addr.script_pubkey(), Amount::from_sat(25_000));
     let mut psbt = builder.finish().unwrap();
 
-    assert_eq!(psbt.unsigned_tx.version.0, 2);
+    assert_eq!(psbt.psbt.unsigned_tx.version.0, 2);
     assert!(
-        wallet.sign(&mut psbt, Default::default()).unwrap(),
+        wallet.sign(&mut psbt.psbt, Default::default()).unwrap(),
         "Unable to finalize tx"
     );
 }
@@ -2199,7 +2199,7 @@ fn test_taproot_no_key_spend() {
         "Unable to finalize tx"
     );
 
-    assert!(psbt.inputs.iter().all(|i| i.tap_key_sig.is_none()));
+    assert!(psbt.psbt.inputs.iter().all(|i| i.tap_key_sig.is_none()));
 }
 
 #[test]
@@ -2251,7 +2251,7 @@ fn test_taproot_script_spend_sign_include_some_leaves() {
     let mut builder = wallet.build_tx();
     builder.add_recipient(addr.script_pubkey(), Amount::from_sat(25_000));
     let mut psbt = builder.finish().unwrap();
-    let mut script_leaves: Vec<_> = psbt.inputs[0]
+    let mut script_leaves: Vec<_> = psbt.psbt.inputs[0]
         .tap_scripts
         .clone()
         .values()
@@ -2273,7 +2273,7 @@ fn test_taproot_script_spend_sign_include_some_leaves() {
         "Unable to finalize tx"
     );
 
-    assert!(psbt.inputs[0]
+    assert!(psbt.psbt.inputs[0]
         .tap_script_sigs
         .iter()
         .all(|s| included_script_leaves.contains(&s.0 .1)
@@ -2291,7 +2291,7 @@ fn test_taproot_script_spend_sign_exclude_some_leaves() {
     let mut builder = wallet.build_tx();
     builder.add_recipient(addr.script_pubkey(), Amount::from_sat(25_000));
     let mut psbt = builder.finish().unwrap();
-    let mut script_leaves: Vec<_> = psbt.inputs[0]
+    let mut script_leaves: Vec<_> = psbt.psbt.inputs[0]
         .tap_scripts
         .clone()
         .values()
@@ -2313,7 +2313,7 @@ fn test_taproot_script_spend_sign_exclude_some_leaves() {
         "Unable to finalize tx"
     );
 
-    assert!(psbt.inputs[0]
+    assert!(psbt.psbt.inputs[0]
         .tap_script_sigs
         .iter()
         .all(|s| included_script_leaves.contains(&s.0 .1)
@@ -2340,7 +2340,7 @@ fn test_taproot_script_spend_sign_no_leaves() {
         )
         .unwrap();
 
-    assert!(psbt.inputs.iter().all(|i| i.tap_script_sigs.is_empty()));
+    assert!(psbt.psbt.inputs.iter().all(|i| i.tap_script_sigs.is_empty()));
 }
 
 #[test]
@@ -2362,7 +2362,7 @@ fn test_taproot_sign_derive_index_from_psbt() {
     // signing with an empty db means that we will only look at the psbt to infer the
     // derivation index
     assert!(
-        wallet_empty.sign(&mut psbt, Default::default()).unwrap(),
+        wallet_empty.sign(&mut psbt.psbt, Default::default()).unwrap(),
         "Unable to finalize tx"
     );
 }
@@ -2378,7 +2378,7 @@ fn test_taproot_sign_explicit_sighash_all() {
         .drain_wallet();
     let mut psbt = builder.finish().unwrap();
 
-    let result = wallet.sign(&mut psbt, Default::default());
+    let result = wallet.sign(&mut psbt.psbt, Default::default());
     assert!(
         result.is_ok(),
         "Signing should work because SIGHASH_ALL is safe"
@@ -2398,9 +2398,9 @@ fn test_taproot_sign_non_default_sighash() {
         .drain_wallet();
     let mut psbt = builder.finish().unwrap();
 
-    let witness_utxo = psbt.inputs[0].witness_utxo.take();
+    let witness_utxo = psbt.psbt.inputs[0].witness_utxo.take();
 
-    let result = wallet.sign(&mut psbt, Default::default());
+    let result = wallet.sign(&mut psbt.psbt, Default::default());
     assert!(
         result.is_err(),
         "Signing should have failed because the TX uses non-standard sighashes"
@@ -2430,7 +2430,7 @@ fn test_taproot_sign_non_default_sighash() {
     );
 
     // restore the witness_utxo
-    psbt.inputs[0].witness_utxo = witness_utxo;
+    psbt.psbt.inputs[0].witness_utxo = witness_utxo;
 
     let result = wallet.sign(
         &mut psbt,
@@ -2446,7 +2446,7 @@ fn test_taproot_sign_non_default_sighash() {
         "Should finalize the input since we can produce signatures"
     );
 
-    let extracted = psbt.extract_tx().expect("failed to extract tx");
+    let extracted = psbt.psbt.extract_tx().expect("failed to extract tx");
     assert_eq!(
         *extracted.input[0].witness.to_vec()[0].last().unwrap(),
         sighash as u8,
@@ -2636,9 +2636,9 @@ fn test_fee_rate_sign_no_grinding_high_r() {
         // Changing the OP_RETURN data will make the signature change (but not the fee, until
         // data[0] is small enough)
         data.as_mut_bytes()[0] += 1;
-        psbt.unsigned_tx.output[op_return_vout].script_pubkey = ScriptBuf::new_op_return(&data);
+        psbt.psbt.unsigned_tx.output[op_return_vout].script_pubkey = ScriptBuf::new_op_return(&data);
         // Clearing the previous signature
-        psbt.inputs[0].partial_sigs.clear();
+        psbt.psbt.inputs[0].partial_sigs.clear();
         // Signing
         wallet
             .sign(
@@ -2651,8 +2651,8 @@ fn test_fee_rate_sign_no_grinding_high_r() {
             )
             .unwrap();
         // We only have one key in the partial_sigs map, this is a trick to retrieve it
-        let key = psbt.inputs[0].partial_sigs.keys().next().unwrap();
-        sig_len = psbt.inputs[0].partial_sigs[key]
+        let key = psbt.psbt.inputs[0].partial_sigs.keys().next().unwrap();
+        sig_len = psbt.psbt.inputs[0].partial_sigs[key]
             .signature
             .serialize_der()
             .len();
@@ -2699,8 +2699,8 @@ fn test_fee_rate_sign_grinding_low_r() {
         )
         .unwrap();
 
-    let key = psbt.inputs[0].partial_sigs.keys().next().unwrap();
-    let sig_len = psbt.inputs[0].partial_sigs[key]
+    let key = psbt.psbt.inputs[0].partial_sigs.keys().next().unwrap();
+    let sig_len = psbt.psbt.inputs[0].partial_sigs[key]
         .signature
         .serialize_der()
         .len();
@@ -2857,8 +2857,8 @@ fn single_descriptor_wallet_can_create_tx_and_receive_change() {
     let mut builder = wallet.build_tx();
     builder.add_recipient(addr.script_pubkey(), amount);
     let mut psbt = builder.finish().unwrap();
-    assert!(wallet.sign(&mut psbt, SignOptions::default()).unwrap());
-    let tx = psbt.extract_tx().unwrap();
+    assert!(wallet.sign(&mut psbt.psbt, SignOptions::default()).unwrap());
+    let tx = psbt.psbt.extract_tx().unwrap();
     let _txid = tx.compute_txid();
     insert_tx(&mut wallet, tx);
     let unspent: Vec<_> = wallet.list_unspent().collect();

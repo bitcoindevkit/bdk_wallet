@@ -78,11 +78,11 @@ fn main() -> Result<(), anyhow::Error> {
     tx_builder.fee_rate(target_fee_rate);
 
     let mut psbt = tx_builder.finish()?;
-    let finalized = wallet.sign(&mut psbt, SignOptions::default())?;
+    let finalized = wallet.sign(&mut psbt.psbt, SignOptions::default())?;
     assert!(finalized);
-    let original_fee = psbt.fee_amount().unwrap();
-    let tx_feerate = psbt.fee_rate().unwrap();
-    let tx = psbt.extract_tx()?;
+    let original_fee = psbt.psbt.fee_amount().unwrap();
+    let tx_feerate = psbt.fee_rate;
+    let tx = psbt.psbt.extract_tx()?;
     client.broadcast(&tx)?;
     let txid = tx.compute_txid();
     println!("Tx broadcasted! Txid: https://mempool.space/testnet4/tx/{txid}");
@@ -115,8 +115,8 @@ fn main() -> Result<(), anyhow::Error> {
     let mut new_psbt = builder.finish().unwrap();
     let finalize_tx = wallet.sign(&mut new_psbt, SignOptions::default())?;
     assert!(finalize_tx);
-    let new_fee = new_psbt.fee_amount().unwrap();
-    let bumped_tx = new_psbt.extract_tx()?;
+    let new_fee = new_psbt.psbt.fee_amount().unwrap();
+    let bumped_tx = new_psbt.psbt.extract_tx()?;
     assert_eq!(
         bumped_tx
             .output
