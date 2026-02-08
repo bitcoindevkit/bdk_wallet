@@ -22,10 +22,10 @@ pub fn parse_descriptor(s: &str) -> (Descriptor<DescriptorPublicKey>, KeyMap) {
 /// fee.
 #[macro_export]
 macro_rules! check_fee {
-    ($wallet:expr, $psbt:expr) => {{
-        let tx = $psbt.psbt.clone().extract_tx().expect("failed to extract tx");
+    ($wallet:expr, $psbt: expr) => {{
+        let tx = $psbt.clone().extract_tx().expect("failed to extract tx");
         let tx_fee = $wallet.calculate_fee(&tx).expect("failed to calculate fee");
-        assert_eq!(Some(tx_fee), $psbt.psbt.fee_amount());
+        assert_eq!(Some(tx_fee), $psbt.fee_amount());
         tx_fee
     }};
 }
@@ -33,9 +33,9 @@ macro_rules! check_fee {
 #[macro_export]
 macro_rules! assert_fee_rate {
     ($psbt:expr, $fees:expr, $fee_rate:expr $( ,@dust_change $( $dust_change:expr )* )* $( ,@add_signature $( $add_signature:expr )* )* ) => ({
-        let psbt = $psbt.psbt.clone();
+        let psbt = $psbt.clone();
         #[allow(unused_mut)]
-        let mut tx = $psbt.psbt.clone().extract_tx().expect("failed to extract tx");
+        let mut tx = $psbt.clone().extract_tx().expect("failed to extract tx");
 
         $(
             $( $add_signature )*
@@ -77,9 +77,9 @@ macro_rules! assert_fee_rate {
 #[macro_export]
 macro_rules! assert_fee_rate_legacy {
     ($psbt:expr, $fees:expr, $fee_rate:expr $( ,@dust_change $( $dust_change:expr )* )* $( ,@add_signature $( $add_signature:expr )* )* ) => ({
-        let psbt = $psbt.psbt.clone();
+        let psbt = $psbt.clone();
         #[allow(unused_mut)]
-        let mut tx = $psbt.psbt.clone().psbt.extract_tx().expect("failed to extract tx");
+        let mut tx = $psbt.clone().extract_tx().expect("failed to extract tx");
 
         $(
             $( $add_signature )*

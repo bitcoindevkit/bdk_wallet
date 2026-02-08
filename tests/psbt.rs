@@ -14,13 +14,13 @@ fn test_psbt_malformed_psbt_input_legacy() {
     let send_to = wallet.peek_address(KeychainKind::External, 0);
     let mut builder = wallet.build_tx();
     builder.add_recipient(send_to.script_pubkey(), Amount::from_sat(10_000));
-    let mut psbt = builder.finish().unwrap();
-    psbt.psbt.inputs.push(psbt_bip.inputs[0].clone());
+    let mut psbt = builder.finish().unwrap().psbt;
+    psbt.inputs.push(psbt_bip.inputs[0].clone());
     let options = SignOptions {
         trust_witness_utxo: true,
         ..Default::default()
     };
-    let _ = wallet.sign(&mut psbt.psbt, options).unwrap();
+    let _ = wallet.sign(&mut psbt, options).unwrap();
 }
 
 #[test]
@@ -31,13 +31,13 @@ fn test_psbt_malformed_psbt_input_segwit() {
     let send_to = wallet.peek_address(KeychainKind::External, 0);
     let mut builder = wallet.build_tx();
     builder.add_recipient(send_to.script_pubkey(), Amount::from_sat(10_000));
-    let mut psbt = builder.finish().unwrap();
-    psbt.psbt.inputs.push(psbt_bip.inputs[1].clone());
+    let mut psbt = builder.finish().unwrap().psbt;
+    psbt.inputs.push(psbt_bip.inputs[1].clone());
     let options = SignOptions {
         trust_witness_utxo: true,
         ..Default::default()
     };
-    let _ = wallet.sign(&mut psbt.psbt, options).unwrap();
+    let _ = wallet.sign(&mut psbt, options).unwrap();
 }
 
 #[test]
@@ -47,13 +47,13 @@ fn test_psbt_malformed_tx_input() {
     let send_to = wallet.peek_address(KeychainKind::External, 0);
     let mut builder = wallet.build_tx();
     builder.add_recipient(send_to.script_pubkey(), Amount::from_sat(10_000));
-    let mut psbt = builder.finish().unwrap();
-    psbt.psbt.unsigned_tx.input.push(TxIn::default());
+    let mut psbt = builder.finish().unwrap().psbt;
+    psbt.unsigned_tx.input.push(TxIn::default());
     let options = SignOptions {
         trust_witness_utxo: true,
         ..Default::default()
     };
-    let _ = wallet.sign(&mut psbt.psbt, options).unwrap();
+    let _ = wallet.sign(&mut psbt, options).unwrap();
 }
 
 #[test]
@@ -63,15 +63,15 @@ fn test_psbt_sign_with_finalized() {
     let send_to = wallet.peek_address(KeychainKind::External, 0);
     let mut builder = wallet.build_tx();
     builder.add_recipient(send_to.script_pubkey(), Amount::from_sat(10_000));
-    let mut psbt = builder.finish().unwrap();
+    let mut psbt = builder.finish().unwrap().psbt;
 
     // add a finalized input
-    psbt.psbt.inputs.push(psbt_bip.inputs[0].clone());
-    psbt.psbt.unsigned_tx
+    psbt.inputs.push(psbt_bip.inputs[0].clone());
+    psbt.unsigned_tx
         .input
         .push(psbt_bip.unsigned_tx.input[0].clone());
 
-    let _ = wallet.sign(&mut psbt.psbt, SignOptions::default()).unwrap();
+    let _ = wallet.sign(&mut psbt, SignOptions::default()).unwrap();
 }
 
 #[test]
@@ -85,16 +85,16 @@ fn test_psbt_fee_rate_with_witness_utxo() {
     let mut builder = wallet.build_tx();
     builder.drain_to(addr.script_pubkey()).drain_wallet();
     builder.fee_rate(expected_fee_rate);
-    let mut psbt = builder.finish().unwrap();
-    let fee_amount = psbt.psbt.fee_amount();
+    let mut psbt = builder.finish().unwrap().psbt;
+    let fee_amount = psbt.fee_amount();
     assert!(fee_amount.is_some());
 
-    let unfinalized_fee_rate = psbt.fee_rate;
+    let unfinalized_fee_rate = psbt.fee_rate().unwrap();
 
-    let finalized = wallet.sign(&mut psbt.psbt, Default::default()).unwrap();
+    let finalized = wallet.sign(&mut psbt, Default::default()).unwrap();
     assert!(finalized);
 
-    let finalized_fee_rate = psbt.fee_rate;
+    let finalized_fee_rate = psbt.fee_rate().unwrap();
     assert!(finalized_fee_rate >= expected_fee_rate);
     assert!(finalized_fee_rate < unfinalized_fee_rate);
 }
@@ -110,15 +110,15 @@ fn test_psbt_fee_rate_with_nonwitness_utxo() {
     let mut builder = wallet.build_tx();
     builder.drain_to(addr.script_pubkey()).drain_wallet();
     builder.fee_rate(expected_fee_rate);
-    let mut psbt = builder.finish().unwrap();
-    let fee_amount = psbt.psbt.fee_amount();
+    let mut psbt = builder.finish().unwrap().psbt;
+    let fee_amount = psbt.fee_amount();
     assert!(fee_amount.is_some());
-    let unfinalized_fee_rate = psbt.fee_rate;
+    let unfinalized_fee_rate = psbt.fee_rate().unwrap();
 
-    let finalized = wallet.sign(&mut psbt.psbt, Default::default()).unwrap();
+    let finalized = wallet.sign(&mut psbt, Default::default()).unwrap();
     assert!(finalized);
 
-    let finalized_fee_rate = psbt.fee_rate;
+    let finalized_fee_rate = psbt.fee_rate().unwrap();
     assert!(finalized_fee_rate >= expected_fee_rate);
     assert!(finalized_fee_rate < unfinalized_fee_rate);
 }
@@ -134,12 +134,12 @@ fn test_psbt_fee_rate_with_missing_txout() {
     let mut builder = wpkh_wallet.build_tx();
     builder.drain_to(addr.script_pubkey()).drain_wallet();
     builder.fee_rate(expected_fee_rate);
-    let mut wpkh_psbt = builder.finish().unwrap();
+    let mut wpkh_psbt = builder.finish().unwrap().psbt;
 
-    wpkh_psbt.psbt.inputs[0].witness_utxo = None;
-    wpkh_psbt.psbt.inputs[0].non_witness_utxo = None;
-    assert!(wpkh_psbt.psbt.fee_amount().is_none());
-    assert!(wpkh_false);
+    wpkh_psbt.inputs[0].witness_utxo = None;
+    wpkh_psbt.inputs[0].non_witness_utxo = None;
+    assert!(wpkh_psbt.fee_amount().is_none());
+    assert!(wpkh_psbt.fee_rate().is_none());
 
     let desc = "pkh(tprv8ZgxMBicQKsPd3EupYiPRhaMooHKUHJxNsTfYuScep13go8QFfHdtkG9nRkFGb7busX4isf6X9dURGCoKgitaApQ6MupRhZMcELAxTBRJgS/0)";
     let change_desc = "pkh(tprv8ZgxMBicQKsPd3EupYiPRhaMooHKUHJxNsTfYuScep13go8QFfHdtkG9nRkFGb7busX4isf6X9dURGCoKgitaApQ6MupRhZMcELAxTBRJgS/1)";
@@ -148,11 +148,11 @@ fn test_psbt_fee_rate_with_missing_txout() {
     let mut builder = pkh_wallet.build_tx();
     builder.drain_to(addr.script_pubkey()).drain_wallet();
     builder.fee_rate(expected_fee_rate);
-    let mut pkh_psbt = builder.finish().unwrap();
+    let mut pkh_psbt = builder.finish().unwrap().psbt;
 
-    pkh_psbt.psbt.inputs[0].non_witness_utxo = None;
-    assert!(pkh_psbt.psbt.fee_amount().is_none());
-    assert!(pkh_false);
+    pkh_psbt.inputs[0].non_witness_utxo = None;
+    assert!(pkh_psbt.fee_amount().is_none());
+    assert!(pkh_psbt.fee_rate().is_none());
 }
 
 #[test]
@@ -177,8 +177,8 @@ fn test_psbt_multiple_internalkey_signers() {
     let send_to = wallet.peek_address(KeychainKind::External, 0);
     let mut builder = wallet.build_tx();
     builder.drain_to(send_to.script_pubkey()).drain_wallet();
-    let mut psbt = builder.finish().unwrap();
-    let unsigned_tx = psbt.psbt.unsigned_tx.clone();
+    let mut psbt = builder.finish().unwrap().psbt;
+    let unsigned_tx = psbt.unsigned_tx.clone();
 
     // Adds a signer for the wrong internal key, bdk should not use this key to sign
     wallet.add_signer(
@@ -192,11 +192,11 @@ fn test_psbt_multiple_internalkey_signers() {
             },
         )),
     );
-    let finalized = wallet.sign(&mut psbt.psbt, SignOptions::default()).unwrap();
+    let finalized = wallet.sign(&mut psbt, SignOptions::default()).unwrap();
     assert!(finalized);
 
     // To verify, we need the signature, message, and pubkey
-    let witness = psbt.psbt.inputs[0].final_script_witness.as_ref().unwrap();
+    let witness = psbt.inputs[0].final_script_witness.as_ref().unwrap();
     assert!(!witness.is_empty());
     let signature = schnorr::Signature::from_slice(witness.iter().next().unwrap()).unwrap();
 

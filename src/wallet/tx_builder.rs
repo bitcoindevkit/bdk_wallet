@@ -95,7 +95,7 @@ use crate::{KeychainKind, LocalOutput, Utxo, WeightedUtxo};
 ///     builder.finish()?
 /// };
 ///
-/// assert_eq!(psbt1.unsigned_tx.output[..2], psbt2.unsigned_tx.output[..2]);
+/// assert_eq!(psbt1.psbt.unsigned_tx.output[..2], psbt2.psbt.unsigned_tx.output[..2]);
 /// # Ok::<(), anyhow::Error>(())
 /// ```
 ///
@@ -773,7 +773,10 @@ impl<Cs: CoinSelectionAlgorithm> TxBuilder<'_, Cs> {
     ///
     /// **WARNING**: To avoid change address reuse you must persist the changes resulting from one
     /// or more calls to this method before closing the wallet. See [`Wallet::reveal_next_address`].
-    pub fn finish_with_aux_rand(self, rng: &mut impl RngCore) -> Result<BuilderResult, CreateTxError> {
+    pub fn finish_with_aux_rand(
+        self,
+        rng: &mut impl RngCore,
+    ) -> Result<BuilderResult, CreateTxError> {
         self.wallet.create_tx(self.coin_selection, self.params, rng)
     }
 }
@@ -1235,7 +1238,12 @@ mod test {
                 .drain_wallet()
                 .drain_to(recipient.script_pubkey());
             let tx = builder.finish().unwrap();
-            let output = tx.unsigned_tx.output.first().expect("must have one output");
+            let output = tx
+                .psbt
+                .unsigned_tx
+                .output
+                .first()
+                .expect("must have one output");
             assert_eq!(output.value, Amount::ONE_BTC * 6);
         }
 
@@ -1248,7 +1256,12 @@ mod test {
                 .drain_wallet()
                 .drain_to(recipient.script_pubkey());
             let tx = builder.finish().unwrap();
-            let output = tx.unsigned_tx.output.first().expect("must have one output");
+            let output = tx
+                .psbt
+                .unsigned_tx
+                .output
+                .first()
+                .expect("must have one output");
             assert_eq!(output.value, Amount::ONE_BTC * 3);
         }
 
@@ -1261,7 +1274,12 @@ mod test {
                 .drain_wallet()
                 .drain_to(recipient.script_pubkey());
             let tx = builder.finish().unwrap();
-            let output = tx.unsigned_tx.output.first().expect("must have one output");
+            let output = tx
+                .psbt
+                .unsigned_tx
+                .output
+                .first()
+                .expect("must have one output");
             assert_eq!(output.value, Amount::ONE_BTC);
         }
     }
@@ -1297,7 +1315,7 @@ mod test {
         builder.fee_absolute(Amount::from_sat(1_000));
         let psbt = builder.finish().unwrap();
 
-        let tx = psbt.extract_tx().unwrap();
+        let tx = psbt.psbt.extract_tx().unwrap();
         let txid = tx.compute_txid();
         let feerate = wallet.calculate_fee_rate(&tx).unwrap().to_sat_per_kwu();
         insert_tx(&mut wallet, tx);

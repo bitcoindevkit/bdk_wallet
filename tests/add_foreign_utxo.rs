@@ -35,11 +35,11 @@ fn test_add_foreign_utxo() {
         .only_witness_utxo()
         .add_foreign_utxo(utxo.outpoint, psbt_input, foreign_utxo_satisfaction)
         .unwrap();
-    let mut psbt = builder.finish().unwrap();
+    let mut psbt = builder.finish().unwrap().psbt;
     wallet1.insert_txout(utxo.outpoint, utxo.txout);
     let fee = check_fee!(wallet1, psbt);
     let (sent, received) =
-        wallet1.sent_and_received(&psbt.clone().psbt.extract_tx().expect("failed to extract tx"));
+        wallet1.sent_and_received(&psbt.clone().extract_tx().expect("failed to extract tx"));
 
     assert_eq!(
         (sent - received),
@@ -48,7 +48,7 @@ fn test_add_foreign_utxo() {
     );
 
     assert!(
-        psbt.psbt.unsigned_tx
+        psbt.unsigned_tx
             .input
             .iter()
             .any(|input| input.previous_output == utxo.outpoint),
@@ -109,8 +109,8 @@ fn test_calculate_fee_with_missing_foreign_utxo() {
         .only_witness_utxo()
         .add_foreign_utxo(utxo.outpoint, psbt_input, foreign_utxo_satisfaction)
         .unwrap();
-    let psbt = builder.finish().unwrap();
-    let tx = psbt.psbt.extract_tx().expect("failed to extract tx");
+    let psbt = builder.finish().unwrap().psbt;
+    let tx = psbt.extract_tx().expect("failed to extract tx");
     let res = wallet1.calculate_fee(&tx);
     assert!(
         matches!(res, Err(CalculateFeeError::MissingTxOut(outpoints)) if outpoints[0] == utxo.outpoint)
@@ -270,9 +270,9 @@ fn test_taproot_foreign_utxo() {
         .add_recipient(addr.script_pubkey(), Amount::from_sat(60_000))
         .add_foreign_utxo(utxo.outpoint, psbt_input, foreign_utxo_satisfaction)
         .unwrap();
-    let psbt = builder.finish().unwrap();
+    let psbt = builder.finish().unwrap().psbt;
     let (sent, received) =
-        wallet1.sent_and_received(&psbt.clone().psbt.extract_tx().expect("failed to extract tx"));
+        wallet1.sent_and_received(&psbt.clone().extract_tx().expect("failed to extract tx"));
     wallet1.insert_txout(utxo.outpoint, utxo.txout);
     let fee = check_fee!(wallet1, psbt);
 
@@ -283,7 +283,7 @@ fn test_taproot_foreign_utxo() {
     );
 
     assert!(
-        psbt.psbt.unsigned_tx
+        psbt.unsigned_tx
             .input
             .iter()
             .any(|input| input.previous_output == utxo.outpoint),

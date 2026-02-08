@@ -1679,10 +1679,7 @@ impl Wallet {
             }
         }
 
-        Ok(tx_builder::BuilderResult {
-            psbt,
-            fee_rate,
-        })
+        Ok(tx_builder::BuilderResult { psbt, fee_rate })
     }
 
     /// Bump the fee of a transaction previously created with this wallet.
@@ -1710,8 +1707,8 @@ impl Wallet {
     ///         .add_recipient(to_address.script_pubkey(), Amount::from_sat(50_000));
     ///     builder.finish()?
     /// };
-    /// let _ = wallet.sign(&mut psbt, SignOptions::default())?;
-    /// let tx = psbt.clone().extract_tx().expect("tx");
+    /// let _ = wallet.sign(&mut psbt.psbt, SignOptions::default())?;
+    /// let tx = psbt.psbt.clone().extract_tx().expect("tx");
     /// // broadcast tx but it's taking too long to confirm so we want to bump the fee
     /// let mut psbt =  {
     ///     let mut builder = wallet.build_fee_bump(tx.compute_txid())?;
@@ -1720,8 +1717,8 @@ impl Wallet {
     ///     builder.finish()?
     /// };
     ///
-    /// let _ = wallet.sign(&mut psbt, SignOptions::default())?;
-    /// let fee_bumped_tx = psbt.extract_tx();
+    /// let _ = wallet.sign(&mut psbt.psbt, SignOptions::default())?;
+    /// let fee_bumped_tx = psbt.psbt.extract_tx();
     /// // broadcast fee_bumped_tx to replace original
     /// # Ok::<(), anyhow::Error>(())
     /// ```
@@ -1886,7 +1883,7 @@ impl Wallet {
     ///     builder.add_recipient(to_address.script_pubkey(), Amount::from_sat(50_000));
     ///     builder.finish()?
     /// };
-    /// let finalized = wallet.sign(&mut psbt, SignOptions::default())?;
+    /// let finalized = wallet.sign(&mut psbt.psbt, SignOptions::default())?;
     /// assert!(finalized, "we should have signed all the inputs");
     /// # Ok::<(),anyhow::Error>(())
     pub fn sign(&self, psbt: &mut Psbt, sign_options: SignOptions) -> Result<bool, SignerError> {
