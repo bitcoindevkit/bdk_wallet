@@ -1,3 +1,5 @@
+use alloc::string::{String, ToString};
+
 use bdk_chain::{
     indexed_tx_graph, keychain_txout, local_chain, tx_graph, ConfirmationBlockTime, Merge,
 };
@@ -5,6 +7,7 @@ use miniscript::{Descriptor, DescriptorPublicKey};
 use serde::{Deserialize, Serialize};
 
 use crate::locked_outpoints;
+use crate::wallet::labels;
 
 type IndexedTxGraphChangeSet =
     indexed_tx_graph::ChangeSet<ConfirmationBlockTime, keychain_txout::ChangeSet>;
@@ -118,6 +121,8 @@ pub struct ChangeSet {
     pub indexer: keychain_txout::ChangeSet,
     /// Changes to locked outpoints.
     pub locked_outpoints: locked_outpoints::ChangeSet,
+    /// Changes to BIP-0329 labels.
+    pub labels: labels::ChangeSet,
 }
 
 impl Merge for ChangeSet {
@@ -149,6 +154,9 @@ impl Merge for ChangeSet {
         // merge locked outpoints
         self.locked_outpoints.merge(other.locked_outpoints);
 
+        // merge labels
+        Merge::merge(&mut self.labels, other.labels);
+
         Merge::merge(&mut self.local_chain, other.local_chain);
         Merge::merge(&mut self.tx_graph, other.tx_graph);
         Merge::merge(&mut self.indexer, other.indexer);
@@ -162,6 +170,7 @@ impl Merge for ChangeSet {
             && self.tx_graph.is_empty()
             && self.indexer.is_empty()
             && self.locked_outpoints.is_empty()
+            && self.labels.is_empty()
     }
 }
 
@@ -173,6 +182,8 @@ impl ChangeSet {
     pub const WALLET_TABLE_NAME: &'static str = "bdk_wallet";
     /// Name of table to store wallet locked outpoints.
     pub const WALLET_OUTPOINT_LOCK_TABLE_NAME: &'static str = "bdk_wallet_locked_outpoints";
+    /// Name of table to store BIP-0329 labels.
+    pub const WALLET_LABELS_TABLE_NAME: &'static str = "bdk_wallet_labels";
 
     /// Get v0 sqlite [ChangeSet] schema
     pub fn schema_v0() -> alloc::string::String {
@@ -199,12 +210,25 @@ impl ChangeSet {
         )
     }
 
+    /// Get v2 sqlite [`ChangeSet`] schema. Schema v2 adds a table for BIP-0329 labels.
+    pub fn schema_v2() -> alloc::string::String {
+        format!(
+            "CREATE TABLE {} ( \
+                label_type TEXT NOT NULL, \
+                ref_value TEXT NOT NULL, \
+                label_data TEXT NOT NULL, \
+                PRIMARY KEY(label_type, ref_value) \
+                ) STRICT;",
+            Self::WALLET_LABELS_TABLE_NAME,
+        )
+    }
+
     /// Initialize sqlite tables for wallet tables.
     pub fn init_sqlite_tables(db_tx: &chain::rusqlite::Transaction) -> chain::rusqlite::Result<()> {
         crate::rusqlite_impl::migrate_schema(
             db_tx,
             Self::WALLET_SCHEMA_NAME,
-            &[&Self::schema_v0(), &Self::schema_v1()],
+            &[&Self::schema_v0(), &Self::schema_v1(), &Self::schema_v2()],
         )?;
 
         bdk_chain::local_chain::ChangeSet::init_sqlite_tables(db_tx)?;
@@ -264,6 +288,35 @@ impl ChangeSet {
         changeset.local_chain = local_chain::ChangeSet::from_sqlite(db_tx)?;
         changeset.tx_graph = tx_graph::ChangeSet::<_>::from_sqlite(db_tx)?;
         changeset.indexer = keychain_txout::ChangeSet::from_sqlite(db_tx)?;
+
+        // Select labels.
+        let mut labels_stmt = db_tx.prepare(&format!(
+            "SELECT label_type, ref_value, label_data FROM {}",
+            Self::WALLET_LABELS_TABLE_NAME,
+        ))?;
+        let label_rows = labels_stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>("label_type")?,
+                row.get::<_, String>("ref_value")?,
+                row.get::<_, String>("label_data")?,
+            ))
+        })?;
+        for row in label_rows {
+            let (label_type_str, ref_value, label_data) = row?;
+            if let Ok(label_record) = serde_json::from_str::<labels::LabelRecord>(&label_data) {
+                let label_type = match label_type_str.as_str() {
+                    "tx" => labels::LabelType::Tx,
+                    "addr" => labels::LabelType::Addr,
+                    "pubkey" => labels::LabelType::Pubkey,
+                    "input" => labels::LabelType::Input,
+                    "output" => labels::LabelType::Output,
+                    "xpub" => labels::LabelType::Xpub,
+                    _ => continue,
+                };
+                let key = labels::LabelKey::new(label_type, ref_value);
+                changeset.labels.labels.insert(key, Some(label_record));
+            }
+        }
 
         Ok(changeset)
     }
@@ -333,6 +386,33 @@ impl ChangeSet {
             }
         }
 
+        // Insert or delete labels.
+        let mut insert_label_stmt = db_tx.prepare_cached(&format!(
+            "INSERT OR REPLACE INTO {}(label_type, ref_value, label_data) VALUES(:label_type, :ref_value, :label_data)",
+            Self::WALLET_LABELS_TABLE_NAME
+        ))?;
+        let mut delete_label_stmt = db_tx.prepare_cached(&format!(
+            "DELETE FROM {} WHERE label_type=:label_type AND ref_value=:ref_value",
+            Self::WALLET_LABELS_TABLE_NAME,
+        ))?;
+        for (key, value) in &self.labels.labels {
+            let label_type_str = key.label_type.to_string();
+            if let Some(record) = value {
+                if let Ok(label_data) = serde_json::to_string(record) {
+                    insert_label_stmt.execute(named_params! {
+                        ":label_type": label_type_str,
+                        ":ref_value": &key.reference,
+                        ":label_data": label_data,
+                    })?;
+                }
+            } else {
+                delete_label_stmt.execute(named_params! {
+                    ":label_type": label_type_str,
+                    ":ref_value": &key.reference,
+                })?;
+            }
+        }
+
         self.local_chain.persist_to_sqlite(db_tx)?;
         self.tx_graph.persist_to_sqlite(db_tx)?;
         self.indexer.persist_to_sqlite(db_tx)?;
@@ -381,6 +461,15 @@ impl From<locked_outpoints::ChangeSet> for ChangeSet {
     fn from(locked_outpoints: locked_outpoints::ChangeSet) -> Self {
         Self {
             locked_outpoints,
+            ..Default::default()
+        }
+    }
+}
+
+impl From<labels::ChangeSet> for ChangeSet {
+    fn from(labels: labels::ChangeSet) -> Self {
+        Self {
+            labels,
             ..Default::default()
         }
     }

@@ -172,6 +172,7 @@ where
         tx_graph: tx_graph_changeset,
         indexer: keychain_txout_changeset,
         locked_outpoints: locked_outpoints_changeset,
+        labels: Default::default(),
     };
 
     // persist and load
@@ -231,6 +232,7 @@ where
         tx_graph: tx_graph_changeset,
         indexer: keychain_txout_changeset,
         locked_outpoints: locked_outpoints_changeset,
+        labels: Default::default(),
     };
 
     // persist, load and check if same as merged

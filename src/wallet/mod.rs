@@ -54,6 +54,7 @@ pub mod coin_selection;
 pub mod error;
 mod event;
 pub mod export;
+pub mod labels;
 pub mod locked_outpoints;
 mod params;
 mod persisted;
@@ -93,6 +94,7 @@ pub use utils::TxDetails;
 ///
 /// 1. output *descriptors* from which it can derive addresses.
 /// 2. [`signer`]s that can contribute signatures to addresses instantiated from the descriptors.
+/// 3. BIP-0329 labels for annotating transactions, addresses, and other wallet items.
 ///
 /// The user is responsible for loading and writing wallet changes which are represented as
 /// [`ChangeSet`]s (see [`take_staged`]). Also see individual functions and example for instructions
@@ -113,6 +115,7 @@ pub struct Wallet {
     network: Network,
     secp: SecpCtx,
     locked_outpoints: HashSet<OutPoint>,
+    labels: BTreeMap<labels::LabelKey, labels::LabelRecord>,
 }
 
 /// An update to [`Wallet`].
@@ -507,6 +510,7 @@ impl Wallet {
             stage,
             secp,
             locked_outpoints,
+            labels: BTreeMap::new(),
         })
     }
 
@@ -705,6 +709,14 @@ impl Wallet {
         )
         .map_err(LoadError::Descriptor)?;
 
+        // Load labels from changeset into in-memory storage
+        let labels = changeset
+            .labels
+            .labels
+            .iter()
+            .filter_map(|(k, v)| v.as_ref().map(|r| (k.clone(), r.clone()))) // only keep labels that are not deleted
+            .collect();
+
         Ok(Some(Wallet {
             signers,
             change_signers,
@@ -714,6 +726,7 @@ impl Wallet {
             network,
             secp,
             locked_outpoints,
+            labels,
         }))
     }
 
@@ -2581,6 +2594,197 @@ impl Wallet {
             };
             self.stage.merge(changeset.into());
         }
+    }
+
+    // ======== BIP-0329 Label Methods ========
+
+    /// Set a BIP-0329 label record.
+    ///
+    /// Sets a label for the given key. If the label text is longer than 255 characters,
+    /// it will be truncated with a warning.
+    ///
+    /// **You must persist the staged change for the label to be persistent**.
+    pub fn set_label(
+        &mut self,
+        key: labels::LabelKey,
+        mut record: labels::LabelRecord,
+    ) -> Option<labels::LabelWarning> {
+        let warning = record.truncate_if_needed();
+        self.labels.insert(key.clone(), record.clone());
+        let mut changeset = labels::ChangeSet::default();
+        changeset.labels.insert(key, Some(record));
+        self.stage.merge(changeset.into());
+        warning
+    }
+
+    /// Set a transaction label with optional metadata fields.
+    ///
+    /// **You must persist the staged change for the label to be persistent**.
+    pub fn set_tx_label<S: Into<String>>(
+        &mut self,
+        txid: Txid,
+        label: S,
+    ) -> Option<labels::LabelWarning> {
+        let key = labels::LabelKey::for_tx(txid);
+        let record = labels::LabelRecord::Tx(labels::TxLabel::new(txid.to_string(), label));
+        self.set_label(key, record)
+    }
+
+    /// Set an address label with optional metadata fields.
+    ///
+    /// **You must persist the staged change for the label to be persistent**.
+    pub fn set_addr_label<S: Into<String>>(
+        &mut self,
+        address: &Address,
+        label: S,
+    ) -> Option<labels::LabelWarning> {
+        let key = labels::LabelKey::for_addr(address);
+        let record = labels::LabelRecord::Addr(labels::AddrLabel::new(address.to_string(), label));
+        self.set_label(key, record)
+    }
+
+    /// Get a label record by key.
+    pub fn get_label(&self, key: &labels::LabelKey) -> Option<&labels::LabelRecord> {
+        self.labels.get(key)
+    }
+
+    /// Get a transaction label.
+    pub fn get_tx_label(&self, txid: Txid) -> Option<&labels::TxLabel> {
+        let key = labels::LabelKey::for_tx(txid);
+        match self.labels.get(&key) {
+            Some(labels::LabelRecord::Tx(tx_label)) => Some(tx_label),
+            _ => None,
+        }
+    }
+
+    /// Get an address label.
+    pub fn get_addr_label(&self, address: &Address) -> Option<&labels::AddrLabel> {
+        let key = labels::LabelKey::for_addr(address);
+        match self.labels.get(&key) {
+            Some(labels::LabelRecord::Addr(addr_label)) => Some(addr_label),
+            _ => None,
+        }
+    }
+
+    /// Remove a label by key.
+    ///
+    /// **You must persist the staged change for the removal to be persistent**.
+    pub fn remove_label(&mut self, key: &labels::LabelKey) -> Option<labels::LabelRecord> {
+        let removed = self.labels.remove(key);
+        if removed.is_some() {
+            let mut changeset = labels::ChangeSet::default();
+            changeset.labels.insert(key.clone(), None);
+            self.stage.merge(changeset.into());
+        }
+        removed
+    }
+
+    /// Remove a transaction label.
+    ///
+    /// **You must persist the staged change for the removal to be persistent**.
+    pub fn remove_tx_label(&mut self, txid: Txid) -> Option<labels::LabelRecord> {
+        let key = labels::LabelKey::for_tx(txid);
+        self.remove_label(&key)
+    }
+
+    /// Remove an address label.
+    ///
+    /// **You must persist the staged change for the removal to be persistent**.
+    pub fn remove_addr_label(&mut self, address: &Address) -> Option<labels::LabelRecord> {
+        let key = labels::LabelKey::for_addr(address);
+        self.remove_label(&key)
+    }
+
+    /// Get an iterator over all labels in the wallet.
+    pub fn all_labels(&self) -> impl Iterator<Item = (&labels::LabelKey, &labels::LabelRecord)> {
+        self.labels.iter()
+    }
+
+    /// Export all labels to BIP-0329 JSONL format (optionally encrypted).
+    ///
+    /// This method exports all labels and auto-populates optional metadata fields
+    /// for transaction labels (height, time, fee, value) from wallet data when available.
+    ///
+    /// Returns a vector of bytes. If `passphrase` is provided, the output is encrypted.
+    /// Otherwise, it contains the JSONL string bytes.
+    pub fn export_labels_jsonl(
+        &self,
+        passphrase: Option<&str>,
+    ) -> Result<Vec<u8>, serde_json::Error> {
+        use alloc::string::ToString;
+        use alloc::vec::Vec;
+
+        let mut records: Vec<labels::LabelRecord> = Vec::new();
+
+        for record in self.labels.values() {
+            let mut record_clone = record.clone();
+
+            // Auto-populate transaction metadata if this is a tx label
+            if let labels::LabelRecord::Tx(ref mut tx_label) = record_clone {
+                // Try to parse txid and populate metadata from wallet
+                if let Ok(txid) = tx_label.r#ref.parse::<Txid>() {
+                    if let Some(wtx) = self.get_tx(txid) {
+                        // Populate height if confirmed
+                        if tx_label.height.is_none() {
+                            if let ChainPosition::Confirmed { anchor, .. } = &wtx.chain_position {
+                                tx_label.height = Some(anchor.block_id.height);
+                                // Also set time if available
+                                if tx_label.time.is_none() && anchor.confirmation_time > 0 {
+                                    tx_label.time = Some(anchor.confirmation_time.to_string());
+                                }
+                            }
+                        }
+
+                        // Populate fee if not set
+                        if tx_label.fee.is_none() {
+                            if let Ok(fee) = self.calculate_fee(&wtx.tx_node.tx) {
+                                tx_label.fee = Some(fee.to_sat() as i64);
+                            }
+                        }
+
+                        // Populate net value if not set
+                        if tx_label.value.is_none() {
+                            let (sent, received) = self.sent_and_received(&wtx.tx_node.tx);
+                            let net_value = received.to_sat() as i64 - sent.to_sat() as i64;
+                            tx_label.value = Some(net_value);
+                        }
+                    }
+                }
+            }
+
+            records.push(record_clone);
+        }
+
+        labels::export_labels(records.iter(), passphrase)
+    }
+
+    /// Import labels from BIP-0329 JSONL format (optionally decrypted).
+    ///
+    /// Parses `data` (which may be encrypted if `passphrase` is provided) and adds the labels to
+    /// the wallet. Labels for items not in the wallet are still imported.
+    ///
+    /// **You must persist the staged change for the labels to be persistent**.
+    ///
+    /// Returns the import result containing successfully imported labels, errors, and warnings.
+    pub fn import_labels_jsonl(
+        &mut self,
+        data: &[u8],
+        passphrase: Option<&str>,
+    ) -> labels::LabelImportResult {
+        let result = labels::import_labels(data, passphrase);
+
+        // Add successfully imported labels to the wallet
+        for record in &result.labels {
+            let key = labels::LabelKey::new(record.label_type(), record.reference());
+            self.labels.insert(key.clone(), record.clone());
+
+            // Stage the change for persistence
+            let mut changeset = labels::ChangeSet::default();
+            changeset.labels.insert(key, Some(record.clone()));
+            self.stage.merge(changeset.into());
+        }
+
+        result
     }
 
     /// Introduces a `block` of `height` to the wallet, and tries to connect it to the
