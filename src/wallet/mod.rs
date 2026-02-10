@@ -55,6 +55,7 @@ pub mod error;
 mod event;
 pub mod export;
 pub mod locked_outpoints;
+pub mod migration;
 mod params;
 mod persisted;
 pub mod signer;
