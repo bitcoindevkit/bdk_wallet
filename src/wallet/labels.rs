@@ -30,6 +30,8 @@ use chacha20poly1305::{
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 
+use crate::wallet::utils::{deserialize_option_boolsy, validate_iso8601, validate_rate_map};
+
 /// Maximum label length in characters. Labels longer than this will be truncated.
 pub const MAX_LABEL_LENGTH: usize = 255;
 
@@ -146,6 +148,38 @@ impl LabelRecord {
             LabelRecord::Output(l) => truncate_string(&mut l.label),
             LabelRecord::Xpub(l) => truncate_string(&mut l.label),
         }
+    }
+
+    /// Validate the record fields.
+    pub fn validate(&self) -> Result<(), String> {
+        match self {
+            LabelRecord::Tx(l) => {
+                if let Some(t) = &l.time {
+                    validate_iso8601(t)?;
+                }
+                if let Some(r) = &l.rate {
+                    validate_rate_map(r)?;
+                }
+            }
+            LabelRecord::Input(l) => {
+                if let Some(t) = &l.time {
+                    validate_iso8601(t)?;
+                }
+                if let Some(f) = &l.fmv {
+                    validate_rate_map(f)?;
+                }
+            }
+            LabelRecord::Output(l) => {
+                if let Some(t) = &l.time {
+                    validate_iso8601(t)?;
+                }
+                if let Some(f) = &l.fmv {
+                    validate_rate_map(f)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
     }
 }
 
@@ -290,7 +324,11 @@ pub struct OutputLabel {
     /// Label text (max 255 characters)
     pub label: String,
     /// Whether the output is spendable
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_option_boolsy",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub spendable: Option<bool>,
     /// Keypath (e.g., `/1/123` or full descriptor)
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -491,6 +529,13 @@ pub enum LabelImportError {
     },
     /// Encryption error
     Encryption(LabelEncryptionError),
+    /// Validation error (e.g., invalid time format)
+    ValidationError {
+        /// The line number that failed validation
+        line: usize,
+        /// The error message
+        message: String,
+    },
 }
 
 impl fmt::Display for LabelImportError {
@@ -507,6 +552,9 @@ impl fmt::Display for LabelImportError {
             }
             LabelImportError::Encryption(e) => {
                 write!(f, "Encryption error: {}", e)
+            }
+            LabelImportError::ValidationError { line, message } => {
+                write!(f, "Line {}: validation error: {}", line, message)
             }
         }
     }
@@ -592,6 +640,16 @@ pub fn import_labels(data: &[u8], passphrase: Option<&str>) -> LabelImportResult
                 if let Some(warning) = record.truncate_if_needed() {
                     result.warnings.push(warning);
                 }
+
+                // Field validation
+                if let Err(msg) = record.validate() {
+                    result.errors.push(LabelImportError::ValidationError {
+                        line: line_num + 1,
+                        message: msg,
+                    });
+                    continue;
+                }
+
                 result.labels.push(record);
             }
             Err(e) => {

@@ -9,15 +9,19 @@
 // You may not use this file except in accordance with one or both of these
 // licenses.
 
+use alloc::collections::BTreeMap;
+use alloc::string::String;
 use alloc::sync::Arc;
 use bitcoin::secp256k1::{All, Secp256k1};
 use bitcoin::{
     absolute, relative, Amount, FeeRate, Script, Sequence, SignedAmount, Transaction, Txid,
 };
 use chain::{ChainPosition, ConfirmationBlockTime};
+use core::fmt;
 use miniscript::{MiniscriptKey, Satisfier, ToPublicKey};
-
 use rand_core::RngCore;
+use serde::de::{self, Visitor};
+use serde::Deserializer;
 
 /// Trait to check if a value is below the dust limit.
 /// We are performing dust value calculation for a given script public key using rust-bitcoin to
@@ -161,6 +165,140 @@ pub struct TxDetails {
     pub chain_position: ChainPosition<ConfirmationBlockTime>,
     /// The complete [`Transaction`].
     pub tx: Arc<Transaction>,
+}
+
+/// Validate ISO-8601 time string format (basic YYYY-MM-DDThh:mm:ss check).
+pub fn validate_iso8601(s: &str) -> Result<(), String> {
+    // Basic ISO 8601 check: YYYY-MM-DDThh:mm:ss[Z|(+|-)hh:mm]
+    // 2023-01-01T00:00:00Z -> len 20
+    if s.len() < 19 {
+        return Err("ISO-8601 time string too short".into());
+    }
+
+    // Check separators
+    let bytes = s.as_bytes();
+    if bytes[4] != b'-' || bytes[7] != b'-' {
+        return Err("Invalid date separators".into());
+    }
+    if bytes[10] != b'T' && bytes[10] != b' ' {
+        // Allow ' ' or 'T'
+        return Err("Invalid time separator".into());
+    }
+    if bytes[13] != b':' || bytes[16] != b':' {
+        return Err("Invalid time separators".into());
+    }
+
+    // Check digits
+    for (i, b) in bytes.iter().enumerate() {
+        if matches!(i, 4 | 7 | 10 | 13 | 16) {
+            continue;
+        }
+        if i >= 19 {
+            break;
+        } // Check specific format part only, ignore timezone/fractional for basics
+        if !b.is_ascii_digit() {
+            return Err(alloc::format!("Invalid digit at position {}", i));
+        }
+    }
+
+    Ok(())
+}
+
+/// Validate rate map currency codes and values.
+pub fn validate_rate_map(m: &BTreeMap<String, f64>) -> Result<(), String> {
+    for (currency, rate) in m {
+        if *rate <= 0.0 {
+            return Err(alloc::format!(
+                "Rate logic error: {} has non-positive value",
+                currency
+            ));
+        }
+        // ISO 4217 check (basic 3 char check)
+        if currency.len() != 3 {
+            return Err(alloc::format!("Invalid currency code length: {}", currency));
+        }
+    }
+    Ok(())
+}
+
+/// Leniently deserialize an Option<bool> from boolean, number, or string.
+pub fn deserialize_option_boolsy<'de, D>(deserializer: D) -> Result<Option<bool>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct BoolsyVisitor;
+
+    impl<'de> Visitor<'de> for BoolsyVisitor {
+        type Value = Option<bool>;
+
+        fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            f.write_str("a boolean, number, or string representing a boolean")
+        }
+
+        fn visit_bool<E>(self, v: bool) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            Ok(Some(v))
+        }
+
+        fn visit_i64<E>(self, v: i64) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            Ok(Some(v != 0))
+        }
+
+        fn visit_u64<E>(self, v: u64) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            Ok(Some(v != 0))
+        }
+
+        fn visit_f64<E>(self, v: f64) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            Ok(Some(v != 0.0))
+        }
+
+        fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            let s = v.trim().to_lowercase();
+            match s.as_str() {
+                "true" | "1" | "yes" | "y" => Ok(Some(true)),
+                "false" | "0" | "no" | "n" | "" => Ok(Some(false)),
+                _ => Err(E::custom(format!("invalid boolsy string: {}", v))),
+            }
+        }
+
+        // Handle explicit null as false (per Python example)
+        fn visit_unit<E>(self) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            Ok(Some(false))
+        }
+
+        fn visit_none<E>(self) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            Ok(Some(false))
+        }
+
+        fn visit_some<D>(self, d: D) -> Result<Self::Value, D::Error>
+        where
+            D: Deserializer<'de>,
+        {
+            d.deserialize_any(self)
+        }
+    }
+
+    deserializer.deserialize_option(BoolsyVisitor)
 }
 
 #[cfg(test)]
