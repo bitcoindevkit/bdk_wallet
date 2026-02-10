@@ -759,7 +759,7 @@ impl<Cs: CoinSelectionAlgorithm> TxBuilder<'_, Cs> {
     /// **WARNING**: To avoid change address reuse you must persist the changes resulting from one
     /// or more calls to this method before closing the wallet. See [`Wallet::reveal_next_address`].
     #[cfg(feature = "std")]
-    pub fn finish(self) -> Result<Psbt, CreateTxError> {
+    pub fn finish(self) -> Result<BuilderResult, CreateTxError> {
         self.finish_with_aux_rand(&mut bitcoin::key::rand::thread_rng())
     }
 
@@ -773,9 +773,20 @@ impl<Cs: CoinSelectionAlgorithm> TxBuilder<'_, Cs> {
     ///
     /// **WARNING**: To avoid change address reuse you must persist the changes resulting from one
     /// or more calls to this method before closing the wallet. See [`Wallet::reveal_next_address`].
-    pub fn finish_with_aux_rand(self, rng: &mut impl RngCore) -> Result<Psbt, CreateTxError> {
+    pub fn finish_with_aux_rand(self, rng: &mut impl RngCore) -> Result<BuilderResult, CreateTxError> {
         self.wallet.create_tx(self.coin_selection, self.params, rng)
     }
+}
+
+/// Result of building a transaction.
+///
+/// Contains the unsigned PSBT and the feerate that was used during construction.
+#[derive(Debug, Clone)]
+pub struct BuilderResult {
+    /// The constructed PSBT (unsigned transaction)
+    pub psbt: Psbt,
+    /// The feerate used for this transaction (sat/vB)
+    pub fee_rate: FeeRate,
 }
 
 #[derive(Debug)]

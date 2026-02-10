@@ -1227,7 +1227,7 @@ impl Wallet {
         coin_selection: Cs,
         params: TxParams,
         rng: &mut impl RngCore,
-    ) -> Result<Psbt, CreateTxError> {
+    ) -> Result<tx_builder::BuilderResult, CreateTxError> {
         let keychains: BTreeMap<_, _> = self.indexed_graph.index.keychains().collect();
         let external_descriptor = keychains.get(&KeychainKind::External).expect("must exist");
         let internal_descriptor = keychains.get(&KeychainKind::Internal);
@@ -1543,7 +1543,10 @@ impl Wallet {
             }
         }
 
-        Ok(psbt)
+        Ok(tx_builder::BuilderResult {
+            psbt,
+            fee_rate,
+        })
     }
 
     /// Bump the fee of a transaction previously created with this wallet.
