@@ -20,7 +20,6 @@ use alloc::{
     string::{String, ToString},
 };
 use bitcoin::{absolute, psbt, Amount, BlockHash, Network, OutPoint, Sequence, Txid};
-use chain::local_chain::CannotConnectError;
 use core::fmt;
 
 /// The error type when loading a [`Wallet`] from a [`ChangeSet`].
@@ -127,38 +126,6 @@ impl From<LoadMismatch> for LoadError {
         Self::Mismatch(mismatch)
     }
 }
-
-/// An error that may occur when applying a block to [`Wallet`].
-#[derive(Debug)]
-pub enum ApplyBlockError {
-    /// Occurs when the update chain cannot connect with original chain.
-    CannotConnect(CannotConnectError),
-    /// Occurs when the `connected_to` hash does not match the hash derived from `block`.
-    UnexpectedConnectedToHash {
-        /// Block hash of `connected_to`.
-        connected_to_hash: BlockHash,
-        /// Expected block hash of `connected_to`, as derived from `block`.
-        expected_hash: BlockHash,
-    },
-}
-
-impl fmt::Display for ApplyBlockError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ApplyBlockError::CannotConnect(err) => err.fmt(f),
-            ApplyBlockError::UnexpectedConnectedToHash {
-                expected_hash: block_hash,
-                connected_to_hash: checkpoint_hash,
-            } => write!(
-                f,
-                "`connected_to` hash {checkpoint_hash} differs from the expected hash {block_hash} (which is derived from `block`)"
-            ),
-        }
-    }
-}
-
-#[cfg(feature = "std")]
-impl std::error::Error for ApplyBlockError {}
 
 /// Errors returned by miniscript when updating inconsistent PSBTs
 #[derive(Debug, Clone)]

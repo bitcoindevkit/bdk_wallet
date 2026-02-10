@@ -80,7 +80,7 @@ use crate::wallet::{
 // re-exports
 pub use bdk_chain::Balance;
 pub use changeset::ChangeSet;
-pub use error::{ApplyBlockError, LoadError, LoadMismatch};
+pub use error::{LoadError, LoadMismatch};
 pub use event::*;
 pub use params::*;
 pub use persisted::*;
