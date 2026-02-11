@@ -1173,6 +1173,7 @@ impl ExtractPolicy for Descriptor<DescriptorPublicKey> {
     }
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 #[cfg(test)]
 mod test {
     use super::*;

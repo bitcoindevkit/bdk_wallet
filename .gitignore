@@ -9,3 +9,6 @@ Cargo.lock
 *.db
 *.sqlite*
 examples/test_data
+
+# Coverage reports
+lcov.info

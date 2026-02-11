@@ -1,6 +1,6 @@
 name: Code Coverage
 
-# Generates code coverage reports using grcov and uploads results to Codecov.
+# Generates code coverage reports using cargo-llvm-cov and uploads results to Codecov.
 # Runs on every push and pull request to track test coverage metrics.
 # Uploads coverage data to Codecov for tracking and produces an HTML report artifact for download.
 
@@ -14,38 +14,32 @@ jobs:
   Coverage:
     name: Code Coverage
     runs-on: ubuntu-latest
-    env:
-      RUSTFLAGS: "-Cinstrument-coverage"
-      RUSTDOCFLAGS: "-Cinstrument-coverage"
-      LLVM_PROFILE_FILE: "./target/coverage/%p-%m.profraw"
 
     steps:
       - name: Checkout
         uses: actions/checkout@v6
         with:
           persist-credentials: false
-      - name: Install lcov tools
-        run: sudo apt-get install lcov -y
-      # This action automatically reads and applies rust-toolchain.toml
       - name: Install Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
+          toolchain: nightly
           components: llvm-tools-preview
           cache: true
-      - name: Install grcov
-        run: if [[ ! -e ~/.cargo/bin/grcov ]]; then cargo install grcov; fi
-      - name: Test
-        run: cargo test --all-features
-      - name: Make coverage directory
-        run: mkdir coverage
-      - name: Run grcov
-        run: grcov . --binary-path ./target/debug/ -s . -t lcov --branch --ignore-not-existing --keep-only 'src/**' --ignore 'tests/**' --ignore 'examples/**' -o ./coverage/lcov.info
+      - name: Install cargo-llvm-cov
+        run: cargo install cargo-llvm-cov
+      - name: Generate coverage data
+        run: cargo llvm-cov --all-features --branch --quiet --ignore-filename-regex "test_utils" --lcov --output-path lcov.info
+        env:
+          RUSTFLAGS: "--cfg coverage_nightly"
       - name: Generate HTML coverage report
-        run: genhtml -o coverage-report.html --ignore-errors unmapped ./coverage/lcov.info
+        run: cargo llvm-cov --all-features --branch --quiet --ignore-filename-regex "test_utils" --html
+        env:
+          RUSTFLAGS: "--cfg coverage_nightly"
       - name: Codecov upload
         uses: codecov/codecov-action@5a1091511ad55cbe89839c7260b706298ca349f7
         with:
-          files: ./coverage/lcov.info
+          files: ./lcov.info
           flags: rust
           name: codecov-bdk-wallet
           token: ${{ secrets.CODECOV_TOKEN }}
@@ -54,4 +48,4 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: coverage-report
-          path: coverage-report.html
+          path: target/llvm-cov/html
