@@ -2,6 +2,7 @@ use alloc::boxed::Box;
 
 use bdk_chain::keychain_txout::DEFAULT_LOOKAHEAD;
 use bitcoin::{BlockHash, Network, NetworkKind};
+use chain::BlockId;
 use miniscript::descriptor::KeyMap;
 
 use crate::{
@@ -65,6 +66,7 @@ pub struct CreateParams {
     pub(crate) change_descriptor_keymap: KeyMap,
     pub(crate) network: Network,
     pub(crate) genesis_hash: Option<BlockHash>,
+    pub(crate) birthday: Option<BlockId>,
     pub(crate) lookahead: u32,
     pub(crate) use_spk_cache: bool,
 }
@@ -88,6 +90,7 @@ impl CreateParams {
             change_descriptor_keymap: KeyMap::default(),
             network: Network::Bitcoin,
             genesis_hash: None,
+            birthday: None,
             lookahead: DEFAULT_LOOKAHEAD,
             use_spk_cache: false,
         }
@@ -110,6 +113,7 @@ impl CreateParams {
             change_descriptor_keymap: KeyMap::default(),
             network: Network::Bitcoin,
             genesis_hash: None,
+            birthday: None,
             lookahead: DEFAULT_LOOKAHEAD,
             use_spk_cache: false,
         }
@@ -135,6 +139,7 @@ impl CreateParams {
             change_descriptor_keymap: KeyMap::default(),
             network: Network::Bitcoin,
             genesis_hash: None,
+            birthday: None,
             lookahead: DEFAULT_LOOKAHEAD,
             use_spk_cache: false,
         }
@@ -159,6 +164,15 @@ impl CreateParams {
     /// Use a custom `genesis_hash`.
     pub fn genesis_hash(mut self, genesis_hash: BlockHash) -> Self {
         self.genesis_hash = Some(genesis_hash);
+        self
+    }
+
+    /// Set the [`Wallet`]'s birthday, as a [`BlockId`].
+    ///
+    /// The birthday can be used to limit how far back a chain oracle is queried,
+    /// saving up time and data bandwidth in full-scans.
+    pub fn birthday(mut self, birthday: BlockId) -> Self {
+        self.birthday = Some(birthday);
         self
     }
 
@@ -218,6 +232,7 @@ pub struct LoadParams {
     pub(crate) lookahead: u32,
     pub(crate) check_network: Option<Network>,
     pub(crate) check_genesis_hash: Option<BlockHash>,
+    pub(crate) check_birthday: Option<BlockId>,
     pub(crate) check_descriptor: Option<Option<DescriptorToExtract>>,
     pub(crate) check_change_descriptor: Option<Option<DescriptorToExtract>>,
     pub(crate) extract_keys: bool,
@@ -235,6 +250,7 @@ impl LoadParams {
             lookahead: DEFAULT_LOOKAHEAD,
             check_network: None,
             check_genesis_hash: None,
+            check_birthday: None,
             check_descriptor: None,
             check_change_descriptor: None,
             extract_keys: false,
@@ -279,6 +295,12 @@ impl LoadParams {
     /// Checks that the given `genesis_hash` matches the one loaded from persistence.
     pub fn check_genesis_hash(mut self, genesis_hash: BlockHash) -> Self {
         self.check_genesis_hash = Some(genesis_hash);
+        self
+    }
+
+    /// Checks that the given `birthday` matches the one loaded from persistence.
+    pub fn check_birthday(mut self, birthday: BlockId) -> Self {
+        self.check_birthday = Some(birthday);
         self
     }
 
