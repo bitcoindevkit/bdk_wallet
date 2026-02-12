@@ -6,7 +6,7 @@
 use arbitrary::{Arbitrary, Result, Unstructured};
 use bdk_wallet::bitcoin::{
     absolute::LockTime, hashes::Hash, psbt::PsbtSighashType, transaction::Version,
-    Amount, BlockHash, OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Txid,
+    Amount, BlockHash, FeeRate, OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Txid,
 };
 use bdk_wallet::{
     chain::{BlockId, ConfirmationBlockTime},
@@ -580,5 +580,202 @@ impl FuzzedUpdate {
             tx_update: self.tx_update.into_tx_update(wallet),
             chain,
         }
+    }
+}
+
+/// A recipient for a transaction
+#[derive(Debug, Clone)]
+pub struct FuzzedRecipient {
+    pub script: FuzzedScript,
+    pub amount: FuzzedAmount,
+}
+
+impl Arbitrary<'_> for FuzzedRecipient {
+    fn arbitrary(u: &mut Unstructured<'_>) -> Result<Self> {
+        Ok(FuzzedRecipient {
+            script: u.arbitrary()?,
+            amount: u.arbitrary()?,
+        })
+    }
+}
+
+/// A complete transaction builder with all options
+#[derive(Debug, Clone)]
+pub struct FuzzedTxBuilder {
+    pub recipients: Vec<FuzzedRecipient>,
+    pub drain_to: Option<FuzzedScript>,
+    pub utxo_to_add: Option<u32>,  // Index of UTXO to manually add
+    pub utxo_to_mark_unspendable: Option<u32>,  // Index of UTXO to mark unspendable
+    pub is_fee_bump: bool,
+    pub options: FuzzedTxBuilderOptions,
+}
+
+impl Arbitrary<'_> for FuzzedTxBuilder {
+    fn arbitrary(u: &mut Unstructured<'_>) -> Result<Self> {
+        // Limit recipients for performance
+        let num_recipients = u.int_in_range(0..=5)?;
+        let mut recipients = Vec::with_capacity(num_recipients);
+        for _ in 0..num_recipients {
+            recipients.push(u.arbitrary()?);
+        }
+
+        Ok(FuzzedTxBuilder {
+            recipients,
+            drain_to: if u.ratio(1, 3)? {
+                Some(u.arbitrary()?)
+            } else {
+                None
+            },
+            utxo_to_add: if u.ratio(1, 5)? {
+                Some(u.int_in_range(0..=100)?)
+            } else {
+                None
+            },
+            utxo_to_mark_unspendable: if u.ratio(1, 10)? {
+                Some(u.int_in_range(0..=100)?)
+            } else {
+                None
+            },
+            is_fee_bump: u.ratio(1, 10)?,  // 10% chance of fee bump
+            options: u.arbitrary()?,
+        })
+    }
+}
+
+impl FuzzedTxBuilder {
+    /// Build a transaction using the wallet
+    pub fn build_with_wallet(self, wallet: &mut Wallet) -> std::result::Result<bdk_wallet::bitcoin::psbt::Psbt, Box<dyn std::error::Error>> {
+        // Prepare recipient scripts before creating builder
+        let wallet_recipients: Vec<(ScriptBuf, Amount)> = self.recipients
+            .into_iter()
+            .enumerate()
+            .map(|(i, recipient)| {
+                // Make some recipients use wallet addresses for better coverage
+                let script = if i % 4 == 0 {
+                    wallet.next_unused_address(KeychainKind::External).script_pubkey()
+                } else {
+                    recipient.script.into_script()
+                };
+                (script, recipient.amount.into_amount())
+            })
+            .collect();
+
+        // Prepare drain script if needed
+        let drain_script = self.drain_to.map(|drain_script| {
+            if self.options.drain_wallet {
+                wallet.next_unused_address(KeychainKind::Internal).script_pubkey()
+            } else {
+                drain_script.into_script()
+            }
+        });
+
+        // Get UTXO info before creating builder
+        let utxo_to_add = self.utxo_to_add
+            .and_then(|idx| wallet.list_unspent().nth(idx as usize))
+            .map(|utxo| utxo.outpoint);
+
+        let utxo_to_unspend = self.utxo_to_mark_unspendable
+            .and_then(|idx| wallet.list_unspent().nth(idx as usize))
+            .map(|utxo| utxo.outpoint);
+
+        // Start with either a normal tx or fee bump
+        let mut builder = if self.is_fee_bump {
+            // Try to find a transaction to bump
+            let txid = wallet.tx_graph()
+                .full_txs()
+                .next()
+                .map(|tx_node| tx_node.txid);
+
+            match txid {
+                Some(txid) => {
+                    match wallet.build_fee_bump(txid) {
+                        Ok(builder) => builder,
+                        Err(_) => wallet.build_tx(),  // Fallback to normal tx
+                    }
+                }
+                None => wallet.build_tx(),  // No tx to bump, build normal
+            }
+        } else {
+            wallet.build_tx()
+        };
+
+        // Add recipients
+        if !wallet_recipients.is_empty() {
+            builder.set_recipients(wallet_recipients);
+        }
+
+        // Set fee configuration
+        if let Some(rate) = self.options.fee_rate {
+            if let Some(fee_rate) = FeeRate::from_sat_per_vb(rate) {
+                builder.fee_rate(fee_rate);
+            }
+        } else if let Some(fee) = self.options.fee_absolute {
+            builder.fee_absolute(Amount::from_sat(fee));
+        }
+
+        // Add manual UTXO if specified
+        if let Some(outpoint) = utxo_to_add {
+            let _ = builder.add_utxo(outpoint);
+        }
+
+        // Mark UTXO as unspendable if specified
+        if let Some(outpoint) = utxo_to_unspend {
+            builder.add_unspendable(outpoint);
+        }
+
+        // Apply other options
+        if self.options.manually_selected_only {
+            builder.manually_selected_only();
+        }
+
+        if let Some(sighash) = self.options.sighash {
+            builder.sighash(sighash);
+        }
+
+        builder.ordering(self.options.ordering.into_tx_ordering());
+
+        if let Some(locktime) = self.options.locktime {
+            builder.nlocktime(LockTime::from_consensus(locktime));
+        }
+
+        if let Some(version) = self.options.version {
+            builder.version(version);
+        }
+
+        if self.options.do_not_spend_change {
+            builder.do_not_spend_change();
+        }
+
+        if self.options.only_spend_change {
+            builder.only_spend_change();
+        }
+
+        if self.options.only_witness_utxo {
+            builder.only_witness_utxo();
+        }
+
+        if self.options.include_output_redeem_witness_script {
+            builder.include_output_redeem_witness_script();
+        }
+
+        if self.options.add_global_xpubs {
+            builder.add_global_xpubs();
+        }
+
+        if self.options.drain_wallet {
+            builder.drain_wallet();
+        }
+
+        if self.options.allow_dust {
+            builder.allow_dust(true);
+        }
+
+        // Set drain_to if specified
+        if let Some(script) = drain_script {
+            builder.drain_to(script);
+        }
+
+        // Build the PSBT
+        builder.finish().map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
     }
 }
