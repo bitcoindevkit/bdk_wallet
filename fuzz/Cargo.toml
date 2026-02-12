@@ -16,7 +16,7 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
-bdk_wallet = { version = "2.3.0", features = ["rusqlite"] }
+bdk_wallet = { path = "../wallet", features = ["rusqlite"] }
 
 [[bin]]
 name = "bdk_wallet"
