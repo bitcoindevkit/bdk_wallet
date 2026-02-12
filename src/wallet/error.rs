@@ -130,8 +130,8 @@ impl From<LoadMismatch> for LoadError {
 /// Errors returned by miniscript when updating inconsistent PSBTs
 #[derive(Debug, Clone)]
 pub enum MiniscriptPsbtError {
-    /// Descriptor key conversion error
-    Conversion(miniscript::descriptor::ConversionError),
+    /// Non-definite key error
+    NonDefiniteKey(miniscript::descriptor::NonDefiniteKeyError),
     /// Return error type for PsbtExt::update_input_with_descriptor
     UtxoUpdate(miniscript::psbt::UtxoUpdateError),
     /// Return error type for PsbtExt::update_output_with_descriptor
@@ -141,7 +141,7 @@ pub enum MiniscriptPsbtError {
 impl fmt::Display for MiniscriptPsbtError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Conversion(err) => write!(f, "Conversion error: {err}"),
+            Self::NonDefiniteKey(err) => write!(f, "{err}"),
             Self::UtxoUpdate(err) => write!(f, "UTXO update error: {err}"),
             Self::OutputUpdate(err) => write!(f, "Output update error: {err}"),
         }
