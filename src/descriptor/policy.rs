@@ -1159,8 +1159,9 @@ impl ExtractPolicy for Descriptor<DescriptorPublicKey> {
                     let mut items = vec![key_spend_sig];
                     items.append(
                         &mut tr
-                            .iter_scripts()
-                            .filter_map(|(_, ms)| {
+                            .leaves()
+                            .filter_map(|item| {
+                                let ms = item.miniscript();
                                 ms.extract_policy(signers, build_sat, secp).transpose()
                             })
                             .collect::<Result<Vec<_>, _>>()?,

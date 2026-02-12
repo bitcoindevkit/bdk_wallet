@@ -649,11 +649,13 @@ pub struct SignersContainer(BTreeMap<SignersContainerKey, Arc<dyn TransactionSig
 impl SignersContainer {
     /// Create a map of public keys to secret keys
     pub fn as_key_map(&self, secp: &SecpCtx) -> KeyMap {
-        self.0
-            .values()
-            .filter_map(|signer| signer.descriptor_secret_key())
-            .filter_map(|secret| secret.to_public(secp).ok().map(|public| (public, secret)))
-            .collect()
+        let mut keymap = KeyMap::new();
+        keymap.extend(self.0.values().filter_map(|signer| {
+            let desc_sk = signer.descriptor_secret_key()?;
+            let desc_pk = desc_sk.to_public(secp).ok()?;
+            Some((desc_pk, desc_sk))
+        }));
+        keymap
     }
 
     /// Build a new signer container from a [`KeyMap`]

@@ -2163,7 +2163,7 @@ impl Wallet {
 
         psbt_input
             .update_with_descriptor_unchecked(&derived_descriptor)
-            .map_err(MiniscriptPsbtError::Conversion)?;
+            .map_err(MiniscriptPsbtError::NonDefiniteKey)?;
 
         let prev_output = utxo.outpoint;
         if let Some(prev_tx) = self.tx_graph.graph().get_tx(prev_output.txid) {
@@ -2902,7 +2902,6 @@ macro_rules! doctest_wallet {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::miniscript::Error::Unexpected;
     use crate::test_utils::get_test_tr_single_sig_xprv_and_change_desc;
     use crate::test_utils::insert_tx;
 
@@ -2964,35 +2963,38 @@ mod test {
     #[test]
     fn test_create_two_path_wallet() {
         let two_path_descriptor = "wpkh([9a6a2580/84'/1'/0']tpubDDnGNapGEY6AZAdQbfRJgMg9fvz8pUBrLwvyvUqEgcUfgzM6zc2eVK4vY9x9L5FJWdX8WumXuLEDV5zDZnTfbn87vLe9XceCFwTu9so9Kks/<0;1>/*)";
+        let private_multipath_descriptor = "wpkh(tprv8ZgxMBicQKsPdWAHbugK2tjtVtRjKGixYVZUdL7xLHMgXZS6BFbFi1UDb1CHT25Z5PU1F9j7wGxwUiRhqz9E3nZRztikGUV6HoRDYcqPhM4/84'/1'/0'/<0;1>/*)";
 
-        // Test successful creation of a two-path wallet
-        let params = Wallet::create_from_two_path_descriptor(two_path_descriptor);
-        let wallet = params.network(Network::Testnet).create_wallet_no_persist();
-        assert!(wallet.is_ok());
+        for test_descriptor in [two_path_descriptor, private_multipath_descriptor] {
+            // Test successful creation of a two-path wallet
+            let params = Wallet::create_from_two_path_descriptor(test_descriptor);
+            let wallet = params
+                .network(Network::Testnet)
+                .create_wallet_no_persist()
+                .expect("failed to create Wallet");
 
-        let wallet = wallet.unwrap();
+            // Verify that the wallet has both external and internal keychains
+            let keychains: Vec<_> = wallet.keychains().collect();
+            assert_eq!(keychains.len(), 2);
 
-        // Verify that the wallet has both external and internal keychains
-        let keychains: Vec<_> = wallet.keychains().collect();
-        assert_eq!(keychains.len(), 2);
+            // Verify that the descriptors are different (receive vs change)
+            let external_desc = keychains
+                .iter()
+                .find(|(k, _)| *k == KeychainKind::External)
+                .unwrap()
+                .1;
+            let internal_desc = keychains
+                .iter()
+                .find(|(k, _)| *k == KeychainKind::Internal)
+                .unwrap()
+                .1;
+            assert_ne!(external_desc.to_string(), internal_desc.to_string());
 
-        // Verify that the descriptors are different (receive vs change)
-        let external_desc = keychains
-            .iter()
-            .find(|(k, _)| *k == KeychainKind::External)
-            .unwrap()
-            .1;
-        let internal_desc = keychains
-            .iter()
-            .find(|(k, _)| *k == KeychainKind::Internal)
-            .unwrap()
-            .1;
-        assert_ne!(external_desc.to_string(), internal_desc.to_string());
-
-        // Verify that addresses can be generated
-        let external_addr = wallet.peek_address(KeychainKind::External, 0);
-        let internal_addr = wallet.peek_address(KeychainKind::Internal, 0);
-        assert_ne!(external_addr.address, internal_addr.address);
+            // Verify that addresses can be generated
+            let external_addr = wallet.peek_address(KeychainKind::External, 0);
+            let internal_addr = wallet.peek_address(KeychainKind::Internal, 0);
+            assert_ne!(external_addr.address, internal_addr.address);
+        }
     }
 
     #[test]
@@ -3002,17 +3004,6 @@ mod test {
         let params = Wallet::create_from_two_path_descriptor(single_path_descriptor);
         let wallet = params.network(Network::Testnet).create_wallet_no_persist();
         assert!(matches!(wallet, Err(DescriptorError::MultiPath)));
-
-        // Test with a private descriptor
-        // You get a Miniscript(Unexpected("Can't make an extended private key with multiple paths
-        // into a public key.")) error.
-        let private_multipath_descriptor = "wpkh(tprv8ZgxMBicQKsPdWAHbugK2tjtVtRjKGixYVZUdL7xLHMgXZS6BFbFi1UDb1CHT25Z5PU1F9j7wGxwUiRhqz9E3nZRztikGUV6HoRDYcqPhM4/84'/1'/0'/<0;1>/*)";
-        let params = Wallet::create_from_two_path_descriptor(private_multipath_descriptor);
-        let wallet = params.network(Network::Testnet).create_wallet_no_persist();
-        assert!(matches!(
-            wallet,
-            Err(DescriptorError::Miniscript(Unexpected(..)))
-        ));
 
         // Test with invalid 3-path multipath descriptor
         let three_path_descriptor = "wpkh([9a6a2580/84'/1'/0']tpubDDnGNapGEY6AZAdQbfRJgMg9fvz8pUBrLwvyvUqEgcUfgzM6zc2eVK4vY9x9L5FJWdX8WumXuLEDV5zDZnTfbn87vLe9XceCFwTu9so9Kks/<0;1;2>/*)";
