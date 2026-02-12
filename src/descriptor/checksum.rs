@@ -17,20 +17,23 @@
 use crate::descriptor::DescriptorError;
 use alloc::string::String;
 
-use miniscript::descriptor::checksum::desc_checksum;
+use miniscript::descriptor::checksum::Engine;
 
 /// Compute the checksum of a descriptor, excludes any existing checksum in the descriptor string
 /// from the calculation
 pub fn calc_checksum(desc: &str) -> Result<String, DescriptorError> {
-    if let Some(split) = desc.split_once('#') {
-        let og_checksum = split.1;
-        let checksum = desc_checksum(split.0)?;
-        if og_checksum != checksum {
+    if let Some((descriptor, original_checksum)) = desc.split_once('#') {
+        let mut engine = Engine::new();
+        engine.input(descriptor)?;
+        let checksum = engine.checksum();
+        if original_checksum != checksum {
             return Err(DescriptorError::InvalidDescriptorChecksum);
         }
         Ok(checksum)
     } else {
-        Ok(desc_checksum(desc)?)
+        let mut engine = Engine::new();
+        engine.input(desc)?;
+        Ok(engine.checksum())
     }
 }
 
@@ -38,6 +41,7 @@ pub fn calc_checksum(desc: &str) -> Result<String, DescriptorError> {
 mod test {
     use super::*;
     use crate::descriptor::calc_checksum;
+    use alloc::string::ToString;
     use assert_matches::assert_matches;
 
     // test calc_checksum() function; it should return the same value as Bitcoin Core
@@ -80,7 +84,17 @@ mod test {
 
         assert_matches!(
             calc_checksum(&invalid_desc),
-            Err(DescriptorError::Miniscript(miniscript::Error::BadDescriptor(e))) if e == format!("Invalid character in checksum: '{sparkle_heart}'")
+            Err(DescriptorError::Miniscript(
+                miniscript::Error::Parse(
+                    miniscript::ParseError::Tree(
+                        miniscript::ParseTreeError::Checksum(
+                            miniscript::descriptor::checksum::Error::InvalidCharacter { ch, pos })
+                        )
+                    )
+                )
+            )
+            if ch.to_string() == sparkle_heart
+            && pos == 85
         );
     }
 }
