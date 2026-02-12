@@ -32,7 +32,7 @@ use miniscript::descriptor::{
 pub use miniscript::{
     Descriptor, DescriptorPublicKey, Legacy, Miniscript, ScriptContext, Segwitv0,
 };
-use miniscript::{ForEachKey, MiniscriptKey, TranslatePk};
+use miniscript::{ForEachKey, MiniscriptKey};
 
 use crate::descriptor::policy::BuildSatisfaction;
 
@@ -147,8 +147,11 @@ impl IntoWalletDescriptor for (ExtendedDescriptor, KeyMap) {
             network_kind: NetworkKind,
         }
 
-        impl miniscript::Translator<DescriptorPublicKey, String, DescriptorError> for Translator<'_, '_> {
-            fn pk(&mut self, pk: &DescriptorPublicKey) -> Result<String, DescriptorError> {
+        impl miniscript::Translator<DescriptorPublicKey> for Translator<'_, '_> {
+            type TargetPk = String;
+            type Error = DescriptorError;
+
+            fn pk(&mut self, pk: &DescriptorPublicKey) -> Result<Self::TargetPk, Self::Error> {
                 let secp = &self.secp;
 
                 let (_, _, network_kinds) = if self.descriptor.is_taproot() {
@@ -223,9 +226,10 @@ impl IntoWalletDescriptor for DescriptorTemplateOut {
             network_kind: NetworkKind,
         }
 
-        impl miniscript::Translator<DescriptorPublicKey, DescriptorPublicKey, DescriptorError>
-            for Translator
-        {
+        impl miniscript::Translator<DescriptorPublicKey> for Translator {
+            type TargetPk = DescriptorPublicKey;
+            type Error = DescriptorError;
+
             fn pk(
                 &mut self,
                 pk: &DescriptorPublicKey,
@@ -269,23 +273,22 @@ impl IntoWalletDescriptor for DescriptorTemplateOut {
             Err(TranslateErr::OuterError(e)) => return Err(e.into()),
         };
         // ...and in the key map.
-        let fixed_keymap = keymap
-            .into_iter()
-            .map(|(mut k, mut v)| {
-                match (&mut k, &mut v) {
-                    (DescriptorPublicKey::XPub(xpub), DescriptorSecretKey::XPrv(xprv)) => {
-                        xpub.xkey.network = network_kind;
-                        xprv.xkey.network = network_kind;
-                    }
-                    (_, DescriptorSecretKey::Single(key)) => {
-                        key.key.network = network_kind;
-                    }
-                    _ => {}
+        let inner = keymap.into_iter().map(|(mut k, mut v)| {
+            match (&mut k, &mut v) {
+                (DescriptorPublicKey::XPub(xpub), DescriptorSecretKey::XPrv(xprv)) => {
+                    xpub.xkey.network = network_kind;
+                    xprv.xkey.network = network_kind;
                 }
+                (_, DescriptorSecretKey::Single(key)) => {
+                    key.key.network = network_kind;
+                }
+                _ => {}
+            }
 
-                (k, v)
-            })
-            .collect();
+            (k, v)
+        });
+        let mut fixed_keymap = KeyMap::new();
+        fixed_keymap.extend(inner);
 
         Ok((translated, fixed_keymap))
     }
@@ -314,11 +317,9 @@ pub(crate) fn check_wallet_descriptor(
     }
 
     if descriptor.is_multipath() {
-        return Err(DescriptorError::Miniscript(
-            miniscript::Error::BadDescriptor(
-                "`check_wallet_descriptor` must not contain multipath keys".to_string(),
-            ),
-        ));
+        return Err(DescriptorError::Miniscript(miniscript::Error::Unexpected(
+            "`check_wallet_descriptor` must not contain multipath keys".to_string(),
+        )));
     }
 
     // Run miniscript's sanity check, which will look for duplicated keys and other potential
@@ -898,9 +899,9 @@ mod test {
 
         assert_matches!(
             result,
-            Err(DescriptorError::Miniscript(
-                miniscript::Error::BadDescriptor(_)
-            ))
+            Err(DescriptorError::Miniscript(miniscript::Error::Unexpected(
+                ..
+            )))
         );
 
         // Repeated pubkeys.
@@ -968,13 +969,9 @@ mod test {
 
         assert!(descriptor.is_multipath());
 
-        // Miniscript can't make an extended private key with multiple paths into a public key.
-        // ref: <https://docs.rs/miniscript/12.3.2/miniscript/descriptor/enum.DescriptorSecretKey.html#method.to_public>
+        // `miniscript` should make an extended private key with multiple paths into a public key.
         let descriptor_str = "wpkh(tprv8ZgxMBicQKsPdy6LMhUtFHAgpocR8GC6QmwMSFpZs7h6Eziw3SpThFfczTDh5rW2krkqffa11UpX3XkeTTB2FvzZKWXqPY54Y6Rq4AQ5R8L/<0;1>/*)";
-        assert!(matches!(
-            Descriptor::parse_descriptor(&secp, descriptor_str),
-            Err(miniscript::Error::Unexpected(..)),
-        ));
+        Descriptor::parse_descriptor(&secp, descriptor_str).expect("should parse multi xkey");
         let _ = descriptor_str
             .into_wallet_descriptor(&secp, NetworkKind::Main)
             .unwrap_err();

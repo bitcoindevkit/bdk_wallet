@@ -13,7 +13,7 @@
 use core::fmt;
 
 /// Errors related to the parsing and usage of descriptors
-#[derive(Debug, PartialEq)]
+#[derive(Debug)]
 pub enum Error {
     /// Invalid HD Key path, such as having a wildcard but a length != 1
     InvalidHdKeyPath,
@@ -124,5 +124,37 @@ impl From<bitcoin::hex::HexToBytesError> for Error {
 impl From<crate::descriptor::policy::PolicyError> for Error {
     fn from(err: crate::descriptor::policy::PolicyError) -> Self {
         Error::Policy(err)
+    }
+}
+
+impl From<miniscript::descriptor::checksum::Error> for Error {
+    fn from(e: miniscript::descriptor::checksum::Error) -> Self {
+        Self::Miniscript(miniscript::Error::Parse(miniscript::ParseError::Tree(
+            miniscript::ParseTreeError::Checksum(e),
+        )))
+    }
+}
+
+impl From<miniscript::descriptor::TapTreeDepthError> for Error {
+    fn from(e: miniscript::descriptor::TapTreeDepthError) -> Self {
+        Self::Miniscript(miniscript::Error::TapTreeDepthError(e))
+    }
+}
+
+impl From<miniscript::ThresholdError> for Error {
+    fn from(e: miniscript::ThresholdError) -> Self {
+        Self::Miniscript(miniscript::Error::Threshold(e))
+    }
+}
+
+impl From<miniscript::AbsLockTimeError> for Error {
+    fn from(e: miniscript::AbsLockTimeError) -> Self {
+        Self::Miniscript(miniscript::Error::AbsoluteLockTime(e))
+    }
+}
+
+impl From<miniscript::RelLockTimeError> for Error {
+    fn from(e: miniscript::RelLockTimeError) -> Self {
+        Self::Miniscript(miniscript::Error::RelativeLockTime(e))
     }
 }

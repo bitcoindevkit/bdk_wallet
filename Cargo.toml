@@ -19,7 +19,7 @@ rustdoc-args = ["--cfg", "docsrs"]
 [dependencies]
 bdk_chain = { version = "0.23.1", features = ["miniscript", "serde"], default-features = false }
 bitcoin = { version = "0.32.7", features = ["serde", "base64"], default-features = false }
-miniscript = { version = "12.3.1", features = ["serde"], default-features = false }
+miniscript = { version = "13.0.0", features = ["serde"], default-features = false }
 rand_core = { version = "0.6.0" }
 serde_json = { version = "1" }
 serde = { version = "1", features = ["derive"] }
@@ -78,24 +78,30 @@ name = "bitcoind_rpc"
 
 [patch.crates-io.bdk_chain]
 git = "https://github.com/bitcoindevkit/bdk"
-rev = "b4c8c6a110de14c1b04d2a525cd8fb3e4d67cec6"
+branch = "master"
+# rev = "b45ecb9bd41c80a03921dcf42a9845b19774502e"
 
 [patch.crates-io.bdk_core]
 git = "https://github.com/bitcoindevkit/bdk"
-rev = "b4c8c6a110de14c1b04d2a525cd8fb3e4d67cec6"
+branch = "master"
+# rev = "b45ecb9bd41c80a03921dcf42a9845b19774502e"
 
 [patch.crates-io.bdk_bitcoind_rpc]
 git = "https://github.com/bitcoindevkit/bdk"
-rev = "b4c8c6a110de14c1b04d2a525cd8fb3e4d67cec6"
+branch = "master"
+# rev = "b45ecb9bd41c80a03921dcf42a9845b19774502e"
 
 [patch.crates-io.bdk_electrum]
 git = "https://github.com/bitcoindevkit/bdk"
-rev = "b4c8c6a110de14c1b04d2a525cd8fb3e4d67cec6"
+branch = "master"
+# rev = "b45ecb9bd41c80a03921dcf42a9845b19774502e"
 
 [patch.crates-io.bdk_esplora]
 git = "https://github.com/bitcoindevkit/bdk"
-rev = "b4c8c6a110de14c1b04d2a525cd8fb3e4d67cec6"
+branch = "master"
+# rev = "b45ecb9bd41c80a03921dcf42a9845b19774502e"
 
 [patch.crates-io.bdk_file_store]
 git = "https://github.com/bitcoindevkit/bdk"
-rev = "b4c8c6a110de14c1b04d2a525cd8fb3e4d67cec6"
+branch = "master"
+# rev = "b45ecb9bd41c80a03921dcf42a9845b19774502e"
