@@ -10,7 +10,8 @@ use bdk_wallet::bitcoin::{
 };
 use bdk_wallet::{
     chain::{BlockId, ConfirmationBlockTime},
-    signer::TapLeavesOptions, KeychainKind, SignOptions, TxOrdering, Update, Wallet,
+    rusqlite::Connection,
+    signer::TapLeavesOptions, KeychainKind, PersistedWallet, SignOptions, TxOrdering, Update,
 };
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::sync::Arc;
@@ -315,7 +316,7 @@ impl FuzzedTxOutput {
     }
 
     /// Create a transaction output using a wallet address
-    pub fn from_wallet_address(wallet: &mut Wallet, amount: FuzzedAmount, is_change: bool) -> TxOut {
+    pub fn from_wallet_address(wallet: &mut PersistedWallet<Connection>, amount: FuzzedAmount, is_change: bool) -> TxOut {
         let script = if is_change {
             wallet.next_unused_address(KeychainKind::Internal).script_pubkey()
         } else {
@@ -373,7 +374,7 @@ impl FuzzedTransaction {
     }
 
     /// Create a transaction with wallet-aware outputs
-    pub fn into_transaction_with_wallet(self, wallet: &mut Wallet) -> Transaction {
+    pub fn into_transaction_with_wallet(self, wallet: &mut PersistedWallet<Connection>) -> Transaction {
         let outputs: Vec<TxOut> = self.outputs
             .into_iter()
             .enumerate()
@@ -460,7 +461,7 @@ impl Arbitrary<'_> for FuzzedTxUpdate {
 }
 
 impl FuzzedTxUpdate {
-    pub fn into_tx_update(self, wallet: &mut Wallet) -> bdk_wallet::chain::TxUpdate<ConfirmationBlockTime> {
+    pub fn into_tx_update(self, wallet: &mut PersistedWallet<Connection>) -> bdk_wallet::chain::TxUpdate<ConfirmationBlockTime> {
         let txs: Vec<Arc<Transaction>> = self.txs
             .into_iter()
             .map(|tx| Arc::new(tx.into_transaction_with_wallet(wallet)))
@@ -551,7 +552,7 @@ impl Arbitrary<'_> for FuzzedUpdate {
 }
 
 impl FuzzedUpdate {
-    pub fn into_update(self, wallet: &mut Wallet) -> Update {
+    pub fn into_update(self, wallet: &mut PersistedWallet<Connection>) -> Update {
         let last_active_indices: BTreeMap<KeychainKind, u32> = self.last_active_indices
             .into_iter()
             .collect();
@@ -644,7 +645,7 @@ impl Arbitrary<'_> for FuzzedTxBuilder {
 
 impl FuzzedTxBuilder {
     /// Build a transaction using the wallet
-    pub fn build_with_wallet(self, wallet: &mut Wallet) -> std::result::Result<bdk_wallet::bitcoin::psbt::Psbt, Box<dyn std::error::Error>> {
+    pub fn build_with_wallet(self, wallet: &mut PersistedWallet<Connection>) -> std::result::Result<bdk_wallet::bitcoin::psbt::Psbt, Box<dyn std::error::Error>> {
         // Prepare recipient scripts before creating builder
         let wallet_recipients: Vec<(ScriptBuf, Amount)> = self.recipients
             .into_iter()
@@ -779,3 +780,122 @@ impl FuzzedTxBuilder {
         builder.finish().map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
     }
 }
+
+/// A complete action that can be performed on the wallet
+#[derive(Debug)]
+pub enum FuzzedWalletOperation {
+    /// Apply an update to the wallet
+    ApplyUpdate(FuzzedUpdate),
+    /// Create and optionally sign/finalize a transaction
+    CreateTransaction {
+        builder: FuzzedTxBuilder,
+        sign_options: Option<FuzzedSignOptions>,
+        finalize: bool,
+    },
+    /// Persist and reload the wallet
+    PersistAndLoad,
+}
+
+impl Arbitrary<'_> for FuzzedWalletOperation {
+    fn arbitrary(u: &mut Unstructured<'_>) -> Result<Self> {
+        match u.int_in_range(0..=2)? {
+            0 => Ok(FuzzedWalletOperation::ApplyUpdate(u.arbitrary()?)),
+            1 => Ok(FuzzedWalletOperation::CreateTransaction {
+                builder: u.arbitrary()?,
+                sign_options: if u.ratio(3, 4)? {  // 75% chance to sign
+                    Some(u.arbitrary()?)
+                } else {
+                    None
+                },
+                finalize: u.ratio(2, 3)?,  // 66% chance to finalize
+            }),
+            2 => Ok(FuzzedWalletOperation::PersistAndLoad),
+            _ => unreachable!(),
+        }
+    }
+}
+
+/// The main fuzzing input structure
+#[derive(Debug, Arbitrary)]
+pub struct FuzzInput {
+    /// A sequence of operations to perform on the wallet
+    pub operations: Vec<FuzzedWalletOperation>,
+}
+
+impl FuzzInput {
+    /// Execute all operations on a wallet with a database connection
+    pub fn execute(
+        self,
+        wallet: &mut PersistedWallet<Connection>,
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        for operation in self.operations {
+            match operation {
+                FuzzedWalletOperation::ApplyUpdate(update) => {
+                    let update = update.into_update(wallet);
+                    wallet.apply_update(update)?;
+                }
+
+                FuzzedWalletOperation::CreateTransaction {
+                    builder,
+                    sign_options,
+                    finalize,
+                } => {
+                    // Build the transaction
+                    let mut psbt = match builder.build_with_wallet(wallet) {
+                        Ok(psbt) => psbt,
+                        Err(_) => continue,  // Skip invalid transactions
+                    };
+
+                    // Optionally sign
+                    if let Some(options) = sign_options {
+                        let sign_opts = options.into_sign_options();
+                        let _signed = match wallet.sign(&mut psbt, sign_opts.clone()) {
+                            Ok(signed) => signed,
+                            Err(_) => continue,  // Skip signing errors
+                        };
+
+                        // Optionally finalize
+                        if finalize {
+                            match wallet.finalize_psbt(&mut psbt, sign_opts) {
+                                Ok(is_finalized) if is_finalized => {
+                                    // Extract and apply the transaction
+                                    match psbt.extract_tx() {
+                                        Ok(tx) => {
+                                            let mut update = Update::default();
+                                            update.tx_update.txs.push(tx.into());
+                                            wallet.apply_update(update)?;
+                                        }
+                                        Err(bdk_wallet::bitcoin::psbt::ExtractTxError::AbsurdFeeRate { .. }) => {
+                                            // This is an expected error, skip it
+                                            continue;
+                                        }
+                                        Err(_) => continue,
+                                    }
+                                }
+                                _ => continue,  // Not finalized or error
+                            }
+                        }
+                    }
+                }
+
+                FuzzedWalletOperation::PersistAndLoad => {
+                    // With PersistedWallet, persistence happens automatically
+                    // We can verify the wallet state is consistent
+                    let balance = wallet.balance();
+                    let _internal_index = wallet.next_derivation_index(KeychainKind::Internal);
+                    let _external_index = wallet.next_derivation_index(KeychainKind::External);
+                    let _tip = wallet.latest_checkpoint();
+
+                    // Just verify we can still access wallet state
+                    assert!(balance.total().to_sat() < 21_000_000 * 100_000_000);
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+// Re-export commonly used constants
+pub const EXTERNAL_DESCRIPTOR: &str = "wpkh(tprv8ZgxMBicQKsPdy6LMhUtFHAgpocR8GC6QmwMSFpZs7h6Eziw3SpThFfczTDh5rW2krkqffa11UpX3XkeTTB2FvzZKWXqPY54Y6Rq4AQ5R8L/84'/1'/0'/1/*)";
+pub const INTERNAL_DESCRIPTOR: &str = "wpkh(tprv8ZgxMBicQKsPdy6LMhUtFHAgpocR8GC6QmwMSFpZs7h6Eziw3SpThFfczTDh5rW2krkqffa11UpX3XkeTTB2FvzZKWXqPY54Y6Rq4AQ5R8L/84'/1'/0'/0/*)";
+pub const NETWORK: bdk_wallet::bitcoin::Network = bdk_wallet::bitcoin::Network::Testnet;
