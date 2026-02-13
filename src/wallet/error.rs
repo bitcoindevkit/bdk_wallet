@@ -11,49 +11,98 @@
 
 //! Errors that can be thrown by the [`Wallet`](crate::wallet::Wallet)
 
-use crate::descriptor::policy::PolicyError;
 use crate::descriptor::{DescriptorError, ExtendedDescriptor};
-use crate::wallet::coin_selection;
-use crate::{descriptor, KeychainKind, LoadWithPersistError};
+use crate::keyring::KeyRingError;
+use crate::{descriptor, ChangeSet, KeychainKind, LoadWithPersistError, Wallet};
 use alloc::{
     boxed::Box,
     string::{String, ToString},
 };
 use bitcoin::{absolute, psbt, Amount, BlockHash, Network, OutPoint, Sequence, Txid};
-use chain::local_chain::CannotConnectError;
 use core::fmt;
+use core::fmt::{Debug, Display};
 
 /// The error type when loading a [`Wallet`] from a [`ChangeSet`].
 #[derive(Debug, PartialEq)]
-pub enum LoadError {
-    /// There was a problem with the passed-in descriptor(s).
-    Descriptor(crate::descriptor::DescriptorError),
-    /// Data loaded from persistence is missing network type.
-    MissingNetwork,
+pub enum LoadError<K> {
     /// Data loaded from persistence is missing genesis hash.
     MissingGenesis,
-    /// Data loaded from persistence is missing descriptor.
-    MissingDescriptor(KeychainKind),
-    /// Data loaded is unexpected.
-    Mismatch(LoadMismatch),
+    /// Data is missing the network.
+    MissingNetwork,
+    /// The keychain is missing,
+    MissingKeychain(K),
+    /// There was a problem with the passed-in descriptor(s).
+    InvalidKeyRing(KeyRingError<K>),
+    /// Loaded `KeyRing` is empty.
+    EmptyKeyring,
+    /// Genesis hash does not match.
+    GenesisMismatch {
+        /// The genesis hash that is loaded.
+        loaded: BlockHash,
+        /// The expected genesis hash.
+        expected: BlockHash,
+    },
+    /// Network does not match.
+    NetworkMismatch {
+        /// The network that is loaded.
+        loaded: bitcoin::Network,
+        /// The expected network.
+        expected: bitcoin::Network,
+    },
+    /// Descriptor does not match for the `keychain`.
+    DescriptorMismatch {
+        /// Keychain identifying the descriptor
+        keychain: K,
+        /// The loaded descriptor
+        loaded: Box<ExtendedDescriptor>,
+        /// The expected descriptor
+        expected: Box<ExtendedDescriptor>,
+    },
 }
 
-impl fmt::Display for LoadError {
+impl<K> Display for LoadError<K>
+where
+    K: Display,
+{
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            LoadError::Descriptor(e) => e.fmt(f),
-            LoadError::MissingNetwork => write!(f, "loaded data is missing network type"),
             LoadError::MissingGenesis => write!(f, "loaded data is missing genesis hash"),
-            LoadError::MissingDescriptor(k) => {
-                write!(f, "loaded data is missing descriptor for {k} keychain")
+            LoadError::MissingNetwork => write!(f, "loaded data is missing the network"),
+            LoadError::MissingKeychain(keychain) => {
+                write!(f, "loaded data does not contain the keychain {keychain}")
             }
-            LoadError::Mismatch(e) => write!(f, "{e}"),
+            LoadError::InvalidKeyRing(err) => write!(f, "{err}"),
+            LoadError::EmptyKeyring => write!(f, "Loaded keyring is empty"),
+            LoadError::GenesisMismatch { loaded, expected } => write!(
+                f,
+                "Genesis hash mismatch: loaded {loaded}, expected {expected}"
+            ),
+            LoadError::NetworkMismatch { loaded, expected } => {
+                write!(f, "Network mismatch: loaded {loaded}, expected {expected}")
+            }
+            LoadError::GenesisMismatch { loaded, expected } => {
+                write!(
+                    f,
+                    "Genesis hash mismatch: loaded {loaded}, expected {expected}"
+                )
+            }
+            LoadError::DescriptorMismatch {
+                keychain,
+                loaded,
+                expected,
+            } => {
+                write!(
+                    f,
+                    "Descriptor mismatch for {} keychain: loaded {}, expected {}",
+                    keychain, loaded, expected,
+                )
+            }
         }
     }
 }
 
 #[cfg(feature = "std")]
-impl std::error::Error for LoadError {}
+impl<K> std::error::Error for LoadError<K> where K: Display + Debug {}
 
 /// Represents a mismatch with what is loaded and what is expected from [`LoadParams`].
 #[derive(Debug, PartialEq)]
@@ -83,7 +132,7 @@ pub enum LoadMismatch {
     },
 }
 
-impl fmt::Display for LoadMismatch {
+impl Display for LoadMismatch {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             LoadMismatch::Network { loaded, expected } => {
@@ -116,49 +165,7 @@ impl fmt::Display for LoadMismatch {
     }
 }
 
-impl<E> From<LoadMismatch> for LoadWithPersistError<E> {
-    fn from(mismatch: LoadMismatch) -> Self {
-        Self::InvalidChangeSet(LoadError::Mismatch(mismatch))
-    }
-}
-
-impl From<LoadMismatch> for LoadError {
-    fn from(mismatch: LoadMismatch) -> Self {
-        Self::Mismatch(mismatch)
-    }
-}
-
-/// An error that may occur when applying a block to [`Wallet`].
-#[derive(Debug)]
-pub enum ApplyBlockError {
-    /// Occurs when the update chain cannot connect with original chain.
-    CannotConnect(CannotConnectError),
-    /// Occurs when the `connected_to` hash does not match the hash derived from `block`.
-    UnexpectedConnectedToHash {
-        /// Block hash of `connected_to`.
-        connected_to_hash: BlockHash,
-        /// Expected block hash of `connected_to`, as derived from `block`.
-        expected_hash: BlockHash,
-    },
-}
-
-impl fmt::Display for ApplyBlockError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ApplyBlockError::CannotConnect(err) => err.fmt(f),
-            ApplyBlockError::UnexpectedConnectedToHash {
-                expected_hash: block_hash,
-                connected_to_hash: checkpoint_hash,
-            } => write!(
-                f,
-                "`connected_to` hash {checkpoint_hash} differs from the expected hash {block_hash} (which is derived from `block`)"
-            ),
-        }
-    }
-}
-
-#[cfg(feature = "std")]
-impl std::error::Error for ApplyBlockError {}
+// TODO PR #318: I applied the changes in #382 here. Bring back the error if it's needed!
 
 /// Errors returned by miniscript when updating inconsistent PSBTs
 #[derive(Debug, Clone)]
@@ -171,7 +178,7 @@ pub enum MiniscriptPsbtError {
     OutputUpdate(miniscript::psbt::OutputUpdateError),
 }
 
-impl fmt::Display for MiniscriptPsbtError {
+impl Display for MiniscriptPsbtError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Conversion(err) => write!(f, "Conversion error: {err}"),
@@ -184,169 +191,169 @@ impl fmt::Display for MiniscriptPsbtError {
 #[cfg(feature = "std")]
 impl std::error::Error for MiniscriptPsbtError {}
 
-#[derive(Debug)]
-/// Error returned from [`TxBuilder::finish`]
-///
-/// [`TxBuilder::finish`]: crate::wallet::tx_builder::TxBuilder::finish
-pub enum CreateTxError {
-    /// There was a problem with the descriptors passed in
-    Descriptor(DescriptorError),
-    /// There was a problem while extracting and manipulating policies
-    Policy(PolicyError),
-    /// Spending policy is not compatible with this [`KeychainKind`]
-    SpendingPolicyRequired(KeychainKind),
-    /// Requested invalid transaction version '0'
-    Version0,
-    /// Requested transaction version `1`, but at least `2` is needed to use OP_CSV
-    Version1Csv,
-    /// Requested `LockTime` is less than is required to spend from this script
-    LockTime {
-        /// Requested `LockTime`
-        requested: absolute::LockTime,
-        /// Required `LockTime`
-        required: absolute::LockTime,
-    },
-    /// Cannot enable RBF with `Sequence` given a required OP_CSV
-    RbfSequenceCsv {
-        /// Given RBF `Sequence`
-        sequence: Sequence,
-        /// Required OP_CSV `Sequence`
-        csv: Sequence,
-    },
-    /// When bumping a tx the absolute fee requested is lower than replaced tx absolute fee
-    FeeTooLow {
-        /// Required fee absolute value [`Amount`]
-        required: Amount,
-    },
-    /// When bumping a tx the fee rate requested is lower than required
-    FeeRateTooLow {
-        /// Required fee rate
-        required: bitcoin::FeeRate,
-    },
-    /// `manually_selected_only` option is selected but no utxo has been passed
-    NoUtxosSelected,
-    /// Output created is under the dust limit, 546 satoshis
-    OutputBelowDustLimit(usize),
-    /// There was an error with coin selection
-    CoinSelection(coin_selection::InsufficientFunds),
-    /// Cannot build a tx without recipients
-    NoRecipients,
-    /// Partially signed bitcoin transaction error
-    Psbt(psbt::Error),
-    /// In order to use the [`TxBuilder::add_global_xpubs`] option every extended
-    /// key in the descriptor must either be a master key itself (having depth = 0) or have an
-    /// explicit origin provided
-    ///
-    /// [`TxBuilder::add_global_xpubs`]: crate::wallet::tx_builder::TxBuilder::add_global_xpubs
-    MissingKeyOrigin(String),
-    /// Happens when trying to spend an UTXO that is not in the internal database
-    UnknownUtxo,
-    /// Missing non_witness_utxo on foreign utxo for given `OutPoint`
-    MissingNonWitnessUtxo(OutPoint),
-    /// Miniscript PSBT error
-    MiniscriptPsbt(MiniscriptPsbtError),
-}
+// #[derive(Debug)]
+// /// Error returned from [`TxBuilder::finish`]
+// ///
+// /// [`TxBuilder::finish`]: crate::wallet::tx_builder::TxBuilder::finish
+// pub enum CreateTxError {
+//     /// There was a problem with the descriptors passed in
+//     Descriptor(DescriptorError),
+//     /// There was a problem while extracting and manipulating policies
+//     // Policy(PolicyError),
+//     /// Spending policy is not compatible with this [`KeychainKind`]
+//     SpendingPolicyRequired(KeychainKind),
+//     /// Requested invalid transaction version '0'
+//     Version0,
+//     /// Requested transaction version `1`, but at least `2` is needed to use OP_CSV
+//     Version1Csv,
+//     /// Requested `LockTime` is less than is required to spend from this script
+//     LockTime {
+//         /// Requested `LockTime`
+//         requested: absolute::LockTime,
+//         /// Required `LockTime`
+//         required: absolute::LockTime,
+//     },
+//     /// Cannot enable RBF with `Sequence` given a required OP_CSV
+//     RbfSequenceCsv {
+//         /// Given RBF `Sequence`
+//         sequence: Sequence,
+//         /// Required OP_CSV `Sequence`
+//         csv: Sequence,
+//     },
+//     /// When bumping a tx the absolute fee requested is lower than replaced tx absolute fee
+//     FeeTooLow {
+//         /// Required fee absolute value [`Amount`]
+//         required: Amount,
+//     },
+//     /// When bumping a tx the fee rate requested is lower than required
+//     FeeRateTooLow {
+//         /// Required fee rate
+//         required: bitcoin::FeeRate,
+//     },
+//     /// `manually_selected_only` option is selected but no utxo has been passed
+//     NoUtxosSelected,
+//     /// Output created is under the dust limit, 546 satoshis
+//     OutputBelowDustLimit(usize),
+//     /// There was an error with coin selection
+//     CoinSelection(coin_selection::InsufficientFunds),
+//     /// Cannot build a tx without recipients
+//     NoRecipients,
+//     /// Partially signed bitcoin transaction error
+//     Psbt(psbt::Error),
+//     /// In order to use the [`TxBuilder::add_global_xpubs`] option every extended
+//     /// key in the descriptor must either be a master key itself (having depth = 0) or have an
+//     /// explicit origin provided
+//     ///
+//     /// [`TxBuilder::add_global_xpubs`]: crate::wallet::tx_builder::TxBuilder::add_global_xpubs
+//     MissingKeyOrigin(String),
+//     /// Happens when trying to spend an UTXO that is not in the internal database
+//     UnknownUtxo,
+//     /// Missing non_witness_utxo on foreign utxo for given `OutPoint`
+//     MissingNonWitnessUtxo(OutPoint),
+//     /// Miniscript PSBT error
+//     MiniscriptPsbt(MiniscriptPsbtError),
+// }
+//
+// impl fmt::Display for CreateTxError {
+//     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+//         match self {
+//             Self::Descriptor(e) => e.fmt(f),
+//             // Self::Policy(e) => e.fmt(f),
+//             CreateTxError::SpendingPolicyRequired(keychain_kind) => {
+//                 write!(f, "Spending policy required: {keychain_kind}")
+//             }
+//             CreateTxError::Version0 => {
+//                 write!(f, "Invalid version `0`")
+//             }
+//             CreateTxError::Version1Csv => {
+//                 write!(
+//                     f,
+//                     "TxBuilder requested version `1`, but at least `2` is needed to use OP_CSV"
+//                 )
+//             }
+//             CreateTxError::LockTime {
+//                 requested,
+//                 required,
+//             } => {
+//                 write!(f, "TxBuilder requested timelock of `{requested}`, but at least
+// `{required}` is required to spend from this script")             }
+//             CreateTxError::RbfSequenceCsv { sequence, csv } => {
+//                 write!(
+//                     f,
+//                     "Cannot enable RBF with nSequence `{sequence}` given a required OP_CSV of
+// `{csv}`"                 )
+//             }
+//             CreateTxError::FeeTooLow { required } => {
+//                 write!(f, "Fee to low: required {}", required.display_dynamic())
+//             }
+//             CreateTxError::FeeRateTooLow { required } => {
+//                 write!(
+//                     f,
+//                     // Note: alternate fmt as sat/vb (ceil) available in bitcoin-0.31
+//                     //"Fee rate too low: required {required:#}"
+//                     "Fee rate too low: required {} sat/vb",
+//                     crate::floating_rate!(required)
+//                 )
+//             }
+//             CreateTxError::NoUtxosSelected => {
+//                 write!(f, "No UTXO selected")
+//             }
+//             CreateTxError::OutputBelowDustLimit(limit) => {
+//                 write!(f, "Output below the dust limit: {limit}")
+//             }
+//             CreateTxError::CoinSelection(e) => e.fmt(f),
+//             CreateTxError::NoRecipients => {
+//                 write!(f, "Cannot build tx without recipients")
+//             }
+//             CreateTxError::Psbt(e) => e.fmt(f),
+//             CreateTxError::MissingKeyOrigin(err) => {
+//                 write!(f, "Missing key origin: {err}")
+//             }
+//             CreateTxError::UnknownUtxo => {
+//                 write!(f, "UTXO not found in the internal database")
+//             }
+//             CreateTxError::MissingNonWitnessUtxo(outpoint) => {
+//                 write!(f, "Missing non_witness_utxo on foreign utxo {outpoint}")
+//             }
+//             CreateTxError::MiniscriptPsbt(err) => {
+//                 write!(f, "Miniscript PSBT error: {err}")
+//             }
+//         }
+//     }
+// }
 
-impl fmt::Display for CreateTxError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Descriptor(e) => e.fmt(f),
-            Self::Policy(e) => e.fmt(f),
-            CreateTxError::SpendingPolicyRequired(keychain_kind) => {
-                write!(f, "Spending policy required: {keychain_kind}")
-            }
-            CreateTxError::Version0 => {
-                write!(f, "Invalid version `0`")
-            }
-            CreateTxError::Version1Csv => {
-                write!(
-                    f,
-                    "TxBuilder requested version `1`, but at least `2` is needed to use OP_CSV"
-                )
-            }
-            CreateTxError::LockTime {
-                requested,
-                required,
-            } => {
-                write!(f, "TxBuilder requested timelock of `{requested}`, but at least `{required}` is required to spend from this script")
-            }
-            CreateTxError::RbfSequenceCsv { sequence, csv } => {
-                write!(
-                    f,
-                    "Cannot enable RBF with nSequence `{sequence}` given a required OP_CSV of `{csv}`"
-                )
-            }
-            CreateTxError::FeeTooLow { required } => {
-                write!(f, "Fee to low: required {}", required.display_dynamic())
-            }
-            CreateTxError::FeeRateTooLow { required } => {
-                write!(
-                    f,
-                    // Note: alternate fmt as sat/vb (ceil) available in bitcoin-0.31
-                    //"Fee rate too low: required {required:#}"
-                    "Fee rate too low: required {} sat/vb",
-                    crate::floating_rate!(required)
-                )
-            }
-            CreateTxError::NoUtxosSelected => {
-                write!(f, "No UTXO selected")
-            }
-            CreateTxError::OutputBelowDustLimit(limit) => {
-                write!(f, "Output below the dust limit: {limit}")
-            }
-            CreateTxError::CoinSelection(e) => e.fmt(f),
-            CreateTxError::NoRecipients => {
-                write!(f, "Cannot build tx without recipients")
-            }
-            CreateTxError::Psbt(e) => e.fmt(f),
-            CreateTxError::MissingKeyOrigin(err) => {
-                write!(f, "Missing key origin: {err}")
-            }
-            CreateTxError::UnknownUtxo => {
-                write!(f, "UTXO not found in the internal database")
-            }
-            CreateTxError::MissingNonWitnessUtxo(outpoint) => {
-                write!(f, "Missing non_witness_utxo on foreign utxo {outpoint}")
-            }
-            CreateTxError::MiniscriptPsbt(err) => {
-                write!(f, "Miniscript PSBT error: {err}")
-            }
-        }
-    }
-}
+// impl From<descriptor::error::Error> for CreateTxError {
+//     fn from(err: descriptor::error::Error) -> Self {
+//         CreateTxError::Descriptor(err)
+//     }
+// }
 
-impl From<descriptor::error::Error> for CreateTxError {
-    fn from(err: descriptor::error::Error) -> Self {
-        CreateTxError::Descriptor(err)
-    }
-}
+// impl From<PolicyError> for CreateTxError {
+//     fn from(err: PolicyError) -> Self {
+//         CreateTxError::Policy(err)
+//     }
+// }
 
-impl From<PolicyError> for CreateTxError {
-    fn from(err: PolicyError) -> Self {
-        CreateTxError::Policy(err)
-    }
-}
+// impl From<MiniscriptPsbtError> for CreateTxError {
+//     fn from(err: MiniscriptPsbtError) -> Self {
+//         CreateTxError::MiniscriptPsbt(err)
+//     }
+// }
+//
+// impl From<psbt::Error> for CreateTxError {
+//     fn from(err: psbt::Error) -> Self {
+//         CreateTxError::Psbt(err)
+//     }
+// }
 
-impl From<MiniscriptPsbtError> for CreateTxError {
-    fn from(err: MiniscriptPsbtError) -> Self {
-        CreateTxError::MiniscriptPsbt(err)
-    }
-}
+// impl From<coin_selection::InsufficientFunds> for CreateTxError {
+//     fn from(err: coin_selection::InsufficientFunds) -> Self {
+//         CreateTxError::CoinSelection(err)
+//     }
+// }
 
-impl From<psbt::Error> for CreateTxError {
-    fn from(err: psbt::Error) -> Self {
-        CreateTxError::Psbt(err)
-    }
-}
-
-impl From<coin_selection::InsufficientFunds> for CreateTxError {
-    fn from(err: coin_selection::InsufficientFunds) -> Self {
-        CreateTxError::CoinSelection(err)
-    }
-}
-
-#[cfg(feature = "std")]
-impl std::error::Error for CreateTxError {}
+// #[cfg(feature = "std")]
+// impl std::error::Error for CreateTxError {}
 
 #[derive(Debug)]
 /// Error returned from [`Wallet::build_fee_bump`]
