@@ -9,3 +9,9 @@ Cargo.lock
 *.db
 *.sqlite*
 examples/test_data
+
+# fuzz testing related
+fuzz/target
+fuzz/corpus
+fuzz/artifacts
+fuzz/coverage

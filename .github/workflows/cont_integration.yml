@@ -68,6 +68,8 @@ jobs:
         run: |
           cargo build --workspace --all-targets ${{ matrix.features }}
           cargo test --workspace ${{ matrix.features }}
+          # cargo build --workspace --exclude 'example_*' --exclude 'bdk_wallet_fuzz' ${{ matrix.features }}
+          # cargo test --workspace --exclude 'example_*' --exclude 'bdk_wallet_fuzz' ${{ matrix.features }}
 
   check-no-std:
     name: Check no_std
