@@ -51,7 +51,7 @@ where
 ///
 /// The better option would be to do `Box<dyn IntoWalletDescriptor>`, but we cannot due to Rust's
 /// [object safety rules](https://doc.rust-lang.org/reference/items/traits.html#object-safety).
-type DescriptorToExtract = Box<
+pub(crate) type DescriptorToExtract = Box<
     dyn FnOnce(&SecpCtx, NetworkKind) -> Result<(ExtendedDescriptor, KeyMap), DescriptorError>
         + Send
         + 'static,
