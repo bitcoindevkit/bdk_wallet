@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 
 use bdk_wallet::descriptor::DescriptorError;
-use bdk_wallet::keyring::KeyRing;
 use bdk_wallet::keyring::KeyRingError;
+use bdk_wallet::keyring::{ChangeSet, KeyRing};
 use bdk_wallet::test_utils::get_test_wpkh_and_change_desc;
 use bdk_wallet::KeychainKind;
 use bitcoin::secp256k1::Secp256k1;
@@ -122,4 +122,97 @@ fn test_duplicate_keychain_and_desc() {
     //try inserting duplicate keychain(err)
     let err = keyring.add_descriptor(1, desc).unwrap_err();
     assert_eq!(err, KeyRingError::KeychainAlreadyExists(1));
+}
+
+#[cfg(feature = "rusqlite")]
+#[test]
+fn test_from_v2() -> anyhow::Result<()> {
+    use bdk_chain::{
+        rusqlite::{params, types::Null, Connection},
+        Impl,
+    };
+    let mut conn = Connection::open_in_memory()?;
+
+    let desc_str = "tr(tprv8ZgxMBicQKsPdWAHbugK2tjtVtRjKGixYVZUdL7xLHMgXZS6BFbFi1UDb1CHT25Z5PU1F9j7wGxwUiRhqz9E3nZRztikGUV6HoRDYcqPhM4/86'/1'/0'/0/*)";
+
+    let change_desc_str = "tr(tprv8ZgxMBicQKsPdWAHbugK2tjtVtRjKGixYVZUdL7xLHMgXZS6BFbFi1UDb1CHT25Z5PU1F9j7wGxwUiRhqz9E3nZRztikGUV6HoRDYcqPhM4/86'/1'/0'/1/*)";
+
+    let descriptor = get_descriptor(desc_str);
+
+    let change_descriptor = get_descriptor(change_desc_str);
+
+    let network = Network::Regtest;
+
+    conn.execute(
+        "CREATE TABLE bdk_wallet ( \
+                id INTEGER PRIMARY KEY NOT NULL CHECK (id = 0), \
+                descriptor TEXT, \
+                change_descriptor TEXT, \
+                network TEXT \
+                ) STRICT;",
+        [],
+    )?;
+
+    conn.execute(
+        "INSERT INTO bdk_wallet (id, descriptor) VALUES(?1 , ?2) ON CONFLICT(id) DO UPDATE SET descriptor=?2",
+        params![0, Impl(descriptor.clone())],
+    )?;
+
+    conn.execute(
+        "INSERT INTO bdk_wallet (id, change_descriptor) VALUES(?1 , ?2) ON CONFLICT(id) DO UPDATE SET change_descriptor=?2",
+        params![0, Impl(change_descriptor.clone())],
+    )?;
+
+    conn.execute(
+        "INSERT INTO bdk_wallet (id, network) VALUES(?1 , ?2) ON CONFLICT(id) DO UPDATE SET network=?2",
+        params![0, Impl(network)],
+    )?;
+
+    let keyring_changeset = ChangeSet::from_v2_to_keychainkind(&mut conn)?;
+    let keyring = KeyRing::from_changeset(keyring_changeset, None, [].into())?
+        .expect("changeset should not be empty");
+    let descriptors = keyring.list_keychains();
+    assert_eq!(
+        descriptors.get(&KeychainKind::External),
+        Some(&descriptor),
+        "External keychain must be loaded"
+    );
+    assert_eq!(
+        descriptors.get(&KeychainKind::Internal),
+        Some(&change_descriptor),
+        "Internal keychain must be loaded"
+    );
+    assert_eq!(
+        keyring.network(),
+        Network::Regtest,
+        "network must be loaded"
+    );
+
+    conn.execute(
+        "INSERT INTO bdk_wallet (id, change_descriptor) VALUES(?1 , ?2) ON CONFLICT(id) DO UPDATE SET change_descriptor=?2",
+        params![0, &Null],
+    )?;
+
+    let keyring_changeset = ChangeSet::from_v2_to_keychainkind(&mut conn)?;
+    let keyring = KeyRing::from_changeset(keyring_changeset, None, [].into())?
+        .expect("changeset should not be empty");
+
+    let descriptors = keyring.list_keychains();
+    assert_eq!(
+        descriptors.get(&KeychainKind::External),
+        Some(&descriptor),
+        "External keychain must be loaded"
+    );
+    assert_eq!(
+        descriptors.get(&KeychainKind::Internal),
+        None,
+        "Internal keychain must not be loaded"
+    );
+    assert_eq!(
+        keyring.network(),
+        Network::Regtest,
+        "network must be loaded "
+    );
+
+    Ok(())
 }
