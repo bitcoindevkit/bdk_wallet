@@ -25,3 +25,10 @@ path = "fuzz_targets/bdk_wallet.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "bdk_wallet_optimized"
+path = "fuzz_targets/bdk_wallet_optimized.rs"
+test = false
+doc = false
+bench = false
