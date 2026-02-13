@@ -211,24 +211,27 @@ fn check_balance() {
     // assert_eq!(min_3_conf_balance.trusted_pending.to_sat(), 4_000);
 }
 
-// #[test]
-// fn test_descriptor_checksum() {
-//     let (wallet, _) = get_funded_wallet_wpkh();
-//     let checksum = wallet.descriptor_checksum(KeychainKind::External);
-//     assert_eq!(checksum.len(), 8);
-//
-//     let raw_descriptor = wallet
-//         .keyring()
-//         .list_keychains()
-//         .get(&KeychainKind::External)
-//         .unwrap()
-//         .to_string()
-//         .split_once('#')
-//         .unwrap()
-//         .0
-//         .to_string();
-//     assert_eq!(calc_checksum(&raw_descriptor).unwrap(), checksum);
-// }
+#[test]
+fn test_descriptor_checksum() {
+    let (wallet, _) = get_funded_wallet_wpkh();
+    let checksum = wallet
+        .keyring()
+        .descriptor_checksum(KeychainKind::External)
+        .expect("keychain must exist");
+    assert_eq!(checksum.len(), 8);
+
+    let raw_descriptor = wallet
+        .keyring()
+        .list_keychains()
+        .get(&KeychainKind::External)
+        .unwrap()
+        .to_string()
+        .split_once('#')
+        .unwrap()
+        .0
+        .to_string();
+    assert_eq!(calc_checksum(&raw_descriptor).unwrap(), checksum);
+}
 
 #[test]
 fn test_get_funded_wallet_balance() {
