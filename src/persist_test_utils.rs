@@ -1,5 +1,10 @@
 //! Utilities for testing custom persistence backends for `bdk_wallet`
 
+use alloc::boxed::Box;
+use core::fmt;
+#[cfg(feature = "std")]
+use std::error::Error as StdErr;
+
 use crate::{
     bitcoin::{
         absolute, key::Secp256k1, transaction, Address, Amount, Network, OutPoint, ScriptBuf,
@@ -11,7 +16,7 @@ use crate::{
     },
     locked_outpoints,
     miniscript::descriptor::{Descriptor, DescriptorPublicKey},
-    ChangeSet, WalletPersister,
+    AsyncWalletPersister, ChangeSet, WalletPersister,
 };
 
 macro_rules! block_id {
@@ -29,8 +34,6 @@ macro_rules! hash {
     }};
 }
 
-use std::fmt::Debug;
-use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -74,23 +77,322 @@ fn spk_at_index(descriptor: &Descriptor<DescriptorPublicKey>, index: u32) -> Scr
 /// We create a dummy [`ChangeSet`], persist it and check if loaded [`ChangeSet`] matches
 /// the persisted one. We then create another such dummy [`ChangeSet`], persist it and load it to
 /// check if merged [`ChangeSet`] is returned.
-pub fn persist_wallet_changeset<Store, CreateStore>(filename: &str, create_store: CreateStore)
+pub fn persist_wallet_changeset<F, P>(create_store: F) -> Result<(), PersistError>
 where
-    CreateStore: Fn(&Path) -> anyhow::Result<Store>,
-    Store: WalletPersister,
-    Store::Error: Debug,
+    F: Fn() -> Result<P, P::Error>,
+    P: WalletPersister,
+    P::Error: StdErr + 'static,
 {
+    use PersistError as E;
+
     // create store
-    let temp_dir = tempfile::tempdir().expect("must create tempdir");
-    let file_path = temp_dir.path().join(filename);
-    let mut store = create_store(&file_path).expect("store should get created");
+    let mut store = create_store().map_err(E::persister)?;
 
     // initialize store
-    let changeset =
-        WalletPersister::initialize(&mut store).expect("empty changeset should get loaded");
-    assert_eq!(changeset, ChangeSet::default());
+    let changeset = WalletPersister::initialize(&mut store).map_err(E::persister)?;
+
+    if changeset != ChangeSet::default() {
+        return Err(PersistError::ChangeSetMismatch {
+            got: Box::new(changeset),
+            expected: Box::new(ChangeSet::default()),
+        });
+    }
 
     // create changeset
+    let tx1 = create_one_inp_one_out_tx(hash!("We_are_all_Satoshi"), 30_000);
+    let tx2 = create_one_inp_one_out_tx(tx1.compute_txid(), 20_000);
+
+    let mut changeset = get_changeset(tx1);
+
+    // persist and load
+    WalletPersister::persist(&mut store, &changeset).map_err(E::persister)?;
+
+    let changeset_read = WalletPersister::initialize(&mut store).map_err(E::persister)?;
+
+    if changeset != changeset_read {
+        return Err(PersistError::ChangeSetMismatch {
+            got: Box::new(changeset_read),
+            expected: Box::new(changeset.clone()),
+        });
+    }
+
+    // create another changeset
+    let changeset_new = get_changeset_two(tx2);
+
+    // persist, load and check if same as merged
+    WalletPersister::persist(&mut store, &changeset_new).map_err(E::persister)?;
+    let changeset_read_new = WalletPersister::initialize(&mut store).map_err(E::persister)?;
+
+    changeset.merge(changeset_new);
+
+    if changeset != changeset_read_new {
+        return Err(PersistError::ChangeSetMismatch {
+            got: Box::new(changeset_read_new),
+            expected: Box::new(changeset),
+        });
+    }
+
+    Ok(())
+}
+
+/// tests if multiple [`Wallet`]s can be persisted in a single file correctly
+///
+/// [`Wallet`]: <https://docs.rs/bdk_wallet/latest/bdk_wallet/struct.Wallet.html>
+/// [`ChangeSet`]: <https://docs.rs/bdk_wallet/latest/bdk_wallet/struct.ChangeSet.html>
+///
+/// We create a dummy [`ChangeSet`] for first wallet and persist it then we create a dummy
+/// [`ChangeSet`] for second wallet and persist that. Finally we load these two [`ChangeSet`]s and
+/// check if they were persisted correctly.
+pub fn persist_multiple_wallet_changesets<F, P>(create_stores: F) -> Result<(), PersistError>
+where
+    F: Fn() -> Result<(P, P), P::Error>,
+    P: WalletPersister,
+    P::Error: StdErr + 'static,
+{
+    use PersistError as E;
+
+    // create stores
+    let (mut store_first, mut store_sec) = create_stores().map_err(E::persister)?;
+
+    // initialize first store
+    let changeset = WalletPersister::initialize(&mut store_first).map_err(E::persister)?;
+
+    if changeset != ChangeSet::default() {
+        return Err(PersistError::ChangeSetMismatch {
+            got: Box::new(changeset),
+            expected: Box::new(ChangeSet::default()),
+        });
+    }
+
+    // create first changeset
+    let descriptor: Descriptor<DescriptorPublicKey> = DESCRIPTORS[0].parse().unwrap();
+    let change_descriptor: Descriptor<DescriptorPublicKey> = DESCRIPTORS[1].parse().unwrap();
+
+    let changeset1 = ChangeSet {
+        descriptor: Some(descriptor.clone()),
+        change_descriptor: Some(change_descriptor.clone()),
+        network: Some(Network::Testnet),
+        ..ChangeSet::default()
+    };
+
+    // persist first changeset
+    WalletPersister::persist(&mut store_first, &changeset1).map_err(E::persister)?;
+
+    // initialize second store
+    let changeset = WalletPersister::initialize(&mut store_sec).map_err(E::persister)?;
+
+    if changeset != ChangeSet::default() {
+        return Err(PersistError::ChangeSetMismatch {
+            got: Box::new(changeset),
+            expected: Box::new(ChangeSet::default()),
+        });
+    }
+
+    // create second changeset
+    let descriptor: Descriptor<DescriptorPublicKey> = DESCRIPTORS[2].parse().unwrap();
+    let change_descriptor: Descriptor<DescriptorPublicKey> = DESCRIPTORS[3].parse().unwrap();
+
+    let changeset2 = ChangeSet {
+        descriptor: Some(descriptor.clone()),
+        change_descriptor: Some(change_descriptor.clone()),
+        network: Some(Network::Testnet),
+        ..ChangeSet::default()
+    };
+
+    // persist second changeset
+    WalletPersister::persist(&mut store_sec, &changeset2).map_err(E::persister)?;
+
+    // load first changeset
+    let changeset_read = WalletPersister::initialize(&mut store_first).map_err(E::persister)?;
+
+    if changeset_read != changeset1 {
+        return Err(PersistError::ChangeSetMismatch {
+            got: Box::new(changeset_read),
+            expected: Box::new(changeset1),
+        });
+    }
+
+    // load second changeset
+    let changeset_read = WalletPersister::initialize(&mut store_sec).map_err(E::persister)?;
+
+    if changeset_read != changeset2 {
+        return Err(PersistError::ChangeSetMismatch {
+            got: Box::new(changeset_read),
+            expected: Box::new(changeset2),
+        });
+    }
+
+    Ok(())
+}
+
+/// tests if [`Network`] is being persisted correctly
+///
+/// [`Network`]: <https://docs.rs/bitcoin/latest/bitcoin/enum.Network.html>
+/// [`ChangeSet`]: <https://docs.rs/bdk_wallet/latest/bdk_wallet/struct.ChangeSet.html>
+///
+/// We create a dummy [`ChangeSet`] with only network field populated, persist it and check if
+/// loaded [`ChangeSet`] has the same [`Network`] as what we persisted.
+pub fn persist_network<F, P>(create_store: F) -> Result<(), PersistError>
+where
+    F: Fn() -> Result<P, P::Error>,
+    P: WalletPersister,
+    P::Error: StdErr + 'static,
+{
+    use PersistError as E;
+
+    // create store
+    let mut store = create_store().map_err(E::persister)?;
+
+    // initialize store
+    let changeset = WalletPersister::initialize(&mut store).map_err(E::persister)?;
+
+    if changeset != ChangeSet::default() {
+        return Err(PersistError::ChangeSetMismatch {
+            got: Box::new(changeset),
+            expected: Box::new(ChangeSet::default()),
+        });
+    }
+
+    // persist the network
+    let changeset = ChangeSet {
+        network: Some(Network::Bitcoin),
+        ..ChangeSet::default()
+    };
+    WalletPersister::persist(&mut store, &changeset).map_err(E::persister)?;
+
+    // read the persisted network
+    let changeset_read = WalletPersister::initialize(&mut store).map_err(E::persister)?;
+
+    let expected_changeset = ChangeSet {
+        network: Some(Network::Bitcoin),
+        ..ChangeSet::default()
+    };
+
+    if changeset_read != expected_changeset {
+        return Err(PersistError::ChangeSetMismatch {
+            got: Box::new(changeset_read),
+            expected: Box::new(expected_changeset),
+        });
+    }
+
+    Ok(())
+}
+
+/// tests if descriptors are being persisted correctly
+///
+/// [`ChangeSet`]: <https://docs.rs/bdk_wallet/latest/bdk_wallet/struct.ChangeSet.html>
+///
+/// We create a dummy [`ChangeSet`] with only descriptor fields populated, persist it and check if
+/// loaded [`ChangeSet`] has the same descriptors as what we persisted.
+pub fn persist_keychains<F, P>(create_store: F) -> Result<(), PersistError>
+where
+    F: Fn() -> Result<P, P::Error>,
+    P: WalletPersister,
+    P::Error: StdErr + 'static,
+{
+    use PersistError as E;
+
+    // create store
+    let mut store = create_store().map_err(E::persister)?;
+
+    // initialize store
+    let changeset = WalletPersister::initialize(&mut store).map_err(E::persister)?;
+
+    if changeset != ChangeSet::default() {
+        return Err(PersistError::ChangeSetMismatch {
+            got: Box::new(changeset),
+            expected: Box::new(ChangeSet::default()),
+        });
+    }
+
+    // persist the descriptors
+    let descriptor: Descriptor<DescriptorPublicKey> = DESCRIPTORS[1].parse().unwrap();
+    let change_descriptor: Descriptor<DescriptorPublicKey> = DESCRIPTORS[0].parse().unwrap();
+
+    let changeset = ChangeSet {
+        descriptor: Some(descriptor.clone()),
+        change_descriptor: Some(change_descriptor.clone()),
+        ..ChangeSet::default()
+    };
+
+    WalletPersister::persist(&mut store, &changeset).map_err(E::persister)?;
+
+    // load the descriptors
+    let changeset_read = WalletPersister::initialize(&mut store).map_err(E::persister)?;
+
+    let expected_changeset = ChangeSet {
+        descriptor: Some(descriptor.clone()),
+        change_descriptor: Some(change_descriptor.clone()),
+        ..ChangeSet::default()
+    };
+
+    if changeset_read != expected_changeset {
+        return Err(PersistError::ChangeSetMismatch {
+            got: Box::new(changeset_read),
+            expected: Box::new(expected_changeset),
+        });
+    }
+
+    Ok(())
+}
+
+/// tests if descriptor(in a single keychain wallet) is being persisted correctly
+///
+/// [`ChangeSet`]: <https://docs.rs/bdk_wallet/latest/bdk_wallet/struct.ChangeSet.html>
+///
+/// We create a dummy [`ChangeSet`] with only descriptor field populated, persist it and check if
+/// loaded [`ChangeSet`] has the same descriptor as what we persisted.
+pub fn persist_single_keychain<F, P>(create_store: F) -> Result<(), PersistError>
+where
+    F: Fn() -> Result<P, P::Error>,
+    P: WalletPersister,
+    P::Error: StdErr + 'static,
+{
+    use PersistError as E;
+
+    // create store
+    let mut store = create_store().map_err(E::persister)?;
+
+    // initialize store
+    let changeset = WalletPersister::initialize(&mut store).map_err(E::persister)?;
+
+    if changeset != ChangeSet::default() {
+        return Err(PersistError::ChangeSetMismatch {
+            got: Box::new(changeset),
+            expected: Box::new(ChangeSet::default()),
+        });
+    }
+
+    // persist descriptor
+    let descriptor: Descriptor<DescriptorPublicKey> = DESCRIPTORS[0].parse().unwrap();
+
+    let changeset = ChangeSet {
+        descriptor: Some(descriptor.clone()),
+        ..ChangeSet::default()
+    };
+
+    WalletPersister::persist(&mut store, &changeset).map_err(E::persister)?;
+
+    // load the descriptor
+    let changeset_read = WalletPersister::initialize(&mut store).map_err(E::persister)?;
+
+    let expected_changeset = ChangeSet {
+        descriptor: Some(descriptor.clone()),
+        ..ChangeSet::default()
+    };
+
+    if changeset_read != expected_changeset {
+        return Err(PersistError::ChangeSetMismatch {
+            got: Box::new(changeset_read),
+            expected: Box::new(expected_changeset),
+        });
+    }
+
+    Ok(())
+}
+
+/// Creates a [`ChangeSet`].
+fn get_changeset(tx1: Transaction) -> ChangeSet {
     let descriptor: Descriptor<DescriptorPublicKey> = DESCRIPTORS[0].parse().unwrap();
     let change_descriptor: Descriptor<DescriptorPublicKey> = DESCRIPTORS[1].parse().unwrap();
 
@@ -103,11 +405,7 @@ where
         .into(),
     };
 
-    let tx1 = Arc::new(create_one_inp_one_out_tx(
-        hash!("We_are_all_Satoshi"),
-        30_000,
-    ));
-    let tx2 = Arc::new(create_one_inp_one_out_tx(tx1.compute_txid(), 20_000));
+    let txid1 = tx1.compute_txid();
 
     let conf_anchor: ConfirmationBlockTime = ConfirmationBlockTime {
         block_id: block_id!(910234, "B"),
@@ -117,7 +415,7 @@ where
     let outpoint = OutPoint::new(hash!("Rust"), 0);
 
     let tx_graph_changeset = tx_graph::ChangeSet::<ConfirmationBlockTime> {
-        txs: [tx1.clone()].into(),
+        txs: [Arc::new(tx1)].into(),
         txouts: [
             (
                 outpoint,
@@ -135,10 +433,10 @@ where
             ),
         ]
         .into(),
-        anchors: [(conf_anchor, tx1.compute_txid())].into(),
-        last_seen: [(tx1.compute_txid(), 1755317760)].into(),
-        first_seen: [(tx1.compute_txid(), 1755317750)].into(),
-        last_evicted: [(tx1.compute_txid(), 1755317760)].into(),
+        anchors: [(conf_anchor, txid1)].into(),
+        last_seen: [(txid1, 1755317760)].into(),
+        first_seen: [(txid1, 1755317750)].into(),
+        last_evicted: [(txid1, 1755317760)].into(),
     };
 
     let keychain_txout_changeset = keychain_txout::ChangeSet {
@@ -164,7 +462,7 @@ where
         outpoints: [(outpoint, true)].into(),
     };
 
-    let mut changeset = ChangeSet {
+    ChangeSet {
         descriptor: Some(descriptor.clone()),
         change_descriptor: Some(change_descriptor.clone()),
         network: Some(Network::Testnet),
@@ -172,17 +470,13 @@ where
         tx_graph: tx_graph_changeset,
         indexer: keychain_txout_changeset,
         locked_outpoints: locked_outpoints_changeset,
-    };
+    }
+}
 
-    // persist and load
-    WalletPersister::persist(&mut store, &changeset).expect("changeset should get persisted");
+/// Creates another [`ChangeSet`].
+fn get_changeset_two(tx2: Transaction) -> ChangeSet {
+    let descriptor: Descriptor<DescriptorPublicKey> = DESCRIPTORS[0].parse().unwrap();
 
-    let changeset_read =
-        WalletPersister::initialize(&mut store).expect("changeset should get loaded");
-
-    assert_eq!(changeset, changeset_read);
-
-    // create another changeset
     let local_chain_changeset = local_chain::ChangeSet {
         blocks: [(910236, Some(hash!("BDK")))].into(),
     };
@@ -192,10 +486,12 @@ where
         confirmation_time: 1755317760,
     };
 
-    let outpoint = OutPoint::new(hash!("Bitcoin_fixes_things"), 1);
+    let txid2 = tx2.compute_txid();
+
+    let outpoint = OutPoint::new(hash!("Bitcoin_fixes_things"), 0);
 
     let tx_graph_changeset = tx_graph::ChangeSet::<ConfirmationBlockTime> {
-        txs: [tx2.clone()].into(),
+        txs: [Arc::new(tx2)].into(),
         txouts: [(
             outpoint,
             TxOut {
@@ -204,10 +500,10 @@ where
             },
         )]
         .into(),
-        anchors: [(conf_anchor, tx2.compute_txid())].into(),
-        last_seen: [(tx2.compute_txid(), 1755317700)].into(),
-        first_seen: [(tx2.compute_txid(), 1755317700)].into(),
-        last_evicted: [(tx2.compute_txid(), 1755317760)].into(),
+        anchors: [(conf_anchor, txid2)].into(),
+        last_seen: [(txid2, 1755317700)].into(),
+        first_seen: [(txid2, 1755317700)].into(),
+        last_evicted: [(txid2, 1755317760)].into(),
     };
 
     let keychain_txout_changeset = keychain_txout::ChangeSet {
@@ -223,7 +519,7 @@ where
         outpoints: [(outpoint, true)].into(),
     };
 
-    let changeset_new = ChangeSet {
+    ChangeSet {
         descriptor: None,
         change_descriptor: None,
         network: None,
@@ -231,204 +527,118 @@ where
         tx_graph: tx_graph_changeset,
         indexer: keychain_txout_changeset,
         locked_outpoints: locked_outpoints_changeset,
-    };
-
-    // persist, load and check if same as merged
-    WalletPersister::persist(&mut store, &changeset_new).expect("changeset should get persisted");
-    let changeset_read_new = WalletPersister::initialize(&mut store).unwrap();
-
-    changeset.merge(changeset_new);
-
-    assert_eq!(changeset, changeset_read_new);
+    }
 }
 
-/// tests if multiple [`Wallet`]s can be persisted in a single file correctly
-///
-/// [`Wallet`]: <https://docs.rs/bdk_wallet/latest/bdk_wallet/struct.Wallet.html>
-/// [`ChangeSet`]: <https://docs.rs/bdk_wallet/latest/bdk_wallet/struct.ChangeSet.html>
-///
-/// We create a dummy [`ChangeSet`] for first wallet and persist it then we create a dummy
-/// [`ChangeSet`] for second wallet and persist that. Finally we load these two [`ChangeSet`]s and
-/// check if they were persisted correctly.
-pub fn persist_multiple_wallet_changesets<Store, CreateStores>(
-    filename: &str,
-    create_dbs: CreateStores,
-) where
-    CreateStores: Fn(&Path) -> anyhow::Result<(Store, Store)>,
-    Store: WalletPersister,
-    Store::Error: Debug,
-{
-    // create stores
-    let temp_dir = tempfile::tempdir().expect("must create tempdir");
-    let file_path = temp_dir.path().join(filename);
-
-    let (mut store_first, mut store_sec) =
-        create_dbs(&file_path).expect("store should get created");
-
-    // initialize first store
-    let changeset =
-        WalletPersister::initialize(&mut store_first).expect("should load empty changeset");
-    assert_eq!(changeset, ChangeSet::default());
-
-    // create first changeset
-    let descriptor: Descriptor<DescriptorPublicKey> = DESCRIPTORS[0].parse().unwrap();
-    let change_descriptor: Descriptor<DescriptorPublicKey> = DESCRIPTORS[1].parse().unwrap();
-
-    let changeset1 = ChangeSet {
-        descriptor: Some(descriptor.clone()),
-        change_descriptor: Some(change_descriptor.clone()),
-        network: Some(Network::Testnet),
-        ..ChangeSet::default()
-    };
-
-    // persist first changeset
-    WalletPersister::persist(&mut store_first, &changeset1).expect("should persist changeset");
-
-    // initialize second store
-    let changeset =
-        WalletPersister::initialize(&mut store_sec).expect("should load empty changeset");
-    assert_eq!(changeset, ChangeSet::default());
-
-    // create second changeset
-    let descriptor: Descriptor<DescriptorPublicKey> = DESCRIPTORS[2].parse().unwrap();
-    let change_descriptor: Descriptor<DescriptorPublicKey> = DESCRIPTORS[3].parse().unwrap();
-
-    let changeset2 = ChangeSet {
-        descriptor: Some(descriptor.clone()),
-        change_descriptor: Some(change_descriptor.clone()),
-        network: Some(Network::Testnet),
-        ..ChangeSet::default()
-    };
-
-    // persist second changeset
-    WalletPersister::persist(&mut store_sec, &changeset2).expect("should persist changeset");
-
-    // load first changeset
-    let changeset_read =
-        WalletPersister::initialize(&mut store_first).expect("should load persisted changeset1");
-    assert_eq!(changeset_read, changeset1);
-
-    // load second changeset
-    let changeset_read =
-        WalletPersister::initialize(&mut store_sec).expect("should load persisted changeset2");
-    assert_eq!(changeset_read, changeset2);
+/// Errors caused by a failed wallet persister test.
+#[derive(Debug)]
+pub enum PersistError {
+    /// Change set mismatch
+    ChangeSetMismatch {
+        /// the resulting changeset
+        got: Box<ChangeSet>,
+        /// the expected changeset
+        expected: Box<ChangeSet>,
+    },
+    /// The wallet persister implementation failed
+    Persister(Box<dyn StdErr + 'static>),
 }
 
-/// tests if [`Network`] is being persisted correctly
+impl fmt::Display for PersistError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Persister(e) => write!(f, "{e}"),
+            Self::ChangeSetMismatch { got, expected } => {
+                write!(f, "expected: {expected:?}, got: {got:?}")
+            }
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl StdErr for PersistError {}
+
+impl PersistError {
+    /// Converts `e` to a [`PersistError::Persister`].
+    fn persister<E>(e: E) -> Self
+    where
+        E: StdErr + 'static,
+    {
+        Self::Persister(Box::new(e))
+    }
+}
+
+/// Test the functionality of an [`AsyncWalletPersister`].
 ///
-/// [`Network`]: <https://docs.rs/bitcoin/latest/bitcoin/enum.Network.html>
-/// [`ChangeSet`]: <https://docs.rs/bdk_wallet/latest/bdk_wallet/struct.ChangeSet.html>
+/// # Errors
 ///
-/// We create a dummy [`ChangeSet`] with only network field populated, persist it and check if
-/// loaded [`ChangeSet`] has the same [`Network`] as what we persisted.
-pub fn persist_network<Store, CreateStore>(filename: &str, create_store: CreateStore)
+/// If any of the following doesn't occur:
+///
+/// - The store must initially be empty
+/// - The store must persist non-empty changesets
+/// - The store must return the expected changeset after being persisted
+pub async fn persist_wallet_changeset_async<F, P>(create_store: F) -> Result<(), PersistError>
 where
-    CreateStore: Fn(&Path) -> anyhow::Result<Store>,
-    Store: WalletPersister,
-    Store::Error: Debug,
+    F: AsyncFn() -> Result<P, P::Error>,
+    P: AsyncWalletPersister,
+    P::Error: StdErr + 'static,
 {
-    // create store
-    let temp_dir = tempfile::tempdir().expect("must create tempdir");
-    let file_path = temp_dir.path().join(filename);
-    let mut store = create_store(&file_path).expect("store should get created");
+    use PersistError as E;
 
-    // initialize store
-    let changeset = WalletPersister::initialize(&mut store)
-        .expect("should initialize and load empty changeset");
-    assert_eq!(changeset, ChangeSet::default());
+    // Create store
+    let mut store = create_store().await.map_err(E::persister)?;
+    let changeset = AsyncWalletPersister::initialize(&mut store)
+        .await
+        .map_err(E::persister)?;
 
-    // persist the network
-    let changeset = ChangeSet {
-        network: Some(Network::Bitcoin),
-        ..ChangeSet::default()
-    };
-    WalletPersister::persist(&mut store, &changeset).expect("should persist changeset");
+    // A newly created store must return an empty changeset
+    if !changeset.is_empty() {
+        return Err(PersistError::ChangeSetMismatch {
+            got: Box::new(changeset),
+            expected: Box::new(ChangeSet::default()),
+        });
+    }
 
-    // read the persisted network
-    let changeset_read =
-        WalletPersister::initialize(&mut store).expect("should load persisted changeset");
+    let tx1 = create_one_inp_one_out_tx(hash!("We_are_all_Satoshi"), 30_000);
+    let tx2 = create_one_inp_one_out_tx(tx1.compute_txid(), 20_000);
 
-    assert_eq!(changeset_read.network, Some(Network::Bitcoin));
-}
+    // Persist changeset
+    let mut expected_changeset = get_changeset(tx1);
 
-/// tests if descriptors are being persisted correctly
-///
-/// [`ChangeSet`]: <https://docs.rs/bdk_wallet/latest/bdk_wallet/struct.ChangeSet.html>
-///
-/// We create a dummy [`ChangeSet`] with only descriptor fields populated, persist it and check if
-/// loaded [`ChangeSet`] has the same descriptors as what we persisted.
-pub fn persist_keychains<Store, CreateStore>(filename: &str, create_store: CreateStore)
-where
-    CreateStore: Fn(&Path) -> anyhow::Result<Store>,
-    Store: WalletPersister,
-    Store::Error: Debug,
-{
-    // create store
-    let temp_dir = tempfile::tempdir().expect("must create tempdir");
-    let file_path = temp_dir.path().join(filename);
-    let mut store = create_store(&file_path).expect("store should get created");
+    AsyncWalletPersister::persist(&mut store, &expected_changeset)
+        .await
+        .map_err(E::persister)?;
 
-    // initialize store
-    let changeset = WalletPersister::initialize(&mut store)
-        .expect("should initialize and load empty changeset");
-    assert_eq!(changeset, ChangeSet::default());
+    let changeset_read = AsyncWalletPersister::initialize(&mut store)
+        .await
+        .map_err(E::persister)?;
 
-    // persist the descriptors
-    let descriptor: Descriptor<DescriptorPublicKey> = DESCRIPTORS[1].parse().unwrap();
-    let change_descriptor: Descriptor<DescriptorPublicKey> = DESCRIPTORS[0].parse().unwrap();
+    if expected_changeset != changeset_read {
+        return Err(E::ChangeSetMismatch {
+            got: Box::new(changeset_read),
+            expected: Box::new(expected_changeset),
+        });
+    }
 
-    let changeset = ChangeSet {
-        descriptor: Some(descriptor.clone()),
-        change_descriptor: Some(change_descriptor.clone()),
-        ..ChangeSet::default()
-    };
+    // Persist another changeset
+    let changeset_2 = get_changeset_two(tx2);
 
-    WalletPersister::persist(&mut store, &changeset).expect("should persist descriptors");
+    AsyncWalletPersister::persist(&mut store, &changeset_2)
+        .await
+        .map_err(E::persister)?;
 
-    // load the descriptors
-    let changeset_read =
-        WalletPersister::initialize(&mut store).expect("should read persisted changeset");
+    let changeset_read = AsyncWalletPersister::initialize(&mut store)
+        .await
+        .map_err(E::persister)?;
 
-    assert_eq!(changeset_read.descriptor.unwrap(), descriptor);
-    assert_eq!(changeset_read.change_descriptor.unwrap(), change_descriptor);
-}
+    expected_changeset.merge(changeset_2);
 
-/// tests if descriptor(in a single keychain wallet) is being persisted correctly
-///
-/// [`ChangeSet`]: <https://docs.rs/bdk_wallet/latest/bdk_wallet/struct.ChangeSet.html>
-///
-/// We create a dummy [`ChangeSet`] with only descriptor field populated, persist it and check if
-/// loaded [`ChangeSet`] has the same descriptor as what we persisted.
-pub fn persist_single_keychain<Store, CreateStore>(filename: &str, create_store: CreateStore)
-where
-    CreateStore: Fn(&Path) -> anyhow::Result<Store>,
-    Store: WalletPersister,
-    Store::Error: Debug,
-{
-    // create store
-    let temp_dir = tempfile::tempdir().expect("must create tempdir");
-    let file_path = temp_dir.path().join(filename);
-    let mut store = create_store(&file_path).expect("store should get created");
+    if changeset_read != changeset {
+        return Err(E::ChangeSetMismatch {
+            got: Box::new(changeset_read),
+            expected: Box::new(expected_changeset),
+        });
+    }
 
-    // initialize store
-    let changeset = WalletPersister::initialize(&mut store)
-        .expect("should initialize and load empty changeset");
-    assert_eq!(changeset, ChangeSet::default());
-
-    // persist descriptor
-    let descriptor: Descriptor<DescriptorPublicKey> = DESCRIPTORS[0].parse().unwrap();
-
-    let changeset = ChangeSet {
-        descriptor: Some(descriptor.clone()),
-        ..ChangeSet::default()
-    };
-
-    WalletPersister::persist(&mut store, &changeset).expect("should persist descriptors");
-
-    // load the descriptor
-    let changeset_read =
-        WalletPersister::initialize(&mut store).expect("should read persisted changeset");
-
-    assert_eq!(changeset_read.descriptor.unwrap(), descriptor);
-    assert_eq!(changeset_read.change_descriptor, None);
+    Ok(())
 }
