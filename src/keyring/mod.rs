@@ -17,6 +17,8 @@
 pub mod changeset;
 /// Contains error types corresponding to `KeyRing`.
 pub mod error;
+/// Contains migration methods
+pub mod migration;
 
 use alloc::fmt;
 pub use changeset::ChangeSet;
@@ -146,7 +148,7 @@ where
     }
 
     /// Construct `KeyRing` from changeset.
-    pub(crate) fn from_changeset(
+    pub fn from_changeset(
         changeset: ChangeSet<K>,
         check_network: Option<bitcoin::Network>,
         check_descs: BTreeMap<K, Option<DescriptorToExtract>>, /* none means just check if
