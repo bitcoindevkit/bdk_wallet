@@ -66,7 +66,7 @@ fn main() {
     }
 
     println!("\n3. Using the last revealed index");
-    for keychain in wallet.keychains().keys() {
+    for keychain in wallet.keyring().list_keychains().keys() {
         let last_revealed_index = wallet.derivation_index(*keychain);
         println!(
             "   Last revealed index on keychain {:?}: {:?}",

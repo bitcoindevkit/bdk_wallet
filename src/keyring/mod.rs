@@ -17,8 +17,13 @@
 pub mod changeset;
 /// Contains error types corresponding to `KeyRing`.
 pub mod error;
+/// Contains migration methods
+pub mod migration;
 
-use alloc::fmt;
+use alloc::{
+    fmt,
+    string::{String, ToString},
+};
 pub use changeset::ChangeSet;
 pub use error::KeyRingError;
 
@@ -146,7 +151,7 @@ where
     }
 
     /// Construct `KeyRing` from changeset.
-    pub(crate) fn from_changeset(
+    pub fn from_changeset(
         changeset: ChangeSet<K>,
         check_network: Option<bitcoin::Network>,
         check_descs: BTreeMap<K, Option<DescriptorToExtract>>, /* none means just check if
@@ -200,6 +205,19 @@ where
             network: loaded_network,
             descriptors: changeset.descriptors,
         }))
+    }
+
+    /// Return the checksum of the public descriptor associated to the `keychain`.
+    pub fn descriptor_checksum(&self, keychain: K) -> Option<String> {
+        Some(
+            self.descriptors
+                .get(&keychain)?
+                .to_string()
+                .split_once('#')
+                .unwrap()
+                .1
+                .to_string(),
+        )
     }
 }
 
