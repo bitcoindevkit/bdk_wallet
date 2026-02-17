@@ -312,10 +312,18 @@ impl Wallet {
         let secp = SecpCtx::new();
         let network = params.network;
         let network_kind = NetworkKind::from(network);
+        let birthday = params.birthday;
         let genesis_hash = params
             .genesis_hash
             .unwrap_or(genesis_block(network).block_hash());
-        let (chain, chain_changeset) = LocalChain::from_genesis_hash(genesis_hash);
+        let (mut chain, chain_changeset) = LocalChain::from_genesis_hash(genesis_hash);
+
+        // Add the `birthday` block to the chain, if provided.
+        if let Some(birthday_block) = birthday {
+            chain
+                .insert_block(birthday_block)
+                .expect("cannot replace genesis");
+        }
 
         let (descriptor, mut descriptor_keymap) = (params.descriptor)(&secp, network_kind)?;
         check_wallet_descriptor(&descriptor)?;
@@ -349,6 +357,7 @@ impl Wallet {
             change_descriptor: change_descriptor.clone(),
             local_chain: chain_changeset,
             network: Some(network),
+            birthday,
             ..Default::default()
         };
 
@@ -437,6 +446,7 @@ impl Wallet {
         let secp = Secp256k1::new();
         let network = changeset.network.ok_or(LoadError::MissingNetwork)?;
         let network_kind = NetworkKind::from(network);
+        let birthday = changeset.birthday;
         let chain = LocalChain::from_changeset(changeset.local_chain)
             .map_err(|_| LoadError::MissingGenesis)?;
 
@@ -445,6 +455,14 @@ impl Wallet {
                 return Err(LoadError::Mismatch(LoadMismatch::Network {
                     loaded: network,
                     expected: exp_network,
+                }));
+            }
+        }
+        if let Some(exp_birthday) = params.check_birthday {
+            if birthday != Some(exp_birthday) {
+                return Err(LoadError::Mismatch(LoadMismatch::Birthday {
+                    loaded: birthday,
+                    expected: Some(exp_birthday),
                 }));
             }
         }
@@ -584,6 +602,25 @@ impl Wallet {
     /// Get the [`Network`] the wallet is using.
     pub fn network(&self) -> Network {
         self.network
+    }
+
+    /// Get the wallet's birthday.
+    ///
+    /// If the wallet's local chain only has a single checkpoint, then the birthay is genesis. If it
+    /// has more than one checkpoint, then the birthday is the checkpoint immediately after genesis.
+    pub fn birthday(&self) -> CheckPoint {
+        let mut cp_iter = self.local_chain().iter_checkpoints();
+        let mut prev_cp = cp_iter
+            .next()
+            .expect("genesis checkpoint is always present");
+        for cp in cp_iter {
+            // A single checkpoint in the chain implies that the birthday is genesis.
+            if cp.prev().is_none() {
+                return prev_cp;
+            }
+            prev_cp = cp;
+        }
+        prev_cp
     }
 
     /// Iterator over all keychains in this wallet

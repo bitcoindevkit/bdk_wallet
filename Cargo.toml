@@ -74,3 +74,6 @@ name = "esplora_blocking"
 
 [[example]]
 name = "bitcoind_rpc"
+
+[[example]]
+name = "bitcoind_rpc_filter"
