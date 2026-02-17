@@ -233,6 +233,8 @@ where
     /// Construct a new [`Wallet`] with the given `params`.
     ///
     /// The `genesis_hash` (if not specified) will be inferred from `keyring.network`.
+    /// If the `genesis_hash` is specified then it will supercede the one inferred from
+    /// `keyring.network` in case of conflict.
     pub fn create_with_params(mut params: CreateParams<K>) -> Result<Self, KeyRingError<K>> {
         let network = params.keyring.network;
         let genesis_inferred = bitcoin::constants::genesis_block(network).block_hash();
