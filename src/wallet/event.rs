@@ -7,7 +7,7 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use bitcoin::{Transaction, Txid};
 use chain::{BlockId, ChainPosition, ConfirmationBlockTime};
-
+use core::fmt::Debug;
 /// Events representing changes to wallet transactions.
 ///
 /// Returned after calling
@@ -82,6 +82,7 @@ pub enum WalletEvent {
     },
 }
 
+// TODO PR #318: Bring this back.
 // /// Generate `WalletEvent`s by comparing the chain tip and wallet transactions before and after
 // /// updating the state of the `Wallet`.
 // pub(crate) fn wallet_events(
