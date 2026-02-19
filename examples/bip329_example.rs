@@ -17,7 +17,7 @@ use bdk_wallet::{
     AddressInfo, KeychainKind, Wallet,
 };
 use bip329::{AddressRecord, Label, LabelRef, Labels, TransactionRecord};
-use bitcoin::{address::NetworkUnchecked, bip32::DerivationPath, Address, Network, OutPoint, Txid};
+use bitcoin::{address::NetworkUnchecked, bip32::DerivationPath, Address, Network, NetworkKind, OutPoint, Txid};
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     io::ErrorKind,
@@ -68,7 +68,7 @@ fn main() -> Result<()> {
     let mnemonic = Mnemonic::parse_in(Language::English, mnemonic_words)?;
     let xkey: ExtendedKey = mnemonic.into_extended_key()?;
     let master_xprv = xkey
-        .into_xprv(network)
+        .into_xprv(network.into())
         .ok_or_else(|| anyhow!("Could not derive xprv for network {}", network))?;
     let external_path = DerivationPath::from_str("m/84h/1h/0h/0")?;
     let internal_path = DerivationPath::from_str("m/84h/1h/0h/1")?;
@@ -76,13 +76,13 @@ fn main() -> Result<()> {
     let (external_descriptor, _ext_keymap, _ext_networks): (
         Descriptor<DescriptorPublicKey>,
         BTreeMap<DescriptorPublicKey, DescriptorSecretKey>,
-        HashSet<Network>,
+        HashSet<NetworkKind>,
     ) = descriptor!(wpkh((master_xprv, external_path)))?;
 
     let (internal_descriptor, _int_keymap, _int_networks): (
         Descriptor<DescriptorPublicKey>,
         BTreeMap<DescriptorPublicKey, DescriptorSecretKey>,
-        HashSet<Network>,
+        HashSet<NetworkKind>,
     ) = descriptor!(wpkh((master_xprv, internal_path)))?;
 
     let external_descriptor_str = external_descriptor.to_string();

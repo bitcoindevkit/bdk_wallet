@@ -51,6 +51,7 @@ clap = { version = "4.5.17", features = ["derive", "env"] }
 ctrlc = "3.4.6"
 rand = "0.8"
 tempfile = "3"
+bip329 = "0.4"
 tokio = { version = "1.38.1", features = ["rt", "rt-multi-thread", "macros"] }
 
 [[example]]
@@ -74,3 +75,8 @@ name = "esplora_blocking"
 
 [[example]]
 name = "bitcoind_rpc"
+
+[[example]]
+name = "bip329_example"
+path = "examples/bip329_example.rs"
+required-features = ["keys-bip39"]
