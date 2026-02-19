@@ -163,6 +163,7 @@ pub struct TxDetails {
     pub tx: Arc<Transaction>,
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 #[cfg(test)]
 mod test {
     // When nSequence is lower than this flag the timelock is interpreted as block-height-based,

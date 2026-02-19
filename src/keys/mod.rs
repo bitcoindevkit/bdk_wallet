@@ -1041,6 +1041,7 @@ impl fmt::Display for KeyError {
 #[cfg(feature = "std")]
 impl std::error::Error for KeyError {}
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 #[cfg(test)]
 mod test {
     use super::*;

@@ -609,6 +609,7 @@ impl DescriptorMeta for ExtendedDescriptor {
     }
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 #[cfg(test)]
 mod test {
     use alloc::string::ToString;

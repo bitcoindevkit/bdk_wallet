@@ -34,6 +34,7 @@ pub fn calc_checksum(desc: &str) -> Result<String, DescriptorError> {
     }
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 #[cfg(test)]
 mod test {
     use super::*;

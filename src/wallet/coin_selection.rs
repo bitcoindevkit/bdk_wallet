@@ -723,6 +723,7 @@ fn calculate_cs_result(
     }
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 #[cfg(test)]
 mod test {
     use assert_matches::assert_matches;

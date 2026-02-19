@@ -5,6 +5,7 @@
     docsrs,
     doc(html_logo_url = "https://github.com/bitcoindevkit/bdk/raw/master/static/bdk.png")
 )]
+#![cfg_attr(coverage_nightly, feature(coverage_attribute))]
 #![no_std]
 #![warn(missing_docs)]
 #![allow(clippy::uninlined_format_args)]
