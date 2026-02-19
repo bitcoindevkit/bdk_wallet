@@ -1085,7 +1085,7 @@ impl Wallet {
     /// [`TxGraph::full_txs`].
     ///
     /// To iterate over all canonical transactions, including those that are irrelevant, use
-    /// [`TxGraph::list_canonical_txs`].
+    /// [`CanonicalView::txs`].
     pub fn transactions(&self) -> impl Iterator<Item = WalletTx> + '_ {
         self.canonical_view
             .txs()

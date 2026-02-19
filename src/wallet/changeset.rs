@@ -97,7 +97,7 @@ type IndexedTxGraphChangeSet =
 /// [merged]: bdk_chain::Merge
 /// [`network`]: Self::network
 /// [`PersistedWallet`]: crate::PersistedWallet
-/// [SQLite]: bdk_chain::rusqlite_impl
+/// [SQLite]: <https://github.com/bitcoindevkit/bdk/blob/chain-0.23.2/crates/chain/src/rusqlite_impl.rs>
 /// [`Update`]: crate::Update
 /// [`WalletPersister`]: crate::WalletPersister
 /// [`Wallet::staged`]: crate::Wallet::staged
