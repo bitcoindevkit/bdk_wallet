@@ -23,6 +23,8 @@ miniscript = { version = "12.3.1", features = ["serde"], default-features = fals
 rand_core = { version = "0.6.0" }
 serde_json = { version = "1" }
 serde = { version = "1", features = ["derive"] }
+chacha20poly1305 = "0.10"
+rand = "0.8"
 
 # Optional dependencies
 anyhow = { version = "1.0.98", optional = true }
