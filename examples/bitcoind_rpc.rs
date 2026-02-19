@@ -144,7 +144,8 @@ fn main() -> anyhow::Result<()> {
         args.start_height,
         wallet
             .transactions()
-            .filter(|tx| tx.chain_position.is_unconfirmed()),
+            .filter(|tx| tx.pos.is_unconfirmed())
+            .map(|tx| tx.tx),
     );
     spawn(move || -> Result<(), anyhow::Error> {
         while let Some(emission) = emitter.next_block()? {

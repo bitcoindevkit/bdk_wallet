@@ -30,7 +30,8 @@ macro_rules! impl_top_level_sh {
         use $crate::miniscript::$ctx;
 
         let build_desc = |k, pks| {
-            Ok((Descriptor::<DescriptorPublicKey>::$inner_struct($inner_struct::$sortedmulti_constructor(k, pks)?), PhantomData::<$ctx>))
+            let thresh = miniscript::Threshold::new(k, pks)?;
+            Ok((Descriptor::<DescriptorPublicKey>::$inner_struct($inner_struct::$sortedmulti_constructor(thresh)?), PhantomData::<$ctx>))
         };
 
         $crate::impl_sortedmulti!(build_desc, sortedmulti $( $inner )*)
@@ -42,7 +43,8 @@ macro_rules! impl_top_level_sh {
         use $crate::miniscript::$ctx;
 
         let build_desc = |k, pks| {
-            Ok((Descriptor::<DescriptorPublicKey>::$inner_struct($inner_struct::$sortedmulti_constructor(k, pks)?), PhantomData::<$ctx>))
+            let thresh = miniscript::Threshold::new(k, pks)?;
+            Ok((Descriptor::<DescriptorPublicKey>::$inner_struct($inner_struct::$sortedmulti_constructor(thresh)?), PhantomData::<$ctx>))
         };
 
         $crate::impl_sortedmulti!(build_desc, sortedmulti_vec $( $inner )*)
@@ -294,7 +296,7 @@ macro_rules! parse_tap_tree {
             .and_then(|tree_a| Ok((tree_a, $tree_b?)))
             .and_then(|((a_tree, mut a_keymap, a_network_kinds), (b_tree, b_keymap, b_network_kinds))| {
                 a_keymap.extend(b_keymap.into_iter());
-                Ok((TapTree::combine(a_tree, b_tree), a_keymap, $crate::keys::intersect_network_kinds(&a_network_kinds, &b_network_kinds)))
+                Ok((TapTree::combine(a_tree, b_tree)?, a_keymap, $crate::keys::intersect_network_kinds(&a_network_kinds, &b_network_kinds)))
             })
 
     }};
@@ -331,11 +333,10 @@ macro_rules! parse_tap_tree {
 
     // Single leaf
     ( $op:ident ( $( $minisc:tt )* ) ) => {{
-        use $crate::alloc::sync::Arc;
         use $crate::miniscript::descriptor::TapTree;
 
         $crate::fragment!( $op ( $( $minisc )* ) )
-            .map(|(a_minisc, a_keymap, a_network_kinds)| (TapTree::Leaf(Arc::new(a_minisc)), a_keymap, a_network_kinds))
+            .map(|(a_minisc, a_keymap, a_network_kinds)| (TapTree::leaf(a_minisc), a_keymap, a_network_kinds))
     }};
 }
 
@@ -721,10 +722,14 @@ macro_rules! fragment {
         $crate::keys::make_pkh($key, &secp)
     });
     ( after ( $value:expr ) ) => ({
-        $crate::impl_leaf_opcode_value!(After, $crate::miniscript::AbsLockTime::from_consensus($value).expect("valid `AbsLockTime`"))
+        $crate::miniscript::AbsLockTime::from_consensus($value)
+            .map_err($crate::descriptor::DescriptorError::from)
+            .and_then(|abs_lt| $crate::impl_leaf_opcode_value!(After, abs_lt))
     });
     ( older ( $value:expr ) ) => ({
-        $crate::impl_leaf_opcode_value!(Older, $crate::miniscript::RelLockTime::from_consensus($value).expect("valid `RelLockTime`")) // TODO!!
+        $crate::miniscript::RelLockTime::from_consensus($value)
+            .map_err($crate::descriptor::DescriptorError::from)
+            .and_then(|rel_lt| $crate::impl_leaf_opcode_value!(Older, rel_lt))
     });
     ( sha256 ( $hash:expr ) ) => ({
         $crate::impl_leaf_opcode_value!(Sha256, $hash)
@@ -775,9 +780,12 @@ macro_rules! fragment {
             (keys_acc, net_acc)
         });
 
-        let thresh = $crate::miniscript::Threshold::new($thresh, items).expect("valid threshold and pks collection");
-        $crate::impl_leaf_opcode_value!(Thresh, thresh)
-            .map(|(minisc, _, _)| (minisc, key_maps, valid_network_kinds))
+        $crate::miniscript::Threshold::new($thresh, items)
+            .map_err($crate::descriptor::DescriptorError::from)
+            .and_then(|thresh| {
+                $crate::impl_leaf_opcode_value!(Thresh, thresh)
+                    .map(|(minisc, _, _)| (minisc, key_maps, valid_network_kinds))
+            })
     });
     ( thresh ( $thresh:expr, $( $inner:tt )* ) ) => ({
         let items = $crate::fragment_internal!( @v $( $inner )* );
@@ -789,8 +797,8 @@ macro_rules! fragment {
         let secp = $crate::bitcoin::secp256k1::Secp256k1::new();
 
         let fun = |k, pks| {
-            let thresh = $crate::miniscript::Threshold::new(k, pks).expect("valid threshold and pks collection");
-            $crate::miniscript::Terminal::Multi(thresh)
+            let thresh = $crate::miniscript::Threshold::new(k, pks)?;
+            Ok($crate::miniscript::Terminal::Multi(thresh))
         };
 
         $crate::keys::make_multi($thresh, fun, $keys, &secp)
@@ -803,8 +811,8 @@ macro_rules! fragment {
         let secp = $crate::bitcoin::secp256k1::Secp256k1::new();
 
         let fun = |k, pks| {
-            let thresh = $crate::miniscript::Threshold::new(k, pks).expect("valid threshold and pks collection");
-            $crate::miniscript::Terminal::MultiA(thresh)
+            let thresh = $crate::miniscript::Threshold::new(k, pks)?;
+            Ok($crate::miniscript::Terminal::MultiA(thresh))
         };
 
         $crate::keys::make_multi($thresh, fun, $keys, &secp)

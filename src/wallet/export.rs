@@ -212,7 +212,7 @@ impl FullyNodedExport {
         let blockheight = if include_blockheight {
             wallet.transactions().next().map_or(0, |canonical_tx| {
                 canonical_tx
-                    .chain_position
+                    .pos
                     .confirmation_height_upper_bound()
                     .unwrap_or(0)
             })
@@ -682,24 +682,28 @@ impl CaravanExport {
         let k = self.quorum.required_signers as usize;
 
         // Use proper Descriptor construction methods
+        let external_threshold =
+            miniscript::Threshold::new(k, external_keys).map_err(|_| "invalid `Threshold`")?;
         let external_desc: Descriptor<DescriptorPublicKey> = match self.address_type {
-            CaravanAddressType::P2SH => Descriptor::new_sh_sortedmulti(k, external_keys)
+            CaravanAddressType::P2SH => Descriptor::new_sh_sortedmulti(external_threshold)
                 .map_err(|_| "Failed to create P2SH sortedmulti descriptor")?,
-            CaravanAddressType::P2WSH => Descriptor::new_wsh_sortedmulti(k, external_keys)
+            CaravanAddressType::P2WSH => Descriptor::new_wsh_sortedmulti(external_threshold)
                 .map_err(|_| "Failed to create P2WSH sortedmulti descriptor")?,
             CaravanAddressType::P2SHWrappedP2WSH => {
-                Descriptor::new_sh_wsh_sortedmulti(k, external_keys)
+                Descriptor::new_sh_wsh_sortedmulti(external_threshold)
                     .map_err(|_| "Failed to create P2SH-P2WSH sortedmulti descriptor")?
             }
         };
 
+        let internal_threshold =
+            miniscript::Threshold::new(k, internal_keys).map_err(|_| "invalid `Threshold`")?;
         let internal_desc: Descriptor<DescriptorPublicKey> = match self.address_type {
-            CaravanAddressType::P2SH => Descriptor::new_sh_sortedmulti(k, internal_keys)
+            CaravanAddressType::P2SH => Descriptor::new_sh_sortedmulti(internal_threshold)
                 .map_err(|_| "Failed to create P2SH sortedmulti descriptor")?,
-            CaravanAddressType::P2WSH => Descriptor::new_wsh_sortedmulti(k, internal_keys)
+            CaravanAddressType::P2WSH => Descriptor::new_wsh_sortedmulti(internal_threshold)
                 .map_err(|_| "Failed to create P2WSH sortedmulti descriptor")?,
             CaravanAddressType::P2SHWrappedP2WSH => {
-                Descriptor::new_sh_wsh_sortedmulti(k, internal_keys)
+                Descriptor::new_sh_wsh_sortedmulti(internal_threshold)
                     .map_err(|_| "Failed to create P2SH-P2WSH sortedmulti descriptor")?
             }
         };

@@ -19,14 +19,14 @@ rustdoc-args = ["--cfg", "docsrs"]
 [dependencies]
 bdk_chain = { version = "0.23.1", features = ["miniscript", "serde"], default-features = false }
 bitcoin = { version = "0.32.7", features = ["serde", "base64"], default-features = false }
-miniscript = { version = "12.3.1", features = ["serde"], default-features = false }
+miniscript = { version = "13.0.0", features = ["serde"], default-features = false }
 rand_core = { version = "0.6.0" }
 serde_json = { version = "1" }
 serde = { version = "1", features = ["derive"] }
 
 # Optional dependencies
 anyhow = { version = "1.0.98", optional = true }
-bdk_file_store = { version = "0.21.1", optional = true }
+bdk_file_store = { version = "0.22.0", optional = true }
 bip39 = { version = "2.0", optional = true }
 tempfile = { version = "3.20.0", optional = true }
 
@@ -43,7 +43,7 @@ test-utils = ["std", "anyhow", "tempfile"]
 [dev-dependencies]
 anyhow = "1"
 assert_matches = "1.5.0"
-bdk_bitcoind_rpc = { version = "0.21.0" }
+bdk_bitcoind_rpc = { version = "0.22.0" }
 bdk_electrum = { version = "0.23.1" }
 bdk_esplora = { version = "0.22.1", features = ["async-https", "blocking-https", "tokio"] }
 bdk_wallet = { path = ".", features = ["rusqlite", "file_store", "test-utils"] }
@@ -74,3 +74,34 @@ name = "esplora_blocking"
 
 [[example]]
 name = "bitcoind_rpc"
+
+
+[patch.crates-io.bdk_chain]
+git = "https://github.com/bitcoindevkit/bdk"
+branch = "master"
+# rev = "b45ecb9bd41c80a03921dcf42a9845b19774502e"
+
+[patch.crates-io.bdk_core]
+git = "https://github.com/bitcoindevkit/bdk"
+branch = "master"
+# rev = "b45ecb9bd41c80a03921dcf42a9845b19774502e"
+
+[patch.crates-io.bdk_bitcoind_rpc]
+git = "https://github.com/bitcoindevkit/bdk"
+branch = "master"
+# rev = "b45ecb9bd41c80a03921dcf42a9845b19774502e"
+
+[patch.crates-io.bdk_electrum]
+git = "https://github.com/bitcoindevkit/bdk"
+branch = "master"
+# rev = "b45ecb9bd41c80a03921dcf42a9845b19774502e"
+
+[patch.crates-io.bdk_esplora]
+git = "https://github.com/bitcoindevkit/bdk"
+branch = "master"
+# rev = "b45ecb9bd41c80a03921dcf42a9845b19774502e"
+
+[patch.crates-io.bdk_file_store]
+git = "https://github.com/bitcoindevkit/bdk"
+branch = "master"
+# rev = "b45ecb9bd41c80a03921dcf42a9845b19774502e"

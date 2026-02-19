@@ -29,9 +29,9 @@ use bdk_chain::{
         FullScanRequest, FullScanRequestBuilder, FullScanResponse, SyncRequest, SyncRequestBuilder,
         SyncResponse,
     },
-    tx_graph::{CalculateFeeError, CanonicalTx, TxGraph, TxUpdate},
-    BlockId, CanonicalizationParams, ChainPosition, ConfirmationBlockTime, DescriptorExt,
-    FullTxOut, Indexed, IndexedTxGraph, Indexer, Merge,
+    tx_graph::{CalculateFeeError, TxGraph, TxUpdate},
+    BlockId, CanonicalTx, CanonicalizationParams, ChainPosition, ConfirmationBlockTime,
+    DescriptorExt, FullTxOut, Indexed, IndexedTxGraph, Indexer, Merge,
 };
 use bitcoin::{
     absolute,
@@ -40,8 +40,8 @@ use bitcoin::{
     psbt,
     secp256k1::Secp256k1,
     sighash::{EcdsaSighashType, TapSighashType},
-    transaction, Address, Amount, Block, FeeRate, Network, NetworkKind, OutPoint, Psbt, ScriptBuf,
-    Sequence, SignedAmount, Transaction, TxOut, Txid, Weight, Witness,
+    transaction, Address, Amount, Block, BlockHash, FeeRate, Network, NetworkKind, OutPoint, Psbt,
+    ScriptBuf, Sequence, SignedAmount, Transaction, TxOut, Txid, Weight, Witness,
 };
 use miniscript::{
     descriptor::KeyMap,
@@ -87,6 +87,9 @@ pub use persisted::*;
 pub use utils::IsDust;
 pub use utils::TxDetails;
 
+/// A consistent view of canonical transactions.
+pub type CanonicalView = bdk_chain::CanonicalView<ConfirmationBlockTime>;
+
 /// A Bitcoin wallet
 ///
 /// The `Wallet` acts as a way of coherently interfacing with output descriptors and related
@@ -114,6 +117,7 @@ pub struct Wallet {
     network: Network,
     secp: SecpCtx,
     locked_outpoints: HashSet<OutPoint>,
+    canonical_view: CanonicalView,
 }
 
 /// An update to [`Wallet`].
@@ -179,7 +183,7 @@ impl fmt::Display for AddressInfo {
 }
 
 /// A `CanonicalTx` managed by a `Wallet`.
-pub type WalletTx<'a> = CanonicalTx<'a, Arc<Transaction>, ConfirmationBlockTime>;
+pub type WalletTx = CanonicalTx<ConfirmationBlockTime>;
 
 impl Wallet {
     /// Build a new single descriptor [`Wallet`].
@@ -315,7 +319,7 @@ impl Wallet {
         let genesis_hash = params
             .genesis_hash
             .unwrap_or(genesis_block(network).block_hash());
-        let (chain, chain_changeset) = LocalChain::from_genesis_hash(genesis_hash);
+        let (chain, chain_changeset) = LocalChain::from_genesis(genesis_hash);
 
         let (descriptor, mut descriptor_keymap) = (params.descriptor)(&secp, network_kind)?;
         check_wallet_descriptor(&descriptor)?;
@@ -362,6 +366,12 @@ impl Wallet {
             params.use_spk_cache,
         )?;
 
+        let canonical_view = tx_graph.canonical_view(
+            &chain,
+            chain.tip().block_id(),
+            CanonicalizationParams::default(),
+        );
+
         Ok(Wallet {
             signers,
             change_signers,
@@ -371,6 +381,7 @@ impl Wallet {
             stage,
             secp,
             locked_outpoints,
+            canonical_view,
         })
     }
 
@@ -569,6 +580,12 @@ impl Wallet {
         )
         .map_err(LoadError::Descriptor)?;
 
+        let canonical_view = tx_graph.canonical_view(
+            &chain,
+            chain.tip().block_id(),
+            CanonicalizationParams::default(),
+        );
+
         Ok(Some(Wallet {
             signers,
             change_signers,
@@ -578,6 +595,7 @@ impl Wallet {
             network,
             secp,
             locked_outpoints,
+            canonical_view,
         }))
     }
 
@@ -775,14 +793,8 @@ impl Wallet {
 
     /// Return the list of unspent outputs of this wallet
     pub fn list_unspent(&self) -> impl Iterator<Item = LocalOutput> + '_ {
-        self.tx_graph
-            .graph()
-            .filter_chain_unspents(
-                &self.chain,
-                self.chain.tip().block_id(),
-                CanonicalizationParams::default(),
-                self.tx_graph.index.outpoints().iter().cloned(),
-            )
+        self.canonical_view
+            .filter_unspent_outpoints(self.tx_graph.index.outpoints().iter().cloned())
             .map(|((k, i), full_txo)| new_local_utxo(k, i, full_txo))
     }
 
@@ -791,13 +803,13 @@ impl Wallet {
     /// If the transaction with txid [`Txid`] cannot be found in the wallet's transactions, `None`
     /// is returned.
     pub fn tx_details(&self, txid: Txid) -> Option<TxDetails> {
-        let tx: WalletTx = self.transactions().find(|c| c.tx_node.txid == txid)?;
+        let tx: WalletTx = self.transactions().find(|c| c.txid == txid)?;
 
-        let (sent, received) = self.sent_and_received(&tx.tx_node.tx);
-        let fee: Option<Amount> = self.calculate_fee(&tx.tx_node.tx).ok();
-        let fee_rate: Option<FeeRate> = self.calculate_fee_rate(&tx.tx_node.tx).ok();
-        let balance_delta: SignedAmount = self.tx_graph.index.net_value(&tx.tx_node.tx, ..);
-        let chain_position = tx.chain_position;
+        let (sent, received) = self.sent_and_received(&tx.tx);
+        let fee: Option<Amount> = self.calculate_fee(&tx.tx).ok();
+        let fee_rate: Option<FeeRate> = self.calculate_fee_rate(&tx.tx).ok();
+        let balance_delta: SignedAmount = self.tx_graph.index.net_value(&tx.tx, ..);
+        let chain_position = tx.pos;
 
         let tx_details: TxDetails = TxDetails {
             txid,
@@ -807,29 +819,45 @@ impl Wallet {
             fee_rate,
             balance_delta,
             chain_position,
-            tx: tx.tx_node.tx,
+            tx: tx.tx,
         };
 
         Some(tx_details)
+    }
+
+    /// Get a reference to the latest [`CanonicalView`] of transactions.
+    pub fn canonical_view(&self) -> &CanonicalView {
+        &self.canonical_view
+    }
+
+    /// Obtain a new [`CanonicalView`] modified by the `params`.
+    ///
+    /// Note, the result of this call is not stored anywhere.
+    pub fn canonical_view_with_params(&self, params: CanonicalizationParams) -> CanonicalView {
+        self.tx_graph
+            .canonical_view(&self.chain, self.chain.tip().block_id(), params)
+    }
+
+    /// Update the wallet's [`CanonicalView`] of transactions.
+    fn update_canonical_view(&mut self) {
+        self.canonical_view = self.tx_graph.canonical_view(
+            &self.chain,
+            self.chain.tip().block_id(),
+            CanonicalizationParams::default(),
+        )
     }
 
     /// List all relevant outputs (includes both spent and unspent, confirmed and unconfirmed).
     ///
     /// To list only unspent outputs (UTXOs), use [`Wallet::list_unspent`] instead.
     pub fn list_output(&self) -> impl Iterator<Item = LocalOutput> + '_ {
-        self.tx_graph
-            .graph()
-            .filter_chain_txouts(
-                &self.chain,
-                self.chain.tip().block_id(),
-                CanonicalizationParams::default(),
-                self.tx_graph.index.outpoints().iter().cloned(),
-            )
-            .map(|((k, i), full_txo)| new_local_utxo(k, i, full_txo))
+        self.canonical_view
+            .filter_outpoints(self.tx_graph.index.outpoints().iter().cloned())
+            .map(|((k, i), txo)| new_local_utxo(k, i, txo))
     }
 
     /// Get all the checkpoints the wallet is currently storing indexed by height.
-    pub fn checkpoints(&self) -> CheckPointIter {
+    pub fn checkpoints(&self) -> CheckPointIter<BlockHash> {
         self.chain.iter_checkpoints()
     }
 
@@ -868,19 +896,13 @@ impl Wallet {
     }
 
     /// Returns the utxo owned by this wallet corresponding to `outpoint` if it exists in the
-    /// wallet's database.
+    /// wallet's transaction graph.
     pub fn get_utxo(&self, op: OutPoint) -> Option<LocalOutput> {
         let ((keychain, index), _) = self.tx_graph.index.txout(op)?;
-        self.tx_graph
-            .graph()
-            .filter_chain_unspents(
-                &self.chain,
-                self.chain.tip().block_id(),
-                CanonicalizationParams::default(),
-                core::iter::once(((), op)),
-            )
-            .map(|(_, full_txo)| new_local_utxo(keychain, index, full_txo))
+        self.canonical_view
+            .filter_unspent_outpoints([((), op)])
             .next()
+            .map(|(_, txo)| new_local_utxo(keychain, index, txo))
     }
 
     /// Inserts a [`TxOut`] at [`OutPoint`] into the wallet's transaction graph.
@@ -901,8 +923,13 @@ impl Wallet {
     /// [`list_unspent`]: Self::list_unspent
     /// [`list_output`]: Self::list_output
     pub fn insert_txout(&mut self, outpoint: OutPoint, txout: TxOut) {
-        let additions = self.tx_graph.insert_txout(outpoint, txout);
-        self.stage.merge(additions.into());
+        let mut tx_update = TxUpdate::default();
+        tx_update.txouts = [(outpoint, txout)].into();
+        self.apply_update(Update {
+            tx_update,
+            ..Default::default()
+        })
+        .expect("Applying a `TxUpdate` cannot fail")
     }
 
     /// Calculates the fee of a given transaction. Returns [`Amount::ZERO`] if `tx` is a coinbase
@@ -920,7 +947,7 @@ impl Wallet {
     /// # use bdk_wallet::Wallet;
     /// # let mut wallet: Wallet = todo!();
     /// # let txid:Txid = todo!();
-    /// let tx = wallet.get_tx(txid).expect("transaction").tx_node.tx;
+    /// let tx = wallet.get_tx(txid).expect("transaction").tx;
     /// let fee = wallet.calculate_fee(&tx).expect("fee");
     /// ```
     ///
@@ -951,7 +978,7 @@ impl Wallet {
     /// # use bdk_wallet::Wallet;
     /// # let mut wallet: Wallet = todo!();
     /// # let txid:Txid = todo!();
-    /// let tx = wallet.get_tx(txid).expect("transaction").tx_node.tx;
+    /// let tx = wallet.get_tx(txid).expect("transaction").tx;
     /// let fee_rate = wallet.calculate_fee_rate(&tx).expect("fee rate");
     /// ```
     ///
@@ -981,7 +1008,7 @@ impl Wallet {
     /// # use bdk_wallet::Wallet;
     /// # let mut wallet: Wallet = todo!();
     /// # let txid:Txid = todo!();
-    /// let tx = wallet.get_tx(txid).expect("tx exists").tx_node.tx;
+    /// let tx = wallet.get_tx(txid).expect("tx exists").tx;
     /// let (sent, received) = wallet.sent_and_received(&tx);
     /// ```
     ///
@@ -1015,19 +1042,11 @@ impl Wallet {
     ///
     /// let wallet_tx = wallet.get_tx(my_txid).expect("panic if tx does not exist");
     ///
-    /// // get reference to full transaction
-    /// println!("my tx: {:#?}", wallet_tx.tx_node.tx);
+    /// // Get reference to full transaction
+    /// println!("my tx: {:#?}", wallet_tx.tx);
     ///
-    /// // list all transaction anchors
-    /// for anchor in wallet_tx.tx_node.anchors {
-    ///     println!(
-    ///         "tx is anchored by block of hash {}",
-    ///         anchor.anchor_block().hash
-    ///     );
-    /// }
-    ///
-    /// // get confirmation status of transaction
-    /// match wallet_tx.chain_position {
+    /// // Get confirmation status of transaction
+    /// match wallet_tx.pos {
     ///     ChainPosition::Confirmed {
     ///         anchor,
     ///         transitively: None,
@@ -1050,15 +1069,10 @@ impl Wallet {
     /// ```
     ///
     /// [`Anchor`]: bdk_chain::Anchor
-    pub fn get_tx(&self, txid: Txid) -> Option<WalletTx<'_>> {
-        let graph = self.tx_graph.graph();
-        graph
-            .list_canonical_txs(
-                &self.chain,
-                self.chain.tip().block_id(),
-                CanonicalizationParams::default(),
-            )
-            .find(|tx| tx.tx_node.txid == txid)
+    pub fn get_tx(&self, txid: Txid) -> Option<WalletTx> {
+        self.canonical_view
+            .txs()
+            .find(|canon_tx| canon_tx.txid == txid)
     }
 
     /// Iterate over relevant and canonical transactions in the wallet.
@@ -1071,17 +1085,11 @@ impl Wallet {
     /// [`TxGraph::full_txs`].
     ///
     /// To iterate over all canonical transactions, including those that are irrelevant, use
-    /// [`TxGraph::list_canonical_txs`].
-    pub fn transactions(&self) -> impl Iterator<Item = WalletTx<'_>> + '_ {
-        let tx_graph = self.tx_graph.graph();
-        let tx_index = &self.tx_graph.index;
-        tx_graph
-            .list_canonical_txs(
-                &self.chain,
-                self.chain.tip().block_id(),
-                CanonicalizationParams::default(),
-            )
-            .filter(|c_tx| tx_index.is_tx_relevant(&c_tx.tx_node.tx))
+    /// [`CanonicalView::txs`].
+    pub fn transactions(&self) -> impl Iterator<Item = WalletTx> + '_ {
+        self.canonical_view
+            .txs()
+            .filter(|canon_tx| self.tx_graph.index.is_tx_relevant(&canon_tx.tx))
     }
 
     /// Array of relevant and canonical transactions in the wallet sorted with a comparator
@@ -1094,13 +1102,12 @@ impl Wallet {
     ///
     /// ```rust,no_run
     /// # use bdk_wallet::{LoadParams, Wallet, WalletTx};
-    /// # let mut wallet:Wallet = todo!();
+    /// # let mut wallet: Wallet = todo!();
     /// // Transactions by chain position: first unconfirmed then descending by confirmed height.
-    /// let sorted_txs: Vec<WalletTx> =
-    ///     wallet.transactions_sort_by(|tx1, tx2| tx2.chain_position.cmp(&tx1.chain_position));
+    /// let sorted_txs: Vec<WalletTx> = wallet.transactions_sort_by(|tx1, tx2| tx2.pos.cmp(&tx1.pos));
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    pub fn transactions_sort_by<F>(&self, compare: F) -> Vec<WalletTx<'_>>
+    pub fn transactions_sort_by<F>(&self, compare: F) -> Vec<WalletTx>
     where
         F: FnMut(&WalletTx, &WalletTx) -> Ordering,
     {
@@ -1112,13 +1119,27 @@ impl Wallet {
     /// Return the balance, separated into available, trusted-pending, untrusted-pending, and
     /// immature values.
     pub fn balance(&self) -> Balance {
-        self.tx_graph.graph().balance(
-            &self.chain,
-            self.chain.tip().block_id(),
-            CanonicalizationParams::default(),
+        self.canonical_view.balance(
             self.tx_graph.index.outpoints().iter().cloned(),
-            |&(k, _), _| k == KeychainKind::Internal,
+            |_, txo| self.is_tx_trusted(txo.outpoint.txid),
+            /* min_confirmations: */ 1,
         )
+    }
+
+    /// Whether the transaction of `txid` is trusted by this wallet.
+    ///
+    /// A tx is considered "trusted" if all of the inputs are controlled by this wallet,
+    /// i.e. the input corresponds to an outpoint that is indexed under a tracked keychain.
+    fn is_tx_trusted(&self, txid: Txid) -> bool {
+        let Some(tx) = self.tx_graph.graph().get_tx(txid) else {
+            return false;
+        };
+        if tx.input.is_empty() {
+            return false;
+        }
+        tx.input
+            .iter()
+            .all(|txin| self.tx_graph.index.txout(txin.previous_output).is_some())
     }
 
     /// Add an external signer
@@ -1593,10 +1614,10 @@ impl Wallet {
     ) -> Result<TxBuilder<'_, DefaultCoinSelectionAlgorithm>, BuildFeeBumpError> {
         let tx_graph = self.tx_graph.graph();
         let txout_index = &self.tx_graph.index;
-        let chain_tip = self.chain.tip().block_id();
-        let chain_positions: HashMap<Txid, ChainPosition<_>> = tx_graph
-            .list_canonical_txs(&self.chain, chain_tip, CanonicalizationParams::default())
-            .map(|canon_tx| (canon_tx.tx_node.txid, canon_tx.chain_position))
+        let chain_positions: HashMap<Txid, ChainPosition<_>> = self
+            .canonical_view
+            .txs()
+            .map(|canon_tx| (canon_tx.txid, canon_tx.pos))
             .collect();
 
         let mut tx = tx_graph
@@ -1840,24 +1861,22 @@ impl Wallet {
         sign_options: SignOptions,
     ) -> Result<bool, SignerError> {
         let tx = &psbt.unsigned_tx;
-        let chain_tip = self.chain.tip().block_id();
         let prev_txids = tx
             .input
             .iter()
             .map(|txin| txin.previous_output.txid)
             .collect::<HashSet<Txid>>();
         let confirmation_heights = self
-            .tx_graph
-            .graph()
-            .list_canonical_txs(&self.chain, chain_tip, CanonicalizationParams::default())
-            .filter(|canon_tx| prev_txids.contains(&canon_tx.tx_node.txid))
+            .canonical_view
+            .txs()
+            .filter(|canon_tx| prev_txids.contains(&canon_tx.txid))
             // This is for a small performance gain. Although `.filter` filters out excess txs, it
             // will still consume the internal `CanonicalIter` entirely. Having a `.take` here
             // allows us to stop further unnecessary canonicalization.
             .take(prev_txids.len())
             .map(|canon_tx| {
-                let txid = canon_tx.tx_node.txid;
-                match canon_tx.chain_position {
+                let txid = canon_tx.txid;
+                match canon_tx.pos {
                     ChainPosition::Confirmed { anchor, .. } => (txid, anchor.block_id.height),
                     ChainPosition::Unconfirmed { .. } => (txid, u32::MAX),
                 }
@@ -2000,17 +2019,9 @@ impl Wallet {
                 .iter()
                 .map(|wutxo| wutxo.utxo.outpoint())
                 .collect::<HashSet<OutPoint>>();
-            self.tx_graph
-                .graph()
-                // Get all unspent UTxOs from wallet.
-                // NOTE: the UTxOs returned by the following method already belong to wallet as the
-                // call chain uses get_tx_node infallibly.
-                .filter_chain_unspents(
-                    &self.chain,
-                    self.chain.tip().block_id(),
-                    CanonicalizationParams::default(),
-                    self.tx_graph.index.outpoints().iter().cloned(),
-                )
+            self.canonical_view
+                // Get all unspent UTXOs from wallet.
+                .filter_unspent_outpoints(self.tx_graph.index.outpoints().iter().cloned())
                 // Filter out locked outpoints.
                 .filter(|(_, txo)| !self.is_outpoint_locked(txo.outpoint))
                 // Only create LocalOutput if UTxO is mature.
@@ -2152,7 +2163,7 @@ impl Wallet {
 
         psbt_input
             .update_with_descriptor_unchecked(&derived_descriptor)
-            .map_err(MiniscriptPsbtError::Conversion)?;
+            .map_err(MiniscriptPsbtError::NonDefiniteKey)?;
 
         let prev_output = utxo.outpoint;
         if let Some(prev_tx) = self.tx_graph.graph().get_tx(prev_output.txid) {
@@ -2223,8 +2234,15 @@ impl Wallet {
     /// Usually you create an `update` by interacting with some blockchain data source and inserting
     /// transactions related to your wallet into it.
     ///
-    /// After applying updates you should persist the staged wallet changes. For an example of how
-    /// to persist staged wallet changes see [`Wallet::reveal_next_address`].
+    /// After applying updates the [`canonical_view`](Self::canonical_view) of transactions is
+    /// updated to reflect changes to the transaction graph.
+    ///
+    /// You should persist the staged wallet changes. For an example of how to persist staged
+    /// wallet changes see [`Wallet::reveal_next_address`].
+    ///
+    /// # Errors
+    ///
+    /// If the [`Update::chain`] update fails, a [`CannotConnectError`] will occur.
     pub fn apply_update(&mut self, update: impl Into<Update>) -> Result<(), CannotConnectError> {
         let update = update.into();
         let mut changeset = match update.chain {
@@ -2239,6 +2257,7 @@ impl Wallet {
         changeset.merge(index_changeset.into());
         changeset.merge(self.tx_graph.apply_update(update.tx_update).into());
         self.stage.merge(changeset);
+        self.update_canonical_view();
         Ok(())
     }
 
@@ -2328,30 +2347,14 @@ impl Wallet {
     ) -> Result<Vec<WalletEvent>, CannotConnectError> {
         // snapshot of chain tip and transactions before update
         let chain_tip1 = self.chain.tip().block_id();
-        let wallet_txs1 = self
-            .transactions()
-            .map(|wtx| {
-                (
-                    wtx.tx_node.txid,
-                    (wtx.tx_node.tx.clone(), wtx.chain_position),
-                )
-            })
-            .collect::<BTreeMap<Txid, (Arc<Transaction>, ChainPosition<ConfirmationBlockTime>)>>();
+        let wallet_txs1 = self.map_transactions();
 
         // apply update
         self.apply_update(update)?;
 
         // chain tip and transactions after update
         let chain_tip2 = self.chain.tip().block_id();
-        let wallet_txs2 = self
-            .transactions()
-            .map(|wtx| {
-                (
-                    wtx.tx_node.txid,
-                    (wtx.tx_node.tx.clone(), wtx.chain_position),
-                )
-            })
-            .collect::<BTreeMap<Txid, (Arc<Transaction>, ChainPosition<ConfirmationBlockTime>)>>();
+        let wallet_txs2 = self.map_transactions();
 
         Ok(wallet_events(
             self,
@@ -2490,29 +2493,13 @@ impl Wallet {
     ) -> Result<Vec<WalletEvent>, CannotConnectError> {
         // snapshot of chain tip and transactions before update
         let chain_tip1 = self.chain.tip().block_id();
-        let wallet_txs1 = self
-            .transactions()
-            .map(|wtx| {
-                (
-                    wtx.tx_node.txid,
-                    (wtx.tx_node.tx.clone(), wtx.chain_position),
-                )
-            })
-            .collect::<BTreeMap<Txid, (Arc<Transaction>, ChainPosition<ConfirmationBlockTime>)>>();
+        let wallet_txs1 = self.map_transactions();
 
         self.apply_block(block, height)?;
 
         // chain tip and transactions after update
         let chain_tip2 = self.chain.tip().block_id();
-        let wallet_txs2 = self
-            .transactions()
-            .map(|wtx| {
-                (
-                    wtx.tx_node.txid,
-                    (wtx.tx_node.tx.clone(), wtx.chain_position),
-                )
-            })
-            .collect::<BTreeMap<Txid, (Arc<Transaction>, ChainPosition<ConfirmationBlockTime>)>>();
+        let wallet_txs2 = self.map_transactions();
 
         Ok(wallet_events(
             self,
@@ -2547,6 +2534,7 @@ impl Wallet {
         );
         changeset.merge(self.tx_graph.apply_block_relevant(block, height).into());
         self.stage.merge(changeset);
+        self.update_canonical_view();
         Ok(())
     }
 
@@ -2567,29 +2555,13 @@ impl Wallet {
     ) -> Result<Vec<WalletEvent>, ApplyHeaderError> {
         // snapshot of chain tip and transactions before update
         let chain_tip1 = self.chain.tip().block_id();
-        let wallet_txs1 = self
-            .transactions()
-            .map(|wtx| {
-                (
-                    wtx.tx_node.txid,
-                    (wtx.tx_node.tx.clone(), wtx.chain_position),
-                )
-            })
-            .collect::<BTreeMap<Txid, (Arc<Transaction>, ChainPosition<ConfirmationBlockTime>)>>();
+        let wallet_txs1 = self.map_transactions();
 
         self.apply_block_connected_to(block, height, connected_to)?;
 
         // chain tip and transactions after update
         let chain_tip2 = self.chain.tip().block_id();
-        let wallet_txs2 = self
-            .transactions()
-            .map(|wtx| {
-                (
-                    wtx.tx_node.txid,
-                    (wtx.tx_node.tx.clone(), wtx.chain_position),
-                )
-            })
-            .collect::<BTreeMap<Txid, (Arc<Transaction>, ChainPosition<ConfirmationBlockTime>)>>();
+        let wallet_txs2 = self.map_transactions();
 
         Ok(wallet_events(
             self,
@@ -2661,17 +2633,7 @@ impl Wallet {
     /// [`apply_unconfirmed_txs`]: Wallet::apply_unconfirmed_txs
     /// [`start_sync_with_revealed_spks`]: Wallet::start_sync_with_revealed_spks
     pub fn apply_evicted_txs(&mut self, evicted_txs: impl IntoIterator<Item = (Txid, u64)>) {
-        let chain = &self.chain;
-        let canon_txids: Vec<Txid> = self
-            .tx_graph
-            .graph()
-            .list_canonical_txs(
-                chain,
-                chain.tip().block_id(),
-                CanonicalizationParams::default(),
-            )
-            .map(|c| c.tx_node.txid)
-            .collect();
+        let canon_txids: Vec<Txid> = self.canonical_view.txs().map(|c| c.txid).collect();
 
         let changeset = self.tx_graph.batch_insert_relevant_evicted_at(
             evicted_txs
@@ -2680,6 +2642,17 @@ impl Wallet {
         );
 
         self.stage.merge(changeset.into());
+    }
+
+    /// Returns a map of canonical transactions keyed by txid
+    ///
+    /// This is used internally to help generate [`WalletEvent`]s.
+    fn map_transactions(
+        &self,
+    ) -> BTreeMap<Txid, (Arc<Transaction>, ChainPosition<ConfirmationBlockTime>)> {
+        self.transactions()
+            .map(|canon_tx| (canon_tx.txid, (canon_tx.tx, canon_tx.pos)))
+            .collect()
     }
 
     /// Used internally to ensure that all methods requiring a [`KeychainKind`] will use a
@@ -2709,11 +2682,10 @@ impl Wallet {
         SyncRequest::builder_at(start_time)
             .chain_tip(self.chain.tip())
             .revealed_spks_from_indexer(&self.tx_graph.index, ..)
-            .expected_spk_txids(self.tx_graph.list_expected_spk_txids(
-                &self.chain,
-                self.chain.tip().block_id(),
-                ..,
-            ))
+            .expected_spk_txids(
+                self.canonical_view
+                    .list_expected_spk_txids(&self.tx_graph.index, ..),
+            )
     }
 
     /// Create a partial [`SyncRequest`] for this wallet for all revealed spks.
@@ -2734,11 +2706,10 @@ impl Wallet {
         SyncRequest::builder()
             .chain_tip(self.chain.tip())
             .revealed_spks_from_indexer(&self.tx_graph.index, ..)
-            .expected_spk_txids(self.tx_graph.list_expected_spk_txids(
-                &self.chain,
-                self.chain.tip().block_id(),
-                ..,
-            ))
+            .expected_spk_txids(
+                self.canonical_view
+                    .list_expected_spk_txids(&self.tx_graph.index, ..),
+            )
     }
 
     /// Create a [`FullScanRequest] for this wallet.
@@ -2931,7 +2902,6 @@ macro_rules! doctest_wallet {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::miniscript::Error::Unexpected;
     use crate::test_utils::get_test_tr_single_sig_xprv_and_change_desc;
     use crate::test_utils::insert_tx;
 
@@ -2993,35 +2963,38 @@ mod test {
     #[test]
     fn test_create_two_path_wallet() {
         let two_path_descriptor = "wpkh([9a6a2580/84'/1'/0']tpubDDnGNapGEY6AZAdQbfRJgMg9fvz8pUBrLwvyvUqEgcUfgzM6zc2eVK4vY9x9L5FJWdX8WumXuLEDV5zDZnTfbn87vLe9XceCFwTu9so9Kks/<0;1>/*)";
+        let private_multipath_descriptor = "wpkh(tprv8ZgxMBicQKsPdWAHbugK2tjtVtRjKGixYVZUdL7xLHMgXZS6BFbFi1UDb1CHT25Z5PU1F9j7wGxwUiRhqz9E3nZRztikGUV6HoRDYcqPhM4/84'/1'/0'/<0;1>/*)";
 
-        // Test successful creation of a two-path wallet
-        let params = Wallet::create_from_two_path_descriptor(two_path_descriptor);
-        let wallet = params.network(Network::Testnet).create_wallet_no_persist();
-        assert!(wallet.is_ok());
+        for test_descriptor in [two_path_descriptor, private_multipath_descriptor] {
+            // Test successful creation of a two-path wallet
+            let params = Wallet::create_from_two_path_descriptor(test_descriptor);
+            let wallet = params
+                .network(Network::Testnet)
+                .create_wallet_no_persist()
+                .expect("failed to create Wallet");
 
-        let wallet = wallet.unwrap();
+            // Verify that the wallet has both external and internal keychains
+            let keychains: Vec<_> = wallet.keychains().collect();
+            assert_eq!(keychains.len(), 2);
 
-        // Verify that the wallet has both external and internal keychains
-        let keychains: Vec<_> = wallet.keychains().collect();
-        assert_eq!(keychains.len(), 2);
+            // Verify that the descriptors are different (receive vs change)
+            let external_desc = keychains
+                .iter()
+                .find(|(k, _)| *k == KeychainKind::External)
+                .unwrap()
+                .1;
+            let internal_desc = keychains
+                .iter()
+                .find(|(k, _)| *k == KeychainKind::Internal)
+                .unwrap()
+                .1;
+            assert_ne!(external_desc.to_string(), internal_desc.to_string());
 
-        // Verify that the descriptors are different (receive vs change)
-        let external_desc = keychains
-            .iter()
-            .find(|(k, _)| *k == KeychainKind::External)
-            .unwrap()
-            .1;
-        let internal_desc = keychains
-            .iter()
-            .find(|(k, _)| *k == KeychainKind::Internal)
-            .unwrap()
-            .1;
-        assert_ne!(external_desc.to_string(), internal_desc.to_string());
-
-        // Verify that addresses can be generated
-        let external_addr = wallet.peek_address(KeychainKind::External, 0);
-        let internal_addr = wallet.peek_address(KeychainKind::Internal, 0);
-        assert_ne!(external_addr.address, internal_addr.address);
+            // Verify that addresses can be generated
+            let external_addr = wallet.peek_address(KeychainKind::External, 0);
+            let internal_addr = wallet.peek_address(KeychainKind::Internal, 0);
+            assert_ne!(external_addr.address, internal_addr.address);
+        }
     }
 
     #[test]
@@ -3031,17 +3004,6 @@ mod test {
         let params = Wallet::create_from_two_path_descriptor(single_path_descriptor);
         let wallet = params.network(Network::Testnet).create_wallet_no_persist();
         assert!(matches!(wallet, Err(DescriptorError::MultiPath)));
-
-        // Test with a private descriptor
-        // You get a Miniscript(Unexpected("Can't make an extended private key with multiple paths
-        // into a public key.")) error.
-        let private_multipath_descriptor = "wpkh(tprv8ZgxMBicQKsPdWAHbugK2tjtVtRjKGixYVZUdL7xLHMgXZS6BFbFi1UDb1CHT25Z5PU1F9j7wGxwUiRhqz9E3nZRztikGUV6HoRDYcqPhM4/84'/1'/0'/<0;1>/*)";
-        let params = Wallet::create_from_two_path_descriptor(private_multipath_descriptor);
-        let wallet = params.network(Network::Testnet).create_wallet_no_persist();
-        assert!(matches!(
-            wallet,
-            Err(DescriptorError::Miniscript(Unexpected(..)))
-        ));
 
         // Test with invalid 3-path multipath descriptor
         let three_path_descriptor = "wpkh([9a6a2580/84'/1'/0']tpubDDnGNapGEY6AZAdQbfRJgMg9fvz8pUBrLwvyvUqEgcUfgzM6zc2eVK4vY9x9L5FJWdX8WumXuLEDV5zDZnTfbn87vLe9XceCFwTu9so9Kks/<0;1;2>/*)";
