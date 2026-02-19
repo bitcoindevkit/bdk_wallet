@@ -17,7 +17,9 @@ use bdk_wallet::{
     AddressInfo, KeychainKind, Wallet,
 };
 use bip329::{AddressRecord, Label, LabelRef, Labels, TransactionRecord};
-use bitcoin::{address::NetworkUnchecked, bip32::DerivationPath, Address, Network, NetworkKind, OutPoint, Txid};
+use bitcoin::{
+    address::NetworkUnchecked, bip32::DerivationPath, Address, Network, NetworkKind, OutPoint, Txid,
+};
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     io::ErrorKind,
