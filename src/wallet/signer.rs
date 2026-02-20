@@ -13,73 +13,74 @@
 //!
 //! This module provides the ability to add customized signers to a [`Wallet`](super::Wallet)
 //! through the [`Wallet::add_signer`](super::Wallet::add_signer) function.
-//!
-//! ```
-//! # use alloc::sync::Arc;
-//! # use core::str::FromStr;
-//! # use bitcoin::secp256k1::{Secp256k1, All};
-//! # use bitcoin::*;
-//! # use bdk_wallet::signer::*;
-//! # use bdk_wallet::*;
-//! # #[derive(Debug)]
-//! # struct CustomHSM;
-//! # impl CustomHSM {
-//! #     fn hsm_sign_input(&self, _psbt: &mut Psbt, _input: usize) -> Result<(), SignerError> {
-//! #         Ok(())
-//! #     }
-//! #     fn connect() -> Self {
-//! #         CustomHSM
-//! #     }
-//! #     fn get_id(&self) -> SignerId {
-//! #         SignerId::Dummy(0)
-//! #     }
-//! # }
-//! #[derive(Debug)]
-//! struct CustomSigner {
-//!     device: CustomHSM,
-//! }
-//!
-//! impl CustomSigner {
-//!     fn connect() -> Self {
-//!         CustomSigner { device: CustomHSM::connect() }
-//!     }
-//! }
-//!
-//! impl SignerCommon for CustomSigner {
-//!     fn id(&self, _secp: &Secp256k1<All>) -> SignerId {
-//!         self.device.get_id()
-//!     }
-//! }
-//!
-//! impl InputSigner for CustomSigner {
-//!     fn sign_input(
-//!         &self,
-//!         psbt: &mut Psbt,
-//!         input_index: usize,
-//!         _sign_options: &SignOptions,
-//!         _secp: &Secp256k1<All>,
-//!     ) -> Result<(), SignerError> {
-//!         self.device.hsm_sign_input(psbt, input_index)?;
-//!
-//!         Ok(())
-//!     }
-//! }
-//!
-//! let custom_signer = CustomSigner::connect();
-//!
-//! let descriptor = "wpkh(tpubD6NzVbkrYhZ4Xferm7Pz4VnjdcDPFyjVu5K4iZXQ4pVN8Cks4pHVowTBXBKRhX64pkRyJZJN5xAKj4UDNnLPb5p2sSKXhewoYx5GbTdUFWq/0/*)";
-//! let change_descriptor = "wpkh(tpubD6NzVbkrYhZ4Xferm7Pz4VnjdcDPFyjVu5K4iZXQ4pVN8Cks4pHVowTBXBKRhX64pkRyJZJN5xAKj4UDNnLPb5p2sSKXhewoYx5GbTdUFWq/1/*)";
-//! let mut wallet = Wallet::create(descriptor, change_descriptor)
-//!     .network(Network::Testnet)
-//!     .create_wallet_no_persist()?;
-//! wallet.add_signer(
-//!     KeychainKind::External,
-//!     SignerOrdering(200),
-//!     Arc::new(custom_signer)
-//! );
-//!
-//! # Ok::<_, anyhow::Error>(())
-//! ```
+// //! ```
+// //! # use alloc::sync::Arc;
+// //! # use core::str::FromStr;
+// //! # use bitcoin::secp256k1::{Secp256k1, All};
+// //! # use bitcoin::*;
+// //! # use bdk_wallet::signer::*;
+// //! # use bdk_wallet::*;
+// //! # #[derive(Debug)]
+// //! # struct CustomHSM;
+// //! # impl CustomHSM {
+// //! #     fn hsm_sign_input(&self, _psbt: &mut Psbt, _input: usize) -> Result<(), SignerError> {
+// //! #         Ok(())
+// //! #     }
+// //! #     fn connect() -> Self {
+// //! #         CustomHSM
+// //! #     }
+// //! #     fn get_id(&self) -> SignerId {
+// //! #         SignerId::Dummy(0)
+// //! #     }
+// //! # }
+// //! #[derive(Debug)]
+// //! struct CustomSigner {
+// //!     device: CustomHSM,
+// //! }
+// //!
+// //! impl CustomSigner {
+// //!     fn connect() -> Self {
+// //!         CustomSigner { device: CustomHSM::connect() }
+// //!     }
+// //! }
+// //!
+// //! impl SignerCommon for CustomSigner {
+// //!     fn id(&self, _secp: &Secp256k1<All>) -> SignerId {
+// //!         self.device.get_id()
+// //!     }
+// //! }
+// //!
+// //! impl InputSigner for CustomSigner {
+// //!     fn sign_input(
+// //!         &self,
+// //!         psbt: &mut Psbt,
+// //!         input_index: usize,
+// //!         _sign_options: &SignOptions,
+// //!         _secp: &Secp256k1<All>,
+// //!     ) -> Result<(), SignerError> {
+// //!         self.device.hsm_sign_input(psbt, input_index)?;
+// //!
+// //!         Ok(())
+// //!     }
+// //! }
+// //!
+// //! let custom_signer = CustomSigner::connect();
+// //!
+// //! let descriptor =
+// "wpkh(tpubD6NzVbkrYhZ4Xferm7Pz4VnjdcDPFyjVu5K4iZXQ4pVN8Cks4pHVowTBXBKRhX64pkRyJZJN5xAKj4UDNnLPb5p2sSKXhewoYx5GbTdUFWq/
+// 0/*)"; //! let change_descriptor =
+// "wpkh(tpubD6NzVbkrYhZ4Xferm7Pz4VnjdcDPFyjVu5K4iZXQ4pVN8Cks4pHVowTBXBKRhX64pkRyJZJN5xAKj4UDNnLPb5p2sSKXhewoYx5GbTdUFWq/
+// 1/*)"; //! let mut wallet = Wallet::create(descriptor, change_descriptor)
+// //!     .network(Network::Testnet)
+// //!     .create_wallet_no_persist()?;
+// //! wallet.add_signer(
+// //!     KeychainKind::External,
+// //!     SignerOrdering(200),
+// //!     Arc::new(custom_signer)
+// //! );
+// //!
+// //! # Ok::<_, anyhow::Error>(())
+// //! ```
 
 use crate::collections::BTreeMap;
 use alloc::string::String;

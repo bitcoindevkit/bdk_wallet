@@ -19,6 +19,12 @@ use bitcoin::{psbt, Weight};
 
 use serde::{Deserialize, Serialize};
 
+#[cfg(feature = "rusqlite")]
+use chain::rusqlite::{
+    self,
+    types::{FromSql, FromSqlResult, ToSql, ToSqlOutput, ValueRef},
+};
+
 /// Types of keychains
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd)]
 pub enum KeychainKind {
@@ -56,17 +62,41 @@ impl AsRef<[u8]> for KeychainKind {
     }
 }
 
+#[cfg(feature = "rusqlite")]
+impl FromSql for KeychainKind {
+    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
+        Ok(match value.as_str()? {
+            "0" => KeychainKind::External,
+            "1" => KeychainKind::Internal,
+            _ => panic!("KeychainKind cannot be anything other than External(0) and Internal(1)"),
+        })
+    }
+}
+
+#[cfg(feature = "rusqlite")]
+impl ToSql for KeychainKind {
+    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
+        Ok(match *self {
+            KeychainKind::External => "0".into(),
+            KeychainKind::Internal => "1".into(),
+        })
+    }
+}
+
 /// An unspent output owned by a [`Wallet`].
 ///
 /// [`Wallet`]: crate::Wallet
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
-pub struct LocalOutput {
+pub struct LocalOutput<K>
+where
+    K: Clone,
+{
     /// Reference to a transaction output
     pub outpoint: OutPoint,
     /// Transaction output
     pub txout: TxOut,
     /// Type of keychain
-    pub keychain: KeychainKind,
+    pub keychain: K,
     /// Whether this UTXO is spent or not
     pub is_spent: bool,
     /// The derivation index for the script pubkey in the wallet
@@ -77,7 +107,10 @@ pub struct LocalOutput {
 
 /// A [`Utxo`] with its `satisfaction_weight`.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WeightedUtxo {
+pub struct WeightedUtxo<K>
+where
+    K: Clone,
+{
     /// The weight of the witness data and `scriptSig` expressed in [weight units]. This is used to
     /// properly maintain the feerate when adding this input to a transaction during coin
     /// selection.
@@ -85,14 +118,17 @@ pub struct WeightedUtxo {
     /// [weight units]: https://en.bitcoin.it/wiki/Weight_units
     pub satisfaction_weight: Weight,
     /// The UTXO
-    pub utxo: Utxo,
+    pub utxo: Utxo<K>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// An unspent transaction output (UTXO).
-pub enum Utxo {
+pub enum Utxo<K>
+where
+    K: Clone,
+{
     /// A UTXO owned by the local wallet.
-    Local(LocalOutput),
+    Local(LocalOutput<K>),
     /// A UTXO owned by another wallet.
     Foreign {
         /// The location of the output.
@@ -105,7 +141,10 @@ pub enum Utxo {
     },
 }
 
-impl Utxo {
+impl<K> Utxo<K>
+where
+    K: Clone,
+{
     /// Get the location of the UTXO
     pub fn outpoint(&self) -> OutPoint {
         match &self {

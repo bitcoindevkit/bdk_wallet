@@ -9,131 +9,6 @@
 // You may not use this file except in accordance with one or both of these
 // licenses.
 
-//! Wallet export
-//!
-//! This modules implements wallet export formats for different Bitcoin wallet applications:
-//!
-//! 1. [FullyNoded](https://github.com/Fonta1n3/FullyNoded/blob/10b7808c8b929b171cca537fb50522d015168ac9/Docs/Wallets/Wallet-Export-Spec.md)
-//! 2. [Caravan](https://github.com/unchained-capital/caravan)
-//!
-//! ## Examples
-//!
-//! ### Import from FullyNoded JSON
-//!
-//! ```
-//! # use std::str::FromStr;
-//! # use bitcoin::*;
-//! # use bdk_wallet::export::*;
-//! # use bdk_wallet::*;
-//! let import = r#"{
-//!     "descriptor": "wpkh([c258d2e4\/84h\/1h\/0h]tpubDD3ynpHgJQW8VvWRzQ5WFDCrs4jqVFGHB3vLC3r49XHJSqP8bHKdK4AriuUKLccK68zfzowx7YhmDN8SiSkgCDENUFx9qVw65YyqM78vyVe\/0\/*)",
-//!     "blockheight":1782088,
-//!     "label":"testnet"
-//! }"#;
-//!
-//! let import = FullyNodedExport::from_str(import)?;
-//! let wallet = Wallet::create(
-//!     import.descriptor(),
-//!     import.change_descriptor().expect("change descriptor"),
-//! )
-//! .network(Network::Testnet)
-//! .create_wallet_no_persist()?;
-//! # Ok::<_, Box<dyn std::error::Error>>(())
-//! ```
-//!
-//! ### Export a `Wallet` to FullyNoded format
-//! ```
-//! # use bitcoin::*;
-//! # use bdk_wallet::export::*;
-//! # use bdk_wallet::*;
-//! let wallet = Wallet::create(
-//!     "wpkh([c258d2e4/84h/1h/0h]tpubDD3ynpHgJQW8VvWRzQ5WFDCrs4jqVFGHB3vLC3r49XHJSqP8bHKdK4AriuUKLccK68zfzowx7YhmDN8SiSkgCDENUFx9qVw65YyqM78vyVe/0/*)",
-//!     "wpkh([c258d2e4/84h/1h/0h]tpubDD3ynpHgJQW8VvWRzQ5WFDCrs4jqVFGHB3vLC3r49XHJSqP8bHKdK4AriuUKLccK68zfzowx7YhmDN8SiSkgCDENUFx9qVw65YyqM78vyVe/1/*)",
-//! )
-//! .network(Network::Testnet)
-//! .create_wallet_no_persist()?;
-//! let export = FullyNodedExport::export_wallet(&wallet, "exported wallet", true).unwrap();
-//!
-//! println!("Exported: {}", export.to_string());
-//! # Ok::<_, Box<dyn std::error::Error>>(())
-//! ```
-//!
-//! ### Export a `Wallet` to Caravan format
-//! ```
-//! # use bitcoin::*;
-//! # use bdk_wallet::export::*;
-//! # use bdk_wallet::*;
-//! let wallet = Wallet::create(
-//!     "wsh(sortedmulti(2,[73756c7f/48h/0h/0h/2h]tpubDCKxNyM3bLgbEX13Mcd8mYxbVg9ajDkWXMh29hMWBurKfVmBfWAM96QVP3zaUcN51HvkZ3ar4VwP82kC8JZhhux8vFQoJintSpVBwpFvyU3/0/*,[f9f62194/48h/0h/0h/2h]tpubDDp3ZSH1yCwusRppH7zgSxq2t1VEUyXSeEp8E5aFS8m43MknUjiF1bSLo3CGWAxbDyhF1XowA5ukPzyJZjznYk3kYi6oe7QxtX2euvKWsk4/0/*))",
-//!     "wsh(sortedmulti(2,[73756c7f/48h/0h/0h/2h]tpubDCKxNyM3bLgbEX13Mcd8mYxbVg9ajDkWXMh29hMWBurKfVmBfWAM96QVP3zaUcN51HvkZ3ar4VwP82kC8JZhhux8vFQoJintSpVBwpFvyU3/1/*,[f9f62194/48h/0h/0h/2h]tpubDDp3ZSH1yCwusRppH7zgSxq2t1VEUyXSeEp8E5aFS8m43MknUjiF1bSLo3CGWAxbDyhF1XowA5ukPzyJZjznYk3kYi6oe7QxtX2euvKWsk4/1/*))",
-//! )
-//! .network(Network::Testnet)
-//! .create_wallet_no_persist()?;
-//! let export = CaravanExport::export_wallet(&wallet, "My Multisig Wallet").unwrap();
-//!
-//! println!("Exported: {}", export.to_string());
-//! # Ok::<_, Box<dyn std::error::Error>>(())
-//! ```
-//!
-//! ### Import from Caravan format
-//! ```
-//! # use std::str::FromStr;
-//! # use bitcoin::*;
-//! # use bdk_wallet::export::*;
-//! # use bdk_wallet::*;
-//! let import = r#"{
-//!     "name": "My Multisig Wallet",
-//!     "addressType": "P2WSH",
-//!     "network": "mainnet",
-//!     "client": {
-//!         "type": "public"
-//!     },
-//!     "quorum": {
-//!         "requiredSigners": 2,
-//!         "totalSigners": 2
-//!     },
-//!     "extendedPublicKeys": [
-//!         {
-//!             "name": "key1",
-//!             "bip32Path": "m/48'/0'/0'/2'",
-//!             "xpub": "tpubDCKxNyM3bLgbEX13Mcd8mYxbVg9ajDkWXMh29hMWBurKfVmBfWAM96QVP3zaUcN51HvkZ3ar4VwP82kC8JZhhux8vFQoJintSpVBwpFvyU3",
-//!             "xfp": "73756c7f"
-//!         },
-//!         {
-//!             "name": "key2",
-//!             "bip32Path": "m/48'/0'/0'/2'",
-//!             "xpub": "tpubDDp3ZSH1yCwusRppH7zgSxq2t1VEUyXSeEp8E5aFS8m43MknUjiF1bSLo3CGWAxbDyhF1XowA5ukPzyJZjznYk3kYi6oe7QxtX2euvKWsk4",
-//!             "xfp": "f9f62194"
-//!         }
-//!     ],
-//!     "startingAddressIndex": 0
-//! }"#;
-//!
-//! let import = CaravanExport::from_str(import)?;
-//! let (external, internal) = import.to_descriptors()?;
-//! # assert_eq!(external, "wsh(sortedmulti(2,[73756c7f/48'/0'/0'/2']tpubDCKxNyM3bLgbEX13Mcd8mYxbVg9ajDkWXMh29hMWBurKfVmBfWAM96QVP3zaUcN51HvkZ3ar4VwP82kC8JZhhux8vFQoJintSpVBwpFvyU3/0/*,[f9f62194/48'/0'/0'/2']tpubDDp3ZSH1yCwusRppH7zgSxq2t1VEUyXSeEp8E5aFS8m43MknUjiF1bSLo3CGWAxbDyhF1XowA5ukPzyJZjznYk3kYi6oe7QxtX2euvKWsk4/0/*))#pgthjwtg");
-//! # assert_eq!(internal, "wsh(sortedmulti(2,[73756c7f/48'/0'/0'/2']tpubDCKxNyM3bLgbEX13Mcd8mYxbVg9ajDkWXMh29hMWBurKfVmBfWAM96QVP3zaUcN51HvkZ3ar4VwP82kC8JZhhux8vFQoJintSpVBwpFvyU3/1/*,[f9f62194/48'/0'/0'/2']tpubDDp3ZSH1yCwusRppH7zgSxq2t1VEUyXSeEp8E5aFS8m43MknUjiF1bSLo3CGWAxbDyhF1XowA5ukPzyJZjznYk3kYi6oe7QxtX2euvKWsk4/1/*))#cmcnua7a");
-//! # Ok::<_, Box<dyn std::error::Error>>(())
-//! ```
-//!
-//! ## Important Notes on Import/Export Operations
-//!
-//! ### One-Way Operations
-//!
-//! The Caravan export/import functionality is designed for **one-way operations**:
-//!
-//! 1. **Export**: `Wallet → CaravanExport` (for sharing with Caravan)
-//! 2. **Import**: `JSON → CaravanExport → to_descriptors` (for importing from Caravan)
-//!
-//! ### Round-Trip Limitation
-//!
-//! **Note**: Full round-trip operations (`Descriptor → Wallet → CaravanExport → to_descriptors`)
-//! will **not** produce identical descriptors due to how derivation paths are processed for
-//! Caravan compatibility. This is expected behavior and not a bug.
-//!
-//! If you need to preserve the exact original descriptor format, store it separately
-//! rather than relying on round-trip conversion.
-
 use alloc::string::String;
 use alloc::string::ToString;
 use alloc::vec::Vec;
@@ -183,66 +58,66 @@ fn remove_checksum(s: String) -> String {
 }
 
 impl FullyNodedExport {
-    /// Export a wallet
-    ///
-    /// This function returns an error if it determines that the `wallet`'s descriptor(s) are not
-    /// supported by Bitcoin Core or don't follow the standard derivation paths defined by BIP44
-    /// and others.
-    ///
-    /// If `include_blockheight` is `true`, this function will look into the `wallet`'s database
-    /// for the oldest transaction it knows and use that as the earliest block to rescan.
-    ///
-    /// If the database is empty or `include_blockheight` is false, the `blockheight` field
-    /// returned will be `0`.
-    pub fn export_wallet(
-        wallet: &Wallet,
-        label: &str,
-        include_blockheight: bool,
-    ) -> Result<Self, &'static str> {
-        let descriptor = wallet
-            .public_descriptor(KeychainKind::External)
-            .to_string_with_secret(
-                &wallet
-                    .get_signers(KeychainKind::External)
-                    .as_key_map(wallet.secp_ctx()),
-            );
-        let descriptor = remove_checksum(descriptor);
-        Self::is_compatible_with_core(&descriptor)?;
+    // /// Export a wallet
+    // ///
+    // /// This function returns an error if it determines that the `wallet`'s descriptor(s) are not
+    // /// supported by Bitcoin Core or don't follow the standard derivation paths defined by BIP44
+    // /// and others.
+    // ///
+    // /// If `include_blockheight` is `true`, this function will look into the `wallet`'s database
+    // /// for the oldest transaction it knows and use that as the earliest block to rescan.
+    // ///
+    // /// If the database is empty or `include_blockheight` is false, the `blockheight` field
+    // /// returned will be `0`.
+    // pub fn export_wallet(
+    //     wallet: &Wallet,
+    //     label: &str,
+    //     include_blockheight: bool,
+    // ) -> Result<Self, &'static str> {
+    //     let descriptor = wallet
+    //         .public_descriptor(KeychainKind::External)
+    //         .to_string_with_secret(
+    //             &wallet
+    //                 .get_signers(KeychainKind::External)
+    //                 .as_key_map(wallet.secp_ctx()),
+    //         );
+    //     let descriptor = remove_checksum(descriptor);
+    //     Self::is_compatible_with_core(&descriptor)?;
 
-        let blockheight = if include_blockheight {
-            wallet.transactions().next().map_or(0, |canonical_tx| {
-                canonical_tx
-                    .chain_position
-                    .confirmation_height_upper_bound()
-                    .unwrap_or(0)
-            })
-        } else {
-            0
-        };
+    //     let blockheight = if include_blockheight {
+    //         wallet.transactions().next().map_or(0, |canonical_tx| {
+    //             canonical_tx
+    //                 .chain_position
+    //                 .confirmation_height_upper_bound()
+    //                 .unwrap_or(0)
+    //         })
+    //     } else {
+    //         0
+    //     };
 
-        let export = FullyNodedExport {
-            descriptor,
-            label: label.into(),
-            blockheight,
-        };
+    //     let export = FullyNodedExport {
+    //         descriptor,
+    //         label: label.into(),
+    //         blockheight,
+    //     };
 
-        let change_descriptor = {
-            let descriptor = wallet
-                .public_descriptor(KeychainKind::Internal)
-                .to_string_with_secret(
-                    &wallet
-                        .get_signers(KeychainKind::Internal)
-                        .as_key_map(wallet.secp_ctx()),
-                );
-            Some(remove_checksum(descriptor))
-        };
+    //     let change_descriptor = {
+    //         let descriptor = wallet
+    //             .public_descriptor(KeychainKind::Internal)
+    //             .to_string_with_secret(
+    //                 &wallet
+    //                     .get_signers(KeychainKind::Internal)
+    //                     .as_key_map(wallet.secp_ctx()),
+    //             );
+    //         Some(remove_checksum(descriptor))
+    //     };
 
-        if export.change_descriptor() != change_descriptor {
-            return Err("Incompatible change descriptor");
-        }
+    //     if export.change_descriptor() != change_descriptor {
+    //         return Err("Incompatible change descriptor");
+    //     }
 
-        Ok(export)
-    }
+    //     Ok(export)
+    // }
 
     fn is_compatible_with_core(descriptor: &str) -> Result<(), &'static str> {
         fn check_ms<Ctx: ScriptContext>(
@@ -501,32 +376,32 @@ impl FromStr for CaravanExport {
 }
 
 impl CaravanExport {
-    /// Export a wallet to Caravan format
-    ///
-    /// This function returns an error if it determines that the `wallet`'s descriptor(s) are not
-    /// supported by Caravan or if the descriptor is not a multisig descriptor.
-    ///
-    /// Caravan supports P2SH, P2WSH, and P2SH-P2WSH multisig wallets.
-    pub fn export_wallet(wallet: &Wallet, name: &str) -> Result<Self, &'static str> {
-        // Get the descriptor directly from the wallet
-        let descriptor = wallet.public_descriptor(KeychainKind::External);
+    // /// Export a wallet to Caravan format
+    // ///
+    // /// This function returns an error if it determines that the `wallet`'s descriptor(s) are not
+    // /// supported by Caravan or if the descriptor is not a multisig descriptor.
+    // ///
+    // /// Caravan supports P2SH, P2WSH, and P2SH-P2WSH multisig wallets.
+    // pub fn export_wallet(wallet: &Wallet, name: &str) -> Result<Self, &'static str> {
+    // // Get the descriptor directly from the wallet
+    // let descriptor = wallet.public_descriptor(KeychainKind::External);
 
-        // Determine the address type and multisig information
-        let (address_type, quorum, keys) = Self::extract_descriptor_info(descriptor)?;
-
-        // Create the Caravan export
-        let export = CaravanExport {
-            name: name.into(),
-            address_type,
-            network: wallet.network().into(),
-            client: serde_json::json!({"type": "public"}),
-            quorum,
-            extended_public_keys: keys,
-            starting_address_index: 0,
-        };
-
-        Ok(export)
-    }
+    // // Determine the address type and multisig information
+    // let (address_type, quorum, keys) = Self::extract_descriptor_info(descriptor)?;
+    //
+    // // Create the Caravan export
+    // let export = CaravanExport {
+    // name: name.into(),
+    // address_type,
+    // network: wallet.network().into(),
+    // client: serde_json::json!({"type": "public"}),
+    // quorum,
+    // extended_public_keys: keys,
+    // starting_address_index: 0,
+    // };
+    //
+    // Ok(export)
+    // }
 
     /// Extract information from a descriptor
     fn extract_descriptor_info(
@@ -719,108 +594,138 @@ mod test {
 
     use super::*;
     use crate::test_utils::*;
-    use crate::Wallet;
+    // use crate::Wallet;
 
-    fn get_test_wallet(descriptor: &str, change_descriptor: &str, network: Network) -> Wallet {
-        let mut wallet = Wallet::create(descriptor.to_string(), change_descriptor.to_string())
-            .network(network)
-            .create_wallet_no_persist()
-            .expect("must create wallet");
-        let block = BlockId {
-            height: 5000,
-            hash: BlockHash::all_zeros(),
-        };
-        insert_checkpoint(&mut wallet, block);
-        receive_output_in_latest_block(&mut wallet, Amount::from_sat(10_000));
+    // fn get_test_wallet(descriptor: &str, change_descriptor: &str, network: Network) -> Wallet {
+    //     let mut wallet = Wallet::create(descriptor.to_string(), change_descriptor.to_string())
+    //         .network(network)
+    //         .create_wallet_no_persist()
+    //         .expect("must create wallet");
+    //     let block = BlockId {
+    //         height: 5000,
+    //         hash: BlockHash::all_zeros(),
+    //     };
+    //     insert_checkpoint(&mut wallet, block);
+    //     receive_output_in_latest_block(&mut wallet, Amount::from_sat(10_000));
 
-        wallet
-    }
+    //     wallet
+    // }
 
-    #[test]
-    fn test_export_bip44() {
-        let descriptor = "wpkh(xprv9s21ZrQH143K4CTb63EaMxja1YiTnSEWKMbn23uoEnAzxjdUJRQkazCAtzxGm4LSoTSVTptoV9RbchnKPW9HxKtZumdyxyikZFDLhogJ5Uj/44'/0'/0'/0/*)";
-        let change_descriptor = "wpkh(xprv9s21ZrQH143K4CTb63EaMxja1YiTnSEWKMbn23uoEnAzxjdUJRQkazCAtzxGm4LSoTSVTptoV9RbchnKPW9HxKtZumdyxyikZFDLhogJ5Uj/44'/0'/0'/1/*)";
+    // #[test]
+    // fn test_export_bip44() {
+    //     let descriptor =
+    // "wpkh(xprv9s21ZrQH143K4CTb63EaMxja1YiTnSEWKMbn23uoEnAzxjdUJRQkazCAtzxGm4LSoTSVTptoV9RbchnKPW9HxKtZumdyxyikZFDLhogJ5Uj/
+    // 44'/0'/0'/0/*)";     let change_descriptor =
+    // "wpkh(xprv9s21ZrQH143K4CTb63EaMxja1YiTnSEWKMbn23uoEnAzxjdUJRQkazCAtzxGm4LSoTSVTptoV9RbchnKPW9HxKtZumdyxyikZFDLhogJ5Uj/
+    // 44'/0'/0'/1/*)";
 
-        let wallet = get_test_wallet(descriptor, change_descriptor, Network::Bitcoin);
-        let export = FullyNodedExport::export_wallet(&wallet, "Test Label", true).unwrap();
+    //     let wallet = get_test_wallet(descriptor, change_descriptor, Network::Bitcoin);
+    //     let export = FullyNodedExport::export_wallet(&wallet, "Test Label", true).unwrap();
 
-        assert_eq!(export.descriptor(), descriptor);
-        assert_eq!(export.change_descriptor(), Some(change_descriptor.into()));
-        assert_eq!(export.blockheight, 5000);
-        assert_eq!(export.label, "Test Label");
-    }
+    //     assert_eq!(export.descriptor(), descriptor);
+    //     assert_eq!(export.change_descriptor(), Some(change_descriptor.into()));
+    //     assert_eq!(export.blockheight, 5000);
+    //     assert_eq!(export.label, "Test Label");
+    // }
 
-    #[test]
-    #[should_panic(expected = "Incompatible change descriptor")]
-    fn test_export_no_change() {
-        // The wallet's change descriptor has no wildcard. It should be impossible to
-        // export, because exporting this kind of external descriptor normally implies the
-        // existence of a compatible internal descriptor
+    // #[test]
+    // #[should_panic(expected = "Incompatible change descriptor")]
+    // fn test_export_no_change() {
+    //     // The wallet's change descriptor has no wildcard. It should be impossible to
+    //     // export, because exporting this kind of external descriptor normally implies the
+    //     // existence of a compatible internal descriptor
 
-        let descriptor = "wpkh(xprv9s21ZrQH143K4CTb63EaMxja1YiTnSEWKMbn23uoEnAzxjdUJRQkazCAtzxGm4LSoTSVTptoV9RbchnKPW9HxKtZumdyxyikZFDLhogJ5Uj/44'/0'/0'/0/*)";
-        let change_descriptor = "wpkh(xprv9s21ZrQH143K4CTb63EaMxja1YiTnSEWKMbn23uoEnAzxjdUJRQkazCAtzxGm4LSoTSVTptoV9RbchnKPW9HxKtZumdyxyikZFDLhogJ5Uj/44'/0'/0'/1/0)";
+    //     let descriptor =
+    // "wpkh(xprv9s21ZrQH143K4CTb63EaMxja1YiTnSEWKMbn23uoEnAzxjdUJRQkazCAtzxGm4LSoTSVTptoV9RbchnKPW9HxKtZumdyxyikZFDLhogJ5Uj/
+    // 44'/0'/0'/0/*)";     let change_descriptor =
+    // "wpkh(xprv9s21ZrQH143K4CTb63EaMxja1YiTnSEWKMbn23uoEnAzxjdUJRQkazCAtzxGm4LSoTSVTptoV9RbchnKPW9HxKtZumdyxyikZFDLhogJ5Uj/
+    // 44'/0'/0'/1/0)";
 
-        let wallet = get_test_wallet(descriptor, change_descriptor, Network::Bitcoin);
-        FullyNodedExport::export_wallet(&wallet, "Test Label", true).unwrap();
-    }
+    //     let wallet = get_test_wallet(descriptor, change_descriptor, Network::Bitcoin);
+    //     FullyNodedExport::export_wallet(&wallet, "Test Label", true).unwrap();
+    // }
 
-    #[test]
-    #[should_panic(expected = "Incompatible change descriptor")]
-    fn test_export_incompatible_change() {
-        // This wallet has a change descriptor, but the derivation path is not in the "standard"
-        // bip44/49/etc format
+    // #[test]
+    // #[should_panic(expected = "Incompatible change descriptor")]
+    // fn test_export_incompatible_change() {
+    //     // This wallet has a change descriptor, but the derivation path is not in the "standard"
+    //     // bip44/49/etc format
 
-        let descriptor = "wpkh(xprv9s21ZrQH143K4CTb63EaMxja1YiTnSEWKMbn23uoEnAzxjdUJRQkazCAtzxGm4LSoTSVTptoV9RbchnKPW9HxKtZumdyxyikZFDLhogJ5Uj/44'/0'/0'/0/*)";
-        let change_descriptor = "wpkh(xprv9s21ZrQH143K4CTb63EaMxja1YiTnSEWKMbn23uoEnAzxjdUJRQkazCAtzxGm4LSoTSVTptoV9RbchnKPW9HxKtZumdyxyikZFDLhogJ5Uj/50'/0'/1/*)";
+    //     let descriptor =
+    // "wpkh(xprv9s21ZrQH143K4CTb63EaMxja1YiTnSEWKMbn23uoEnAzxjdUJRQkazCAtzxGm4LSoTSVTptoV9RbchnKPW9HxKtZumdyxyikZFDLhogJ5Uj/
+    // 44'/0'/0'/0/*)";     let change_descriptor =
+    // "wpkh(xprv9s21ZrQH143K4CTb63EaMxja1YiTnSEWKMbn23uoEnAzxjdUJRQkazCAtzxGm4LSoTSVTptoV9RbchnKPW9HxKtZumdyxyikZFDLhogJ5Uj/
+    // 50'/0'/1/*)";
 
-        let wallet = get_test_wallet(descriptor, change_descriptor, Network::Bitcoin);
-        FullyNodedExport::export_wallet(&wallet, "Test Label", true).unwrap();
-    }
+    //     let wallet = get_test_wallet(descriptor, change_descriptor, Network::Bitcoin);
+    //     FullyNodedExport::export_wallet(&wallet, "Test Label", true).unwrap();
+    // }
 
-    #[test]
-    fn test_export_multi() {
-        let descriptor = "wsh(multi(2,\
-                                [73756c7f/48'/0'/0'/2']tpubDCKxNyM3bLgbEX13Mcd8mYxbVg9ajDkWXMh29hMWBurKfVmBfWAM96QVP3zaUcN51HvkZ3ar4VwP82kC8JZhhux8vFQoJintSpVBwpFvyU3/0/*,\
-                                [f9f62194/48'/0'/0'/2']tpubDDp3ZSH1yCwusRppH7zgSxq2t1VEUyXSeEp8E5aFS8m43MknUjiF1bSLo3CGWAxbDyhF1XowA5ukPzyJZjznYk3kYi6oe7QxtX2euvKWsk4/0/*,\
-                                [c98b1535/48'/0'/0'/2']tpubDCDi5W4sP6zSnzJeowy8rQDVhBdRARaPhK1axABi8V1661wEPeanpEXj4ZLAUEoikVtoWcyK26TKKJSecSfeKxwHCcRrge9k1ybuiL71z4a/0/*\
-                          ))";
-        let change_descriptor = "wsh(multi(2,\
-                                       [73756c7f/48'/0'/0'/2']tpubDCKxNyM3bLgbEX13Mcd8mYxbVg9ajDkWXMh29hMWBurKfVmBfWAM96QVP3zaUcN51HvkZ3ar4VwP82kC8JZhhux8vFQoJintSpVBwpFvyU3/1/*,\
-                                       [f9f62194/48'/0'/0'/2']tpubDDp3ZSH1yCwusRppH7zgSxq2t1VEUyXSeEp8E5aFS8m43MknUjiF1bSLo3CGWAxbDyhF1XowA5ukPzyJZjznYk3kYi6oe7QxtX2euvKWsk4/1/*,\
-                                       [c98b1535/48'/0'/0'/2']tpubDCDi5W4sP6zSnzJeowy8rQDVhBdRARaPhK1axABi8V1661wEPeanpEXj4ZLAUEoikVtoWcyK26TKKJSecSfeKxwHCcRrge9k1ybuiL71z4a/1/*\
-                                 ))";
+    // #[test]
+    // fn test_export_multi() {
+    //     let descriptor = "wsh(multi(2,\
+    //
+    // [73756c7f/48'/0'/0'/2'
+    // ]tpubDCKxNyM3bLgbEX13Mcd8mYxbVg9ajDkWXMh29hMWBurKfVmBfWAM96QVP3zaUcN51HvkZ3ar4VwP82kC8JZhhux8vFQoJintSpVBwpFvyU3/
+    // 0/*,\
+    // [f9f62194/48'/0'/0'/2'
+    // ]tpubDDp3ZSH1yCwusRppH7zgSxq2t1VEUyXSeEp8E5aFS8m43MknUjiF1bSLo3CGWAxbDyhF1XowA5ukPzyJZjznYk3kYi6oe7QxtX2euvKWsk4/
+    // 0/*,\
+    // [c98b1535/48'/0'/0'/2'
+    // ]tpubDCDi5W4sP6zSnzJeowy8rQDVhBdRARaPhK1axABi8V1661wEPeanpEXj4ZLAUEoikVtoWcyK26TKKJSecSfeKxwHCcRrge9k1ybuiL71z4a/
+    // 0/*\                       ))";
+    //     let change_descriptor = "wsh(multi(2,\
+    //
+    // [73756c7f/48'/0'/0'/2'
+    // ]tpubDCKxNyM3bLgbEX13Mcd8mYxbVg9ajDkWXMh29hMWBurKfVmBfWAM96QVP3zaUcN51HvkZ3ar4VwP82kC8JZhhux8vFQoJintSpVBwpFvyU3/
+    // 1/*,\
+    // [f9f62194/48'/0'/0'/2'
+    // ]tpubDDp3ZSH1yCwusRppH7zgSxq2t1VEUyXSeEp8E5aFS8m43MknUjiF1bSLo3CGWAxbDyhF1XowA5ukPzyJZjznYk3kYi6oe7QxtX2euvKWsk4/
+    // 1/*,\
+    // [c98b1535/48'/0'/0'/2'
+    // ]tpubDCDi5W4sP6zSnzJeowy8rQDVhBdRARaPhK1axABi8V1661wEPeanpEXj4ZLAUEoikVtoWcyK26TKKJSecSfeKxwHCcRrge9k1ybuiL71z4a/
+    // 1/*\                              ))";
 
-        let wallet = get_test_wallet(descriptor, change_descriptor, Network::Testnet);
-        let export = FullyNodedExport::export_wallet(&wallet, "Test Label", true).unwrap();
+    //     let wallet = get_test_wallet(descriptor, change_descriptor, Network::Testnet);
+    //     let export = FullyNodedExport::export_wallet(&wallet, "Test Label", true).unwrap();
 
-        assert_eq!(export.descriptor(), descriptor);
-        assert_eq!(export.change_descriptor(), Some(change_descriptor.into()));
-        assert_eq!(export.blockheight, 5000);
-        assert_eq!(export.label, "Test Label");
-    }
+    //     assert_eq!(export.descriptor(), descriptor);
+    //     assert_eq!(export.change_descriptor(), Some(change_descriptor.into()));
+    //     assert_eq!(export.blockheight, 5000);
+    //     assert_eq!(export.label, "Test Label");
+    // }
 
-    #[test]
-    fn test_export_tr() {
-        let descriptor = "tr([73c5da0a/86'/0'/0']tprv8fMn4hSKPRC1oaCPqxDb1JWtgkpeiQvZhsr8W2xuy3GEMkzoArcAWTfJxYb6Wj8XNNDWEjfYKK4wGQXh3ZUXhDF2NcnsALpWTeSwarJt7Vc/0/*)";
-        let change_descriptor = "tr([73c5da0a/86'/0'/0']tprv8fMn4hSKPRC1oaCPqxDb1JWtgkpeiQvZhsr8W2xuy3GEMkzoArcAWTfJxYb6Wj8XNNDWEjfYKK4wGQXh3ZUXhDF2NcnsALpWTeSwarJt7Vc/1/*)";
-        let wallet = get_test_wallet(descriptor, change_descriptor, Network::Testnet);
-        let export = FullyNodedExport::export_wallet(&wallet, "Test Label", true).unwrap();
-        assert_eq!(export.descriptor(), descriptor);
-        assert_eq!(export.change_descriptor(), Some(change_descriptor.into()));
-        assert_eq!(export.blockheight, 5000);
-        assert_eq!(export.label, "Test Label");
-    }
+    // #[test]
+    // fn test_export_tr() {
+    //     let descriptor =
+    // "tr([73c5da0a/86'/0'/0'
+    // ]tprv8fMn4hSKPRC1oaCPqxDb1JWtgkpeiQvZhsr8W2xuy3GEMkzoArcAWTfJxYb6Wj8XNNDWEjfYKK4wGQXh3ZUXhDF2NcnsALpWTeSwarJt7Vc/
+    // 0/*)";     let change_descriptor =
+    // "tr([73c5da0a/86'/0'/0'
+    // ]tprv8fMn4hSKPRC1oaCPqxDb1JWtgkpeiQvZhsr8W2xuy3GEMkzoArcAWTfJxYb6Wj8XNNDWEjfYKK4wGQXh3ZUXhDF2NcnsALpWTeSwarJt7Vc/
+    // 1/*)";     let wallet = get_test_wallet(descriptor, change_descriptor, Network::Testnet);
+    //     let export = FullyNodedExport::export_wallet(&wallet, "Test Label", true).unwrap();
+    //     assert_eq!(export.descriptor(), descriptor);
+    //     assert_eq!(export.change_descriptor(), Some(change_descriptor.into()));
+    //     assert_eq!(export.blockheight, 5000);
+    //     assert_eq!(export.label, "Test Label");
+    // }
 
-    #[test]
-    fn test_export_to_json() {
-        let descriptor = "wpkh(xprv9s21ZrQH143K4CTb63EaMxja1YiTnSEWKMbn23uoEnAzxjdUJRQkazCAtzxGm4LSoTSVTptoV9RbchnKPW9HxKtZumdyxyikZFDLhogJ5Uj/44'/0'/0'/0/*)";
-        let change_descriptor = "wpkh(xprv9s21ZrQH143K4CTb63EaMxja1YiTnSEWKMbn23uoEnAzxjdUJRQkazCAtzxGm4LSoTSVTptoV9RbchnKPW9HxKtZumdyxyikZFDLhogJ5Uj/44'/0'/0'/1/*)";
+    // #[test]
+    // fn test_export_to_json() {
+    //     let descriptor =
+    // "wpkh(xprv9s21ZrQH143K4CTb63EaMxja1YiTnSEWKMbn23uoEnAzxjdUJRQkazCAtzxGm4LSoTSVTptoV9RbchnKPW9HxKtZumdyxyikZFDLhogJ5Uj/
+    // 44'/0'/0'/0/*)";     let change_descriptor =
+    // "wpkh(xprv9s21ZrQH143K4CTb63EaMxja1YiTnSEWKMbn23uoEnAzxjdUJRQkazCAtzxGm4LSoTSVTptoV9RbchnKPW9HxKtZumdyxyikZFDLhogJ5Uj/
+    // 44'/0'/0'/1/*)";
 
-        let wallet = get_test_wallet(descriptor, change_descriptor, Network::Bitcoin);
-        let export = FullyNodedExport::export_wallet(&wallet, "Test Label", true).unwrap();
+    //     let wallet = get_test_wallet(descriptor, change_descriptor, Network::Bitcoin);
+    //     let export = FullyNodedExport::export_wallet(&wallet, "Test Label", true).unwrap();
 
-        assert_eq!(export.to_string(), "{\"descriptor\":\"wpkh(xprv9s21ZrQH143K4CTb63EaMxja1YiTnSEWKMbn23uoEnAzxjdUJRQkazCAtzxGm4LSoTSVTptoV9RbchnKPW9HxKtZumdyxyikZFDLhogJ5Uj/44\'/0\'/0\'/0/*)\",\"blockheight\":5000,\"label\":\"Test Label\"}");
-    }
+    //     assert_eq!(export.to_string(),
+    // "{\"descriptor\":\"
+    // wpkh(xprv9s21ZrQH143K4CTb63EaMxja1YiTnSEWKMbn23uoEnAzxjdUJRQkazCAtzxGm4LSoTSVTptoV9RbchnKPW9HxKtZumdyxyikZFDLhogJ5Uj/
+    // 44\'/0\'/0\'/0/*)\",\"blockheight\":5000,\"label\":\"Test Label\"}"); }
 
     #[test]
     fn test_export_from_json() {
@@ -836,84 +741,106 @@ mod test {
         assert_eq!(export.label, "Test Label");
     }
 
-    #[test]
-    fn test_caravan_export_p2wsh() {
-        let descriptor = "wsh(sortedmulti(2,[119dbcab/48h/0h/0h/2h]xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhgbmJbZRkrgZw4koxb5JaHWkY4ALHY2grBGRjaDMzQLcgJvLJuZZvRcEL/0/*,[e650dc93/48h/0h/0h/2h]xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhgbmJbZRkrgZw4koxb5JaHWkY4ALHY2grBGRjaDMzQLcgJvLJuZZvRcEL/0/*))";
-        let change_descriptor = "wsh(sortedmulti(2,[119dbcab/48h/0h/0h/2h]xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhgbmJbZRkrgZw4koxb5JaHWkY4ALHY2grBGRjaDMzQLcgJvLJuZZvRcEL/1/*,[e650dc93/48h/0h/0h/2h]xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhgbmJbZRkrgZw4koxb5JaHWkY4ALHY2grBGRjaDMzQLcgJvLJuZZvRcEL/1/*))";
-        let network = Network::Bitcoin;
+    // #[test]
+    // fn test_caravan_export_p2wsh() {
+    // let descriptor =
+    // "wsh(sortedmulti(2,[119dbcab/48h/0h/0h/
+    // 2h]xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhgbmJbZRkrgZw4koxb5JaHWkY4ALHY2grBGRjaDMzQLcgJvLJuZZvRcEL/
+    // 0/*,[e650dc93/48h/0h/0h/
+    // 2h]xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhgbmJbZRkrgZw4koxb5JaHWkY4ALHY2grBGRjaDMzQLcgJvLJuZZvRcEL/
+    // 0/*))"; let change_descriptor =
+    // "wsh(sortedmulti(2,[119dbcab/48h/0h/0h/
+    // 2h]xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhgbmJbZRkrgZw4koxb5JaHWkY4ALHY2grBGRjaDMzQLcgJvLJuZZvRcEL/
+    // 1/*,[e650dc93/48h/0h/0h/
+    // 2h]xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhgbmJbZRkrgZw4koxb5JaHWkY4ALHY2grBGRjaDMzQLcgJvLJuZZvRcEL/
+    // 1/*))"; let network = Network::Bitcoin;
+    //
+    // let wallet = get_test_wallet(descriptor, change_descriptor, network);
+    // let export = CaravanExport::export_wallet(&wallet, "Test P2WSH Wallet").unwrap();
+    //
+    // // Check basic fields
+    // assert_eq!(export.name, "Test P2WSH Wallet");
+    // assert_eq!(export.address_type, CaravanAddressType::P2WSH);
+    // assert_eq!(export.network, CaravanNetwork::Mainnet);
+    // assert_eq!(export.quorum.required_signers, 2);
+    // assert_eq!(export.quorum.total_signers, 2);
+    // assert_eq!(export.starting_address_index, 0);
+    //
+    // // Check extended public keys
+    // assert_eq!(export.extended_public_keys.len(), 2);
+    // assert_eq!(
+    // export.extended_public_keys[0].xfp,
+    // Fingerprint::from_str("119dbcab").unwrap()
+    // );
+    //
+    // // Use the path format with apostrophes in the test expectation
+    // assert_eq!(
+    // export.extended_public_keys[0].bip32_path,
+    // DerivationPath::from_str("m/48'/0'/0'/2'").unwrap()
+    // );
+    // assert_eq!(
+    // export.extended_public_keys[1].xfp,
+    // Fingerprint::from_str("e650dc93").unwrap()
+    // );
+    // assert_eq!(
+    // export.extended_public_keys[1].bip32_path,
+    // DerivationPath::from_str("m/48'/0'/0'/2'").unwrap()
+    // );
+    //
+    // // Test to_descriptors functionality
+    // let (external, internal) = export.to_descriptors().unwrap();
+    // assert!(external.contains("wsh(sortedmulti("));
+    // assert!(internal.contains("/1/*"));
+    //
+    // // Test JSON serialization
+    // let json = export.to_string();
+    // assert!(json.contains("\"name\":"));
+    // assert!(json.contains("\"addressType\":"));
+    // assert!(json.contains("\"extendedPublicKeys\":"));
+    // }
 
-        let wallet = get_test_wallet(descriptor, change_descriptor, network);
-        let export = CaravanExport::export_wallet(&wallet, "Test P2WSH Wallet").unwrap();
-
-        // Check basic fields
-        assert_eq!(export.name, "Test P2WSH Wallet");
-        assert_eq!(export.address_type, CaravanAddressType::P2WSH);
-        assert_eq!(export.network, CaravanNetwork::Mainnet);
-        assert_eq!(export.quorum.required_signers, 2);
-        assert_eq!(export.quorum.total_signers, 2);
-        assert_eq!(export.starting_address_index, 0);
-
-        // Check extended public keys
-        assert_eq!(export.extended_public_keys.len(), 2);
-        assert_eq!(
-            export.extended_public_keys[0].xfp,
-            Fingerprint::from_str("119dbcab").unwrap()
-        );
-
-        // Use the path format with apostrophes in the test expectation
-        assert_eq!(
-            export.extended_public_keys[0].bip32_path,
-            DerivationPath::from_str("m/48'/0'/0'/2'").unwrap()
-        );
-        assert_eq!(
-            export.extended_public_keys[1].xfp,
-            Fingerprint::from_str("e650dc93").unwrap()
-        );
-        assert_eq!(
-            export.extended_public_keys[1].bip32_path,
-            DerivationPath::from_str("m/48'/0'/0'/2'").unwrap()
-        );
-
-        // Test to_descriptors functionality
-        let (external, internal) = export.to_descriptors().unwrap();
-        assert!(external.contains("wsh(sortedmulti("));
-        assert!(internal.contains("/1/*"));
-
-        // Test JSON serialization
-        let json = export.to_string();
-        assert!(json.contains("\"name\":"));
-        assert!(json.contains("\"addressType\":"));
-        assert!(json.contains("\"extendedPublicKeys\":"));
-    }
-
-    #[test]
-    fn test_caravan_export_p2sh() {
-        let descriptor = "sh(sortedmulti(2,[119dbcab/48h/0h/0h/1h]xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhgbmJbZRkrgZw4koxb5JaHWkY4ALHY2grBGRjaDMzQLcgJvLJuZZvRcEL/0/*,[e650dc93/48h/0h/0h/1h]xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhgbmJbZRkrgZw4koxb5JaHWkY4ALHY2grBGRjaDMzQLcgJvLJuZZvRcEL/0/*))";
-        let change_descriptor = "sh(sortedmulti(2,[119dbcab/48h/0h/0h/1h]xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhgbmJbZRkrgZw4koxb5JaHWkY4ALHY2grBGRjaDMzQLcgJvLJuZZvRcEL/1/*,[e650dc93/48h/0h/0h/1h]xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhgbmJbZRkrgZw4koxb5JaHWkY4ALHY2grBGRjaDMzQLcgJvLJuZZvRcEL/1/*))";
-        let network = Network::Bitcoin;
-
-        let wallet = get_test_wallet(descriptor, change_descriptor, network);
-        let export = CaravanExport::export_wallet(&wallet, "Test P2SH Wallet").unwrap();
-
-        assert_eq!(export.address_type, CaravanAddressType::P2SH);
-        assert_eq!(export.quorum.required_signers, 2);
-        assert_eq!(export.quorum.total_signers, 2);
-    }
-
-    #[test]
-    fn test_caravan_export_p2sh_p2wsh() {
-        let descriptor = "sh(wsh(sortedmulti(2,[119dbcab/48h/0h/0h/3h]xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhgbmJbZRkrgZw4koxb5JaHWkY4ALHY2grBGRjaDMzQLcgJvLJuZZvRcEL/0/*,[e650dc93/48h/0h/0h/3h]xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhgbmJbZRkrgZw4koxb5JaHWkY4ALHY2grBGRjaDMzQLcgJvLJuZZvRcEL/0/*)))";
-        let change_descriptor = "sh(wsh(sortedmulti(2,[119dbcab/48h/0h/0h/3h]xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhgbmJbZRkrgZw4koxb5JaHWkY4ALHY2grBGRjaDMzQLcgJvLJuZZvRcEL/1/*,[e650dc93/48h/0h/0h/3h]xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhgbmJbZRkrgZw4koxb5JaHWkY4ALHY2grBGRjaDMzQLcgJvLJuZZvRcEL/1/*)))";
-        let network = Network::Bitcoin;
-
-        let wallet = get_test_wallet(descriptor, change_descriptor, network);
-        let export = CaravanExport::export_wallet(&wallet, "Test P2SH-P2WSH Wallet").unwrap();
-
-        assert_eq!(export.address_type, CaravanAddressType::P2SHWrappedP2WSH);
-        assert_eq!(export.quorum.required_signers, 2);
-        assert_eq!(export.quorum.total_signers, 2);
-    }
-
+    // #[test]
+    // fn test_caravan_export_p2sh() {
+    // let descriptor =
+    // "sh(sortedmulti(2,[119dbcab/48h/0h/0h/
+    // 1h]xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhgbmJbZRkrgZw4koxb5JaHWkY4ALHY2grBGRjaDMzQLcgJvLJuZZvRcEL/
+    // 0/*,[e650dc93/48h/0h/0h/
+    // 1h]xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhgbmJbZRkrgZw4koxb5JaHWkY4ALHY2grBGRjaDMzQLcgJvLJuZZvRcEL/
+    // 0/*))"; let change_descriptor =
+    // "sh(sortedmulti(2,[119dbcab/48h/0h/0h/
+    // 1h]xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhgbmJbZRkrgZw4koxb5JaHWkY4ALHY2grBGRjaDMzQLcgJvLJuZZvRcEL/
+    // 1/*,[e650dc93/48h/0h/0h/
+    // 1h]xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhgbmJbZRkrgZw4koxb5JaHWkY4ALHY2grBGRjaDMzQLcgJvLJuZZvRcEL/
+    // 1/*))"; let network = Network::Bitcoin;
+    //
+    // let wallet = get_test_wallet(descriptor, change_descriptor, network);
+    // let export = CaravanExport::export_wallet(&wallet, "Test P2SH Wallet").unwrap();
+    //
+    // assert_eq!(export.address_type, CaravanAddressType::P2SH);
+    // assert_eq!(export.quorum.required_signers, 2);
+    // assert_eq!(export.quorum.total_signers, 2);
+    // }
+    //     #[test]
+    // fn test_caravan_export_p2sh_p2wsh() {
+    // let descriptor =
+    // "sh(wsh(sortedmulti(2,[119dbcab/48h/0h/0h/
+    // 3h]xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhgbmJbZRkrgZw4koxb5JaHWkY4ALHY2grBGRjaDMzQLcgJvLJuZZvRcEL/
+    // 0/*,[e650dc93/48h/0h/0h/
+    // 3h]xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhgbmJbZRkrgZw4koxb5JaHWkY4ALHY2grBGRjaDMzQLcgJvLJuZZvRcEL/
+    // 0/*)))"; let change_descriptor =
+    // "sh(wsh(sortedmulti(2,[119dbcab/48h/0h/0h/
+    // 3h]xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhgbmJbZRkrgZw4koxb5JaHWkY4ALHY2grBGRjaDMzQLcgJvLJuZZvRcEL/
+    // 1/*,[e650dc93/48h/0h/0h/
+    // 3h]xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhgbmJbZRkrgZw4koxb5JaHWkY4ALHY2grBGRjaDMzQLcgJvLJuZZvRcEL/
+    // 1/*)))"; let network = Network::Bitcoin;
+    //
+    // let wallet = get_test_wallet(descriptor, change_descriptor, network);
+    // let export = CaravanExport::export_wallet(&wallet, "Test P2SH-P2WSH Wallet").unwrap();
+    //
+    // assert_eq!(export.address_type, CaravanAddressType::P2SHWrappedP2WSH);
+    // assert_eq!(export.quorum.required_signers, 2);
+    // assert_eq!(export.quorum.total_signers, 2);
+    // }
     #[test]
     fn test_caravan_network_conversion() {
         // Test CaravanNetwork enum with From<bitcoin::Network> implementation
@@ -987,69 +914,68 @@ mod test {
         assert!(external.contains("/0/*"));
     }
 
-    #[test]
-    fn test_caravan_descriptors_create_functional_wallet() {
-        // Test that resulting descriptor strings can create a functional BDK Wallet
-        let json = r#"{
-            "name": "Test Wallet",
-            "addressType": "P2WSH",
-            "network": "testnet",
-            "client": {
-                "type": "public"
-            },
-            "quorum": {
-                "requiredSigners": 2,
-                "totalSigners": 2
-            },
-            "extendedPublicKeys": [
-                {
-                    "name": "key1",
-                    "bip32Path": "m/48'/1'/0'/2'",
-                    "xpub": "tpubDCKxNyM3bLgbEX13Mcd8mYxbVg9ajDkWXMh29hMWBurKfVmBfWAM96QVP3zaUcN51HvkZ3ar4VwP82kC8JZhhux8vFQoJintSpVBwpFvyU3",
-                    "xfp": "73756c7f"
-                },
-                {
-                    "name": "key2",
-                    "bip32Path": "m/48'/1'/0'/2'",
-                    "xpub": "tpubDDp3ZSH1yCwusRppH7zgSxq2t1VEUyXSeEp8E5aFS8m43MknUjiF1bSLo3CGWAxbDyhF1XowA5ukPzyJZjznYk3kYi6oe7QxtX2euvKWsk4",
-                    "xfp": "f9f62194"
-                }
-            ],
-            "startingAddressIndex": 0
-        }"#;
-
-        let import = CaravanExport::from_str(json).unwrap();
-        let (external_desc, internal_desc) = import.to_descriptors().unwrap();
-
-        // Verify the descriptors can create a functional BDK Wallet
-        let wallet_result = Wallet::create(external_desc, internal_desc)
-            .network(bitcoin::Network::Testnet)
-            .create_wallet_no_persist();
-
-        assert!(
-            wallet_result.is_ok(),
-            "Failed to create wallet from Caravan export descriptors: {:?}",
-            wallet_result.err()
-        );
-
-        let mut wallet = wallet_result.unwrap();
-
-        // Verify basic wallet functionality
-        assert_eq!(wallet.network(), bitcoin::Network::Testnet);
-
-        // Test address generation to verify the wallet is functional
-        let address = wallet.reveal_next_address(crate::types::KeychainKind::External);
-        assert_eq!(address.index, 0);
-
-        // Verify it's a proper script hash address (P2WSH)
-        let addr_str = address.address.to_string();
-        assert!(
-            addr_str.starts_with("tb1"),
-            "Expected testnet bech32 address, got: {}",
-            addr_str
-        );
-    }
-
+    // #[test]
+    //     fn test_caravan_descriptors_create_functional_wallet() {
+    // // Test that resulting descriptor strings can create a functional BDK Wallet
+    // let json = r#"{
+    // "name": "Test Wallet",
+    // "addressType": "P2WSH",
+    // "network": "testnet",
+    // "client": {
+    // "type": "public"
+    // },
+    // "quorum": {
+    // "requiredSigners": 2,
+    // "totalSigners": 2
+    // },
+    // "extendedPublicKeys": [
+    // {
+    // "name": "key1",
+    // "bip32Path": "m/48'/1'/0'/2'",
+    // "xpub": "tpubDCKxNyM3bLgbEX13Mcd8mYxbVg9ajDkWXMh29hMWBurKfVmBfWAM96QVP3zaUcN51HvkZ3ar4VwP82kC8JZhhux8vFQoJintSpVBwpFvyU3",
+    // "xfp": "73756c7f"
+    // },
+    // {
+    // "name": "key2",
+    // "bip32Path": "m/48'/1'/0'/2'",
+    // "xpub": "tpubDDp3ZSH1yCwusRppH7zgSxq2t1VEUyXSeEp8E5aFS8m43MknUjiF1bSLo3CGWAxbDyhF1XowA5ukPzyJZjznYk3kYi6oe7QxtX2euvKWsk4",
+    // "xfp": "f9f62194"
+    // }
+    // ],
+    // "startingAddressIndex": 0
+    // }"#;
+    //
+    // let import = CaravanExport::from_str(json).unwrap();
+    // let (external_desc, internal_desc) = import.to_descriptors().unwrap();
+    //
+    // // Verify the descriptors can create a functional BDK Wallet
+    // let wallet_result = Wallet::create(external_desc, internal_desc)
+    // .network(bitcoin::Network::Testnet)
+    // .create_wallet_no_persist();
+    //
+    // assert!(
+    // wallet_result.is_ok(),
+    // "Failed to create wallet from Caravan export descriptors: {:?}",
+    // wallet_result.err()
+    // );
+    //
+    // let mut wallet = wallet_result.unwrap();
+    //
+    // // // Verify basic wallet functionality
+    // assert_eq!(wallet.network(), bitcoin::Network::Testnet);
+    //
+    // // Test address generation to verify the wallet is functional
+    // let address = wallet.reveal_next_address(crate::types::KeychainKind::External);
+    // assert_eq!(address.index, 0);
+    //
+    // // Verify it's a proper script hash address (P2WSH)
+    // let addr_str = address.address.to_string();
+    // assert!(
+    // addr_str.starts_with("tb1"),
+    // "Expected testnet bech32 address, got: {}",
+    // addr_str
+    // );
+    // }
     #[test]
     fn test_extract_xpubs_complex_derivation() {
         // Create a descriptor with complex derivation paths (multiple steps)

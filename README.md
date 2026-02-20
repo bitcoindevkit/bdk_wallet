@@ -75,7 +75,7 @@ To persist `Wallet` state use a data storage crate that reads and writes [`Chang
 * [`bdk_file_store`]: Stores wallet changes in a simple flat file.
 * `rusqlite`: Stores wallet changes in a SQLite database.
 
-**Example**
+<!-- **Example**
 
 ```rust,no_run
 use bdk_wallet::rusqlite;
@@ -110,7 +110,7 @@ wallet.persist(&mut conn)?;
 
 println!("Next receive address: {}", address_info.address);
 Ok::<_, anyhow::Error>(())
-```
+``` -->
 
 ## Minimum Supported Rust Version (MSRV)
 

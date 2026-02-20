@@ -13,7 +13,7 @@
 //!
 //! This module contains generic utilities to work with descriptors, plus some re-exported types
 //! from [`miniscript`].
-
+#![allow(unused)]
 use crate::alloc::string::ToString;
 use crate::collections::BTreeMap;
 
@@ -34,18 +34,18 @@ pub use miniscript::{
 };
 use miniscript::{ForEachKey, MiniscriptKey, TranslatePk};
 
-use crate::descriptor::policy::BuildSatisfaction;
+// use crate::descriptor::policy::BuildSatisfaction;
 
 pub mod checksum;
 #[doc(hidden)]
 pub mod dsl;
 pub mod error;
-pub mod policy;
+// pub mod policy;
 pub mod template;
 
 pub use self::checksum::calc_checksum;
 pub use self::error::Error as DescriptorError;
-pub use self::policy::Policy;
+// pub use self::policy::Policy;
 use self::template::DescriptorTemplateOut;
 use crate::keys::{IntoDescriptorKey, KeyError};
 use crate::wallet::{signer::SignersContainer, utils::SecpCtx};
@@ -344,16 +344,16 @@ impl<Ctx: miniscript::ScriptContext, Pk: miniscript::MiniscriptKey> CheckMiniscr
     }
 }
 
-/// Trait implemented on [`Descriptor`]s to add a method to extract the spending [`policy`].
-pub trait ExtractPolicy {
-    /// Extract the spending [`policy`]
-    fn extract_policy(
-        &self,
-        signers: &SignersContainer,
-        psbt: BuildSatisfaction,
-        secp: &SecpCtx,
-    ) -> Result<Option<Policy>, DescriptorError>;
-}
+// /// Trait implemented on [`Descriptor`]s to add a method to extract the spending [`policy`].
+// pub trait ExtractPolicy {
+//     /// Extract the spending [`policy`]
+//     fn extract_policy(
+//         &self,
+//         signers: &SignersContainer,
+//         psbt: BuildSatisfaction,
+//         secp: &SecpCtx,
+//     ) -> Result<Option<Policy>, DescriptorError>;
+// }
 
 pub(crate) trait XKeyUtils {
     fn root_fingerprint(&self, secp: &SecpCtx) -> Fingerprint;

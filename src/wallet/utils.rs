@@ -8,7 +8,7 @@
 // <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your option.
 // You may not use this file except in accordance with one or both of these
 // licenses.
-
+#![allow(unused)]
 use alloc::sync::Arc;
 use bitcoin::secp256k1::{All, Secp256k1};
 use bitcoin::{
