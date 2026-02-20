@@ -1,5 +1,5 @@
 use bdk_chain::{
-    indexed_tx_graph, keychain_txout, local_chain, tx_graph, ConfirmationBlockTime, Merge,
+    indexed_tx_graph, keychain_txout, local_chain, tx_graph, BlockId, ConfirmationBlockTime, Merge,
 };
 use miniscript::{Descriptor, DescriptorPublicKey};
 use serde::{Deserialize, Serialize};
@@ -32,7 +32,7 @@ type IndexedTxGraphChangeSet =
 ///   instance.
 /// * A change set is composed of a number of individual "sub-change sets" that adhere to the same
 ///   rules as above. This is for increased modularity and portability. For example the core modules
-///   each have their own change set (`tx_graph`, `local_chain`, etc).
+///   each have their own change set ([`tx_graph`], [`local_chain`], etc).
 ///
 /// ## Members and required fields
 ///
@@ -110,6 +110,8 @@ pub struct ChangeSet {
     pub change_descriptor: Option<Descriptor<DescriptorPublicKey>>,
     /// Stores the network type of the transaction data.
     pub network: Option<bitcoin::Network>,
+    /// Set the wallet's birthday.
+    pub birthday: Option<BlockId>,
     /// Changes to the [`LocalChain`](local_chain::LocalChain).
     pub local_chain: local_chain::ChangeSet,
     /// Changes to [`TxGraph`](tx_graph::TxGraph).
@@ -146,6 +148,14 @@ impl Merge for ChangeSet {
             self.network = other.network;
         }
 
+        // Merging birthdays should yield the earliest birthday.
+        if other.birthday.is_some() {
+            self.birthday = match (self.birthday, other.birthday) {
+                (Some(a), Some(b)) => Some(if a.height <= b.height { a } else { b }),
+                (None, some) | (some, None) => some,
+            };
+        }
+
         // merge locked outpoints
         self.locked_outpoints.merge(other.locked_outpoints);
 
@@ -158,6 +168,7 @@ impl Merge for ChangeSet {
         self.descriptor.is_none()
             && self.change_descriptor.is_none()
             && self.network.is_none()
+            && self.birthday.is_none()
             && self.local_chain.is_empty()
             && self.tx_graph.is_empty()
             && self.indexer.is_empty()
@@ -199,12 +210,26 @@ impl ChangeSet {
         )
     }
 
+    /// Get the `v2` sqlite [`ChangeSet`] schema.
+    ///
+    /// Adds two columns to the wallet table to perist the wallet's birthday from a [`BlockId`]:
+    /// * `birth_height`: the height of the birthday block, as a `u32`
+    /// * `birth_hash`: the hash of the birthday block, as a [`BlockHash`]
+    pub fn schema_v2() -> alloc::string::String {
+        format!(
+            "ALTER TABLE {} ADD COLUMN birth_height INTEGER; \
+             ALTER TABLE {} ADD COLUMN birth_hash TEXT;",
+            Self::WALLET_TABLE_NAME,
+            Self::WALLET_TABLE_NAME,
+        )
+    }
+
     /// Initialize sqlite tables for wallet tables.
     pub fn init_sqlite_tables(db_tx: &chain::rusqlite::Transaction) -> chain::rusqlite::Result<()> {
         crate::rusqlite_impl::migrate_schema(
             db_tx,
             Self::WALLET_SCHEMA_NAME,
-            &[&Self::schema_v0(), &Self::schema_v1()],
+            &[&Self::schema_v0(), &Self::schema_v1(), &Self::schema_v2()],
         )?;
 
         bdk_chain::local_chain::ChangeSet::init_sqlite_tables(db_tx)?;
@@ -223,7 +248,7 @@ impl ChangeSet {
         let mut changeset = Self::default();
 
         let mut wallet_statement = db_tx.prepare(&format!(
-            "SELECT descriptor, change_descriptor, network FROM {}",
+            "SELECT descriptor, change_descriptor, network, birth_height, birth_hash FROM {}",
             Self::WALLET_TABLE_NAME,
         ))?;
         let row = wallet_statement
@@ -234,13 +259,22 @@ impl ChangeSet {
                         "change_descriptor",
                     )?,
                     row.get::<_, Option<Impl<bitcoin::Network>>>("network")?,
+                    row.get::<_, Option<u32>>("birth_height")?,
+                    row.get::<_, Option<Impl<bitcoin::BlockHash>>>("birth_hash")?,
                 ))
             })
             .optional()?;
-        if let Some((desc, change_desc, network)) = row {
+        if let Some((desc, change_desc, network, birth_height, birth_hash)) = row {
             changeset.descriptor = desc.map(Impl::into_inner);
             changeset.change_descriptor = change_desc.map(Impl::into_inner);
             changeset.network = network.map(Impl::into_inner);
+            changeset.birthday = match (birth_height, birth_hash) {
+                (Some(height), Some(hash)) => Some(BlockId {
+                    height,
+                    hash: hash.into_inner(),
+                }),
+                _ => None,
+            }
         }
 
         // Select locked outpoints.
@@ -306,6 +340,26 @@ impl ChangeSet {
             network_statement.execute(named_params! {
                 ":id": 0,
                 ":network": Impl(network),
+            })?;
+        }
+
+        if let Some(birthday) = self.birthday {
+            let mut birth_height_statement = db_tx.prepare_cached(&format!(
+                "INSERT INTO {}(id, birth_height) VALUES(:id, :birth_height) ON CONFLICT(id) DO UPDATE SET birth_height=:birth_height",
+                Self::WALLET_TABLE_NAME,
+            ))?;
+            birth_height_statement.execute(named_params! {
+                ":id": 0,
+                ":birth_height": birthday.height,
+            })?;
+
+            let mut birth_hash_statement = db_tx.prepare_cached(&format!(
+                "INSERT INTO {}(id, birth_hash) VALUES(:id, :birth_hash) ON CONFLICT(id) DO UPDATE SET birth_hash=:birth_hash",
+                Self::WALLET_TABLE_NAME,
+            ))?;
+            birth_hash_statement.execute(named_params! {
+                ":id": 0,
+                ":birth_hash": Impl(birthday.hash),
             })?;
         }
 

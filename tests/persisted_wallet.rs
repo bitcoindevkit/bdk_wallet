@@ -3,10 +3,10 @@ use std::path::Path;
 
 use anyhow::Context;
 use assert_matches::assert_matches;
-use bdk_chain::DescriptorId;
 use bdk_chain::{
     keychain_txout::DEFAULT_LOOKAHEAD, ChainPosition, ConfirmationBlockTime, DescriptorExt,
 };
+use bdk_chain::{BlockId, DescriptorId};
 use bdk_wallet::coin_selection::InsufficientFunds;
 use bdk_wallet::descriptor::IntoWalletDescriptor;
 use bdk_wallet::error::CreateTxError;
@@ -24,7 +24,8 @@ use bitcoin::{
 use miniscript::{Descriptor, DescriptorPublicKey};
 
 use bdk_wallet::persist_test_utils::{
-    persist_keychains, persist_network, persist_single_keychain, persist_wallet_changeset,
+    persist_birthday, persist_keychains, persist_network, persist_single_keychain,
+    persist_wallet_changeset,
 };
 
 mod common;
@@ -244,14 +245,20 @@ fn wallet_load_checks() -> anyhow::Result<()> {
     {
         let temp_dir = tempfile::tempdir().expect("must create tempdir");
         let file_path = temp_dir.path().join(filename);
-        let network = Network::Testnet;
         let (external_desc, internal_desc) = get_test_tr_single_sig_xprv_and_change_desc();
+        let network = Network::Testnet;
+        let birthday = BlockId {
+            height: 42,
+            hash: BlockHash::all_zeros(),
+        };
 
-        // create new wallet
+        // Create a new wallet
         let _ = Wallet::create(external_desc, internal_desc)
             .network(network)
+            .birthday(birthday)
             .create_wallet(&mut create_db(&file_path)?)?;
 
+        // Check network persistence.
         assert_matches!(
             Wallet::load()
                 .check_network(Network::Regtest)
@@ -264,12 +271,34 @@ fn wallet_load_checks() -> anyhow::Result<()> {
             ))),
             "unexpected network check result: Regtest (check) is not Testnet (loaded)",
         );
+
+        // Check birthday persistence.
+        let wrong_birthday = BlockId {
+            height: 99,
+            hash: BlockHash::all_zeros(),
+        };
+        assert_matches!(
+            Wallet::load()
+                .check_birthday(wrong_birthday)
+                .load_wallet(&mut open_db(&file_path)?),
+            Err(LoadWithPersistError::InvalidChangeSet(LoadError::Mismatch(
+                LoadMismatch::Birthday {
+                    loaded: Some(loaded),
+                    expected: Some(expected),
+                }
+            ))) if loaded == birthday && expected == wrong_birthday,
+            "unexpected birthday check result: wrong_birthday (check) does not match loaded birthday",
+        );
+
+        // Check genesis hash persistence.
         let mainnet_hash = BlockHash::from_byte_array(ChainHash::BITCOIN.to_bytes());
         assert_matches!(
             Wallet::load().check_genesis_hash(mainnet_hash).load_wallet(&mut open_db(&file_path)?),
             Err(LoadWithPersistError::InvalidChangeSet(LoadError::Mismatch(LoadMismatch::Genesis { .. }))),
             "unexpected genesis hash check result: mainnet hash (check) is not testnet hash (loaded)",
         );
+
+        // Check descriptor persistence.
         assert_matches!(
             Wallet::load()
                 .descriptor(KeychainKind::External, Some(internal_desc))
@@ -288,7 +317,7 @@ fn wallet_load_checks() -> anyhow::Result<()> {
             ))),
             "unexpected descriptors check result",
         );
-        // check setting keymaps
+        // Check keymap persistence.
         let (_, external_keymap) = parse_descriptor(external_desc);
         let (_, internal_keymap) = parse_descriptor(internal_desc);
         let wallet = Wallet::load()
@@ -463,6 +492,16 @@ fn network_is_persisted() {
         Ok(bdk_file_store::Store::create(DB_MAGIC, path)?)
     });
     persist_network::<bdk_chain::rusqlite::Connection, _>("store.sqlite", |path| {
+        Ok(bdk_chain::rusqlite::Connection::open(path)?)
+    });
+}
+
+#[test]
+fn birthday_is_persisted() {
+    persist_birthday("store.db", |path| {
+        Ok(bdk_file_store::Store::create(DB_MAGIC, path)?)
+    });
+    persist_birthday::<bdk_chain::rusqlite::Connection, _>("store.sqlite", |path| {
         Ok(bdk_chain::rusqlite::Connection::open(path)?)
     });
 }

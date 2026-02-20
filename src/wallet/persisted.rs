@@ -399,6 +399,11 @@ fn changeset_info(f: &mut fmt::Formatter<'_>, changeset: &ChangeSet) -> fmt::Res
         .as_ref()
         .map_or("None".to_string(), |n| n.to_string());
 
+    let birthday = match changeset.birthday.as_ref() {
+        Some(birthday) => format!("{}:{}", birthday.height, birthday.hash),
+        None => "None".to_string(),
+    };
+
     let descriptor_checksum = changeset
         .descriptor
         .as_ref()
@@ -422,6 +427,7 @@ fn changeset_info(f: &mut fmt::Formatter<'_>, changeset: &ChangeSet) -> fmt::Res
     };
 
     writeln!(f, "  Network: {network}")?;
+    writeln!(f, "  Birthday: {birthday}")?;
     writeln!(f, "  Descriptor Checksum: {descriptor_checksum}")?;
     writeln!(
         f,
