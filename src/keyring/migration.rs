@@ -1,7 +1,7 @@
 //! This module provides helper functions and types to assist users in migrating data related to
 //! descriptors when upgrading from version 2.0  of the `bdk_wallet` crate.
 #[cfg(feature = "rusqlite")]
-use super::changeset::ChangeSet;
+use super::{changeset::ChangeSet, KeyRing};
 #[cfg(feature = "rusqlite")]
 use bdk_chain::{
     rusqlite::{self, Connection, OptionalExtension},
@@ -12,6 +12,9 @@ use miniscript::{Descriptor, DescriptorPublicKey};
 
 #[cfg(feature = "rusqlite")]
 use crate::KeychainKind;
+
+#[cfg(feature = "rusqlite")]
+use std::string::{String, ToString};
 
 #[cfg(feature = "rusqlite")]
 /// The table name storing descriptors and network for 2.0 `Wallet`
@@ -58,6 +61,22 @@ impl<K: Ord> ChangeSet<K> {
             }
         }
         Ok(changeset)
+    }
+}
+
+#[cfg(feature = "rusqlite")]
+impl KeyRing<KeychainKind> {
+    /// Obtain a `KeyRing<KeychainKind>` from a sqlite `Connection` corresponding to a
+    /// v2 `Wallet`.
+    ///
+    /// Note the `KeyRing<KeychainKind>` thus built has the `Network`, the external keychain and the
+    /// internal keychain (if present) corresponding to the v2 `Wallet`.
+    pub fn from_v2(db: &mut rusqlite::Connection) -> Result<Option<KeyRing<KeychainKind>>, String> {
+        let changeset =
+            ChangeSet::<KeychainKind>::from_v2(db, KeychainKind::External, KeychainKind::Internal)
+                .map_err(|e| e.to_string())?;
+        KeyRing::<KeychainKind>::from_changeset(changeset, None, [].into())
+            .map_err(|e| e.to_string())
     }
 }
 
