@@ -744,9 +744,17 @@ mod test {
 
     // #[test]
     // fn test_caravan_export_p2wsh() {
-    // let descriptor = "wsh(sortedmulti(2,[119dbcab/48h/0h/0h/2h]xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhgbmJbZRkrgZw4koxb5JaHWkY4ALHY2grBGRjaDMzQLcgJvLJuZZvRcEL/0/*,[e650dc93/48h/0h/0h/2h]xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhgbmJbZRkrgZw4koxb5JaHWkY4ALHY2grBGRjaDMzQLcgJvLJuZZvRcEL/0/*))";
-    // let change_descriptor = "wsh(sortedmulti(2,[119dbcab/48h/0h/0h/2h]xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhgbmJbZRkrgZw4koxb5JaHWkY4ALHY2grBGRjaDMzQLcgJvLJuZZvRcEL/1/*,[e650dc93/48h/0h/0h/2h]xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhgbmJbZRkrgZw4koxb5JaHWkY4ALHY2grBGRjaDMzQLcgJvLJuZZvRcEL/1/*))";
-    // let network = Network::Bitcoin;
+    // let descriptor =
+    // "wsh(sortedmulti(2,[119dbcab/48h/0h/0h/
+    // 2h]xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhgbmJbZRkrgZw4koxb5JaHWkY4ALHY2grBGRjaDMzQLcgJvLJuZZvRcEL/
+    // 0/*,[e650dc93/48h/0h/0h/
+    // 2h]xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhgbmJbZRkrgZw4koxb5JaHWkY4ALHY2grBGRjaDMzQLcgJvLJuZZvRcEL/
+    // 0/*))"; let change_descriptor =
+    // "wsh(sortedmulti(2,[119dbcab/48h/0h/0h/
+    // 2h]xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhgbmJbZRkrgZw4koxb5JaHWkY4ALHY2grBGRjaDMzQLcgJvLJuZZvRcEL/
+    // 1/*,[e650dc93/48h/0h/0h/
+    // 2h]xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhgbmJbZRkrgZw4koxb5JaHWkY4ALHY2grBGRjaDMzQLcgJvLJuZZvRcEL/
+    // 1/*))"; let network = Network::Bitcoin;
     //
     // let wallet = get_test_wallet(descriptor, change_descriptor, network);
     // let export = CaravanExport::export_wallet(&wallet, "Test P2WSH Wallet").unwrap();
@@ -792,11 +800,19 @@ mod test {
     // assert!(json.contains("\"extendedPublicKeys\":"));
     // }
 
-    #[test]
+    // #[test]
     // fn test_caravan_export_p2sh() {
-    // let descriptor = "sh(sortedmulti(2,[119dbcab/48h/0h/0h/1h]xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhgbmJbZRkrgZw4koxb5JaHWkY4ALHY2grBGRjaDMzQLcgJvLJuZZvRcEL/0/*,[e650dc93/48h/0h/0h/1h]xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhgbmJbZRkrgZw4koxb5JaHWkY4ALHY2grBGRjaDMzQLcgJvLJuZZvRcEL/0/*))";
-    // let change_descriptor = "sh(sortedmulti(2,[119dbcab/48h/0h/0h/1h]xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhgbmJbZRkrgZw4koxb5JaHWkY4ALHY2grBGRjaDMzQLcgJvLJuZZvRcEL/1/*,[e650dc93/48h/0h/0h/1h]xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhgbmJbZRkrgZw4koxb5JaHWkY4ALHY2grBGRjaDMzQLcgJvLJuZZvRcEL/1/*))";
-    // let network = Network::Bitcoin;
+    // let descriptor =
+    // "sh(sortedmulti(2,[119dbcab/48h/0h/0h/
+    // 1h]xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhgbmJbZRkrgZw4koxb5JaHWkY4ALHY2grBGRjaDMzQLcgJvLJuZZvRcEL/
+    // 0/*,[e650dc93/48h/0h/0h/
+    // 1h]xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhgbmJbZRkrgZw4koxb5JaHWkY4ALHY2grBGRjaDMzQLcgJvLJuZZvRcEL/
+    // 0/*))"; let change_descriptor =
+    // "sh(sortedmulti(2,[119dbcab/48h/0h/0h/
+    // 1h]xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhgbmJbZRkrgZw4koxb5JaHWkY4ALHY2grBGRjaDMzQLcgJvLJuZZvRcEL/
+    // 1/*,[e650dc93/48h/0h/0h/
+    // 1h]xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhgbmJbZRkrgZw4koxb5JaHWkY4ALHY2grBGRjaDMzQLcgJvLJuZZvRcEL/
+    // 1/*))"; let network = Network::Bitcoin;
     //
     // let wallet = get_test_wallet(descriptor, change_descriptor, network);
     // let export = CaravanExport::export_wallet(&wallet, "Test P2SH Wallet").unwrap();
@@ -807,9 +823,17 @@ mod test {
     // }
     //     #[test]
     // fn test_caravan_export_p2sh_p2wsh() {
-    // let descriptor = "sh(wsh(sortedmulti(2,[119dbcab/48h/0h/0h/3h]xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhgbmJbZRkrgZw4koxb5JaHWkY4ALHY2grBGRjaDMzQLcgJvLJuZZvRcEL/0/*,[e650dc93/48h/0h/0h/3h]xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhgbmJbZRkrgZw4koxb5JaHWkY4ALHY2grBGRjaDMzQLcgJvLJuZZvRcEL/0/*)))";
-    // let change_descriptor = "sh(wsh(sortedmulti(2,[119dbcab/48h/0h/0h/3h]xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhgbmJbZRkrgZw4koxb5JaHWkY4ALHY2grBGRjaDMzQLcgJvLJuZZvRcEL/1/*,[e650dc93/48h/0h/0h/3h]xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhgbmJbZRkrgZw4koxb5JaHWkY4ALHY2grBGRjaDMzQLcgJvLJuZZvRcEL/1/*)))";
-    // let network = Network::Bitcoin;
+    // let descriptor =
+    // "sh(wsh(sortedmulti(2,[119dbcab/48h/0h/0h/
+    // 3h]xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhgbmJbZRkrgZw4koxb5JaHWkY4ALHY2grBGRjaDMzQLcgJvLJuZZvRcEL/
+    // 0/*,[e650dc93/48h/0h/0h/
+    // 3h]xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhgbmJbZRkrgZw4koxb5JaHWkY4ALHY2grBGRjaDMzQLcgJvLJuZZvRcEL/
+    // 0/*)))"; let change_descriptor =
+    // "sh(wsh(sortedmulti(2,[119dbcab/48h/0h/0h/
+    // 3h]xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhgbmJbZRkrgZw4koxb5JaHWkY4ALHY2grBGRjaDMzQLcgJvLJuZZvRcEL/
+    // 1/*,[e650dc93/48h/0h/0h/
+    // 3h]xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhgbmJbZRkrgZw4koxb5JaHWkY4ALHY2grBGRjaDMzQLcgJvLJuZZvRcEL/
+    // 1/*)))"; let network = Network::Bitcoin;
     //
     // let wallet = get_test_wallet(descriptor, change_descriptor, network);
     // let export = CaravanExport::export_wallet(&wallet, "Test P2SH-P2WSH Wallet").unwrap();
@@ -891,7 +915,7 @@ mod test {
         assert!(external.contains("/0/*"));
     }
 
-    #[test]
+    // #[test]
     //     fn test_caravan_descriptors_create_functional_wallet() {
     // // Test that resulting descriptor strings can create a functional BDK Wallet
     // let json = r#"{

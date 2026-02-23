@@ -11,94 +11,82 @@
 
 //! Errors that can be thrown by the [`Wallet`](crate::wallet::Wallet)
 
-// use crate::descriptor::policy::PolicyError;
 use crate::descriptor::{DescriptorError, ExtendedDescriptor};
-// use crate::wallet::coin_selection;
-use crate::{descriptor, KeychainKind, LoadWithPersistError};
+use crate::keyring::KeyRingError;
+use crate::{descriptor, ChangeSet, KeychainKind, LoadWithPersistError, Wallet};
 use alloc::{
     boxed::Box,
     string::{String, ToString},
 };
 use bitcoin::{absolute, psbt, Amount, BlockHash, Network, OutPoint, Sequence, Txid};
-use chain::local_chain::CannotConnectError;
-
-// use alloc::string::String;
-// use bitcoin::{absolute, psbt, Amount, OutPoint, Sequence, Txid};
 use core::fmt;
+use core::fmt::{Debug, Display};
 
 /// The error type when loading a [`Wallet`] from a [`ChangeSet`].
 #[derive(Debug, PartialEq)]
-pub enum LoadError {
-    /// There was a problem with the passed-in descriptor(s).
-    Descriptor(crate::descriptor::DescriptorError),
-    /// Data loaded from persistence is missing network type.
-    MissingNetwork,
+pub enum LoadError<K> {
     /// Data loaded from persistence is missing genesis hash.
     MissingGenesis,
-    /// Data loaded from persistence is missing descriptor.
-    MissingDescriptor(KeychainKind),
-    /// Data loaded is unexpected.
-    Mismatch(LoadMismatch),
-}
-
-impl fmt::Display for LoadError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            LoadError::Descriptor(e) => e.fmt(f),
-            LoadError::MissingNetwork => write!(f, "loaded data is missing network type"),
-            LoadError::MissingGenesis => write!(f, "loaded data is missing genesis hash"),
-            LoadError::MissingDescriptor(k) => {
-                write!(f, "loaded data is missing descriptor for {k} keychain")
-            }
-            LoadError::Mismatch(e) => write!(f, "{e}"),
-        }
-    }
-}
-
-#[cfg(feature = "std")]
-impl std::error::Error for LoadError {}
-
-/// Represents a mismatch with what is loaded and what is expected from [`LoadParams`].
-#[derive(Debug, PartialEq)]
-pub enum LoadMismatch {
-    /// Network does not match.
-    Network {
-        /// The network that is loaded.
-        loaded: Network,
-        /// The expected network.
-        expected: Network,
-    },
+    /// Data is missing the network.
+    MissingNetwork,
+    /// The keychain is missing,
+    MissingKeychain(K),
+    /// There was a problem with the passed-in descriptor(s).
+    InvalidKeyRing(KeyRingError<K>),
+    /// Loaded `KeyRing` is empty.
+    EmptyKeyring,
     /// Genesis hash does not match.
-    Genesis {
+    GenesisMismatch {
         /// The genesis hash that is loaded.
         loaded: BlockHash,
         /// The expected genesis hash.
         expected: BlockHash,
     },
-    /// Descriptor's [`DescriptorId`](bdk_chain::DescriptorId) does not match.
-    Descriptor {
-        /// Keychain identifying the descriptor.
-        keychain: KeychainKind,
-        /// The loaded descriptor.
-        loaded: Option<Box<ExtendedDescriptor>>,
-        /// The expected descriptor.
-        expected: Option<Box<ExtendedDescriptor>>,
+    /// Network does not match.
+    NetworkMismatch {
+        /// The network that is loaded.
+        loaded: bitcoin::Network,
+        /// The expected network.
+        expected: bitcoin::Network,
+    },
+    /// Descriptor does not match for the `keychain`.
+    DescriptorMismatch {
+        /// Keychain identifying the descriptor
+        keychain: K,
+        /// The loaded descriptor
+        loaded: Box<ExtendedDescriptor>,
+        /// The expected descriptor
+        expected: Box<ExtendedDescriptor>,
     },
 }
 
-impl fmt::Display for LoadMismatch {
+impl<K> Display for LoadError<K>
+where
+    K: Display,
+{
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            LoadMismatch::Network { loaded, expected } => {
+            LoadError::MissingGenesis => write!(f, "loaded data is missing genesis hash"),
+            LoadError::MissingNetwork => write!(f, "loaded data is missing the network"),
+            LoadError::MissingKeychain(keychain) => {
+                write!(f, "loaded data does not contain the keychain {keychain}")
+            }
+            LoadError::InvalidKeyRing(err) => write!(f, "{err}"),
+            LoadError::EmptyKeyring => write!(f, "Loaded keyring is empty"),
+            LoadError::GenesisMismatch { loaded, expected } => write!(
+                f,
+                "Genesis hash mismatch: loaded {loaded}, expected {expected}"
+            ),
+            LoadError::NetworkMismatch { loaded, expected } => {
                 write!(f, "Network mismatch: loaded {loaded}, expected {expected}")
             }
-            LoadMismatch::Genesis { loaded, expected } => {
+            LoadError::GenesisMismatch { loaded, expected } => {
                 write!(
                     f,
                     "Genesis hash mismatch: loaded {loaded}, expected {expected}"
                 )
             }
-            LoadMismatch::Descriptor {
+            LoadError::DescriptorMismatch {
                 keychain,
                 loaded,
                 expected,
@@ -106,30 +94,17 @@ impl fmt::Display for LoadMismatch {
                 write!(
                     f,
                     "Descriptor mismatch for {} keychain: loaded {}, expected {}",
-                    keychain,
-                    loaded
-                        .as_ref()
-                        .map_or("None".to_string(), |d| d.to_string()),
-                    expected
-                        .as_ref()
-                        .map_or("None".to_string(), |d| d.to_string())
+                    keychain, loaded, expected,
                 )
             }
         }
     }
 }
 
-impl<E> From<LoadMismatch> for LoadWithPersistError<E> {
-    fn from(mismatch: LoadMismatch) -> Self {
-        Self::InvalidChangeSet(LoadError::Mismatch(mismatch))
-    }
-}
+#[cfg(feature = "std")]
+impl<K> std::error::Error for LoadError<K> where K: Display + Debug {}
 
-impl From<LoadMismatch> for LoadError {
-    fn from(mismatch: LoadMismatch) -> Self {
-        Self::Mismatch(mismatch)
-    }
-}
+// TODO PR #318: I applied the changes in #382 here. Bring back the error if it's needed!
 
 /// Errors returned by miniscript when updating inconsistent PSBTs
 #[derive(Debug, Clone)]
@@ -142,7 +117,7 @@ pub enum MiniscriptPsbtError {
     OutputUpdate(miniscript::psbt::OutputUpdateError),
 }
 
-impl fmt::Display for MiniscriptPsbtError {
+impl Display for MiniscriptPsbtError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Conversion(err) => write!(f, "Conversion error: {err}"),

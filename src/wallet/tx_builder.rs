@@ -1092,7 +1092,7 @@ mod test {
         assert_ne!(tx_2, original_tx);
     }
 
-    fn get_test_utxos() -> Vec<LocalOutput> {
+    fn get_test_utxos() -> Vec<LocalOutput<KeychainKind>> {
         use bitcoin::hashes::Hash;
 
         vec![
