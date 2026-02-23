@@ -13,8 +13,6 @@
 //! of descriptors. It ensures descriptors are usable together, consistent with a given network,
 //! and will work with a BDK `Wallet`.
 
-#![allow(dead_code)]
-
 /// Contains `Changeset` corresponding to `KeyRing`.
 pub mod changeset;
 /// Contains error types corresponding to `KeyRing`.
