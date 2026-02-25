@@ -1,3 +1,4 @@
+#![allow(unused)]
 use core::{
     fmt,
     future::Future,
@@ -9,11 +10,12 @@ use core::{
 use alloc::{boxed::Box, string::ToString};
 use chain::Merge;
 
+use crate::descriptor;
+use crate::descriptor::DescriptorError;
 use crate::error::LoadError;
-use crate::{
-    descriptor::{calc_checksum, DescriptorError},
-    ChangeSet, CreateParams, LoadParams, Wallet,
-};
+use crate::keyring::{KeyRing, KeyRingError};
+use crate::{descriptor::calc_checksum, keyring, ChangeSet, CreateParams, LoadParams, Wallet};
+use bitcoin::BlockHash;
 
 /// Trait that persists [`PersistedWallet`].
 ///
@@ -23,7 +25,10 @@ use crate::{
 /// that associated functions are hard to find (since they are not methods!). [`WalletPersister`] is
 /// used by [`PersistedWallet`] (a light wrapper around [`Wallet`]) which enforces some level of
 /// safety. Refer to [`PersistedWallet`] for more about the safety checks.
-pub trait WalletPersister {
+pub trait WalletPersister<K>
+where
+    K: Ord,
+{
     /// Error type of the persister.
     type Error;
 
@@ -40,20 +45,20 @@ pub trait WalletPersister {
     /// data, return an empty changeset (using [`ChangeSet::default()`]).
     ///
     /// Error should only occur on database failure. Multiple calls to `initialize` should not
-    /// error. Calling `initialize` inbetween calls to `persist` should not error.
+    /// error. Calling `initialize` in between calls to `persist` should not error.
     ///
     /// Calling [`persist`] before the `persister` is `initialize`d may error. However, some
     /// persister implementations may NOT require initialization at all (and not error).
     ///
     /// [`persist`]: WalletPersister::persist
-    fn initialize(persister: &mut Self) -> Result<ChangeSet, Self::Error>;
+    fn initialize(persister: &mut Self) -> Result<ChangeSet<K>, Self::Error>;
 
     /// Persist the given `changeset` to the `persister`.
     ///
     /// This method can fail if the `persister` is not [`initialize`]d.
     ///
     /// [`initialize`]: WalletPersister::initialize
-    fn persist(persister: &mut Self, changeset: &ChangeSet) -> Result<(), Self::Error>;
+    fn persist(persister: &mut Self, changeset: &ChangeSet<K>) -> Result<(), Self::Error>;
 }
 
 #[cfg(feature = "std")]
@@ -70,7 +75,10 @@ type FutureResult<'a, T, E> = Pin<Box<dyn Future<Output = Result<T, E>> + 'a>>;
 /// [`AsyncWalletPersister`] is used by [`PersistedWallet`] (a light wrapper around [`Wallet`])
 /// which enforces some level of safety. Refer to [`PersistedWallet`] for more about the safety
 /// checks.
-pub trait AsyncWalletPersister {
+pub trait AsyncWalletPersister<K>
+where
+    K: Ord,
+{
     /// Error type of the persister.
     type Error;
 
@@ -87,13 +95,13 @@ pub trait AsyncWalletPersister {
     /// data, return an empty changeset (using [`ChangeSet::default()`]).
     ///
     /// Error should only occur on database failure. Multiple calls to `initialize` should not
-    /// error. Calling `initialize` inbetween calls to `persist` should not error.
+    /// error. Calling `initialize` in between calls to `persist` should not error.
     ///
     /// Calling [`persist`] before the `persister` is `initialize`d may error. However, some
     /// persister implementations may NOT require initialization at all (and not error).
     ///
     /// [`persist`]: AsyncWalletPersister::persist
-    fn initialize<'a>(persister: &'a mut Self) -> FutureResult<'a, ChangeSet, Self::Error>
+    fn initialize<'a>(persister: &'a mut Self) -> FutureResult<'a, ChangeSet<K>, Self::Error>
     where
         Self: 'a;
 
@@ -104,7 +112,7 @@ pub trait AsyncWalletPersister {
     /// [`initialize`]: AsyncWalletPersister::initialize
     fn persist<'a>(
         persister: &'a mut Self,
-        changeset: &'a ChangeSet,
+        changeset: &'a ChangeSet<K>,
     ) -> FutureResult<'a, (), Self::Error>
     where
         Self: 'a;
@@ -126,40 +134,53 @@ pub trait AsyncWalletPersister {
 ///   not completely fool-proof as you can have multiple instances of the same `P` type that are
 ///   connected to different databases.
 #[derive(Debug)]
-pub struct PersistedWallet<P> {
-    inner: Wallet,
+pub struct PersistedWallet<P, K>
+where
+    K: Ord,
+{
+    inner: Wallet<K>,
     _marker: PhantomData<fn(&mut P)>,
 }
 
-impl<P> Deref for PersistedWallet<P> {
-    type Target = Wallet;
+impl<P, K> Deref for PersistedWallet<P, K>
+where
+    K: Ord,
+{
+    type Target = Wallet<K>;
 
     fn deref(&self) -> &Self::Target {
         &self.inner
     }
 }
 
-impl<P> DerefMut for PersistedWallet<P> {
+impl<P, K> DerefMut for PersistedWallet<P, K>
+where
+    K: Ord,
+{
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.inner
     }
 }
 
 /// Methods when `P` is a [`WalletPersister`].
-impl<P: WalletPersister> PersistedWallet<P> {
+impl<P, K> PersistedWallet<P, K>
+where
+    K: Ord + Clone + fmt::Debug,
+    P: WalletPersister<K>,
+{
     /// Create a new [`PersistedWallet`] with the given `persister` and `params`.
     pub fn create(
         persister: &mut P,
-        params: CreateParams,
-    ) -> Result<Self, CreateWithPersistError<P::Error>> {
+        params: CreateParams<K>,
+    ) -> Result<Self, CreateWithPersistError<P::Error, K>> {
         let existing = P::initialize(persister).map_err(CreateWithPersistError::Persist)?;
         if !existing.is_empty() {
             return Err(CreateWithPersistError::DataAlreadyExists(Box::new(
                 existing,
             )));
         }
-        let mut inner =
-            Wallet::create_with_params(params).map_err(CreateWithPersistError::Descriptor)?;
+        let mut inner = Wallet::create_with_params(params)
+            .map_err(|e| CreateWithPersistError::InvalidKeyRing(e))?;
         if let Some(changeset) = inner.take_staged() {
             P::persist(persister, &changeset).map_err(CreateWithPersistError::Persist)?;
         }
@@ -172,8 +193,8 @@ impl<P: WalletPersister> PersistedWallet<P> {
     /// Load a previously [`PersistedWallet`] from the given `persister` and `params`.
     pub fn load(
         persister: &mut P,
-        params: LoadParams,
-    ) -> Result<Option<Self>, LoadWithPersistError<P::Error>> {
+        params: LoadParams<K>,
+    ) -> Result<Option<Self>, LoadWithPersistError<P::Error, K>> {
         let changeset = P::initialize(persister).map_err(LoadWithPersistError::Persist)?;
         Wallet::load_with_params(changeset, params)
             .map(|opt| {
@@ -203,12 +224,16 @@ impl<P: WalletPersister> PersistedWallet<P> {
 }
 
 /// Methods when `P` is an [`AsyncWalletPersister`].
-impl<P: AsyncWalletPersister> PersistedWallet<P> {
+impl<P, K> PersistedWallet<P, K>
+where
+    K: Ord + Clone + fmt::Debug,
+    P: AsyncWalletPersister<K>,
+{
     /// Create a new [`PersistedWallet`] with the given async `persister` and `params`.
     pub async fn create_async(
         persister: &mut P,
-        params: CreateParams,
-    ) -> Result<Self, CreateWithPersistError<P::Error>> {
+        params: CreateParams<K>,
+    ) -> Result<Self, CreateWithPersistError<P::Error, K>> {
         let existing = P::initialize(persister)
             .await
             .map_err(CreateWithPersistError::Persist)?;
@@ -217,8 +242,9 @@ impl<P: AsyncWalletPersister> PersistedWallet<P> {
                 existing,
             )));
         }
-        let mut inner =
-            Wallet::create_with_params(params).map_err(CreateWithPersistError::Descriptor)?;
+
+        let mut inner = Wallet::create_with_params(params)
+            .map_err(|e| CreateWithPersistError::InvalidKeyRing(e))?;
         if let Some(changeset) = inner.take_staged() {
             P::persist(persister, &changeset)
                 .await
@@ -233,8 +259,8 @@ impl<P: AsyncWalletPersister> PersistedWallet<P> {
     /// Load a previously [`PersistedWallet`] from the given async `persister` and `params`.
     pub async fn load_async(
         persister: &mut P,
-        params: LoadParams,
-    ) -> Result<Option<Self>, LoadWithPersistError<P::Error>> {
+        params: LoadParams<K>,
+    ) -> Result<Option<Self>, LoadWithPersistError<P::Error, K>> {
         let changeset = P::initialize(persister)
             .await
             .map_err(LoadWithPersistError::Persist)?;
@@ -266,32 +292,35 @@ impl<P: AsyncWalletPersister> PersistedWallet<P> {
 }
 
 #[cfg(feature = "rusqlite")]
-impl WalletPersister for bdk_chain::rusqlite::Transaction<'_> {
+use crate::wallet::{FromSql, ToSql};
+
+#[cfg(feature = "rusqlite")]
+impl<K: Ord + Clone + FromSql + ToSql> WalletPersister<K> for bdk_chain::rusqlite::Transaction<'_> {
     type Error = bdk_chain::rusqlite::Error;
 
-    fn initialize(persister: &mut Self) -> Result<ChangeSet, Self::Error> {
-        ChangeSet::init_sqlite_tables(&*persister)?;
-        ChangeSet::from_sqlite(persister)
+    fn initialize(persister: &mut Self) -> Result<ChangeSet<K>, Self::Error> {
+        ChangeSet::<K>::init_sqlite_tables(&*persister)?;
+        ChangeSet::<K>::from_sqlite(persister)
     }
 
-    fn persist(persister: &mut Self, changeset: &ChangeSet) -> Result<(), Self::Error> {
+    fn persist(persister: &mut Self, changeset: &ChangeSet<K>) -> Result<(), Self::Error> {
         changeset.persist_to_sqlite(persister)
     }
 }
 
 #[cfg(feature = "rusqlite")]
-impl WalletPersister for bdk_chain::rusqlite::Connection {
+impl<K: Ord + Clone + FromSql + ToSql> WalletPersister<K> for bdk_chain::rusqlite::Connection {
     type Error = bdk_chain::rusqlite::Error;
 
-    fn initialize(persister: &mut Self) -> Result<ChangeSet, Self::Error> {
+    fn initialize(persister: &mut Self) -> Result<ChangeSet<K>, Self::Error> {
         let db_tx = persister.transaction()?;
-        ChangeSet::init_sqlite_tables(&db_tx)?;
-        let changeset = ChangeSet::from_sqlite(&db_tx)?;
+        ChangeSet::<K>::init_sqlite_tables(&db_tx)?;
+        let changeset = ChangeSet::<K>::from_sqlite(&db_tx)?;
         db_tx.commit()?;
         Ok(changeset)
     }
 
-    fn persist(persister: &mut Self, changeset: &ChangeSet) -> Result<(), Self::Error> {
+    fn persist(persister: &mut Self, changeset: &ChangeSet<K>) -> Result<(), Self::Error> {
         let db_tx = persister.transaction()?;
         changeset.persist_to_sqlite(&db_tx)?;
         db_tx.commit()
@@ -302,15 +331,15 @@ impl WalletPersister for bdk_chain::rusqlite::Connection {
 #[cfg(feature = "file_store")]
 #[derive(Debug)]
 #[allow(clippy::large_enum_variant)]
-pub enum FileStoreError {
+pub enum FileStoreError<K: Ord> {
     /// Error when loading from the store.
-    Load(bdk_file_store::StoreErrorWithDump<ChangeSet>),
+    Load(bdk_file_store::StoreErrorWithDump<ChangeSet<K>>),
     /// Error when writing to the store.
     Write(std::io::Error),
 }
 
 #[cfg(feature = "file_store")]
-impl core::fmt::Display for FileStoreError {
+impl<K: Ord> fmt::Display for FileStoreError<K> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         use core::fmt::Display;
         match self {
@@ -321,57 +350,65 @@ impl core::fmt::Display for FileStoreError {
 }
 
 #[cfg(feature = "file_store")]
-impl std::error::Error for FileStoreError {}
+impl<K: Ord + fmt::Debug> std::error::Error for FileStoreError<K> {}
 
 #[cfg(feature = "file_store")]
-impl WalletPersister for bdk_file_store::Store<ChangeSet> {
-    type Error = FileStoreError;
+impl<K: Ord + serde::de::DeserializeOwned + serde::Serialize> WalletPersister<K>
+    for bdk_file_store::Store<ChangeSet<K>>
+{
+    type Error = FileStoreError<K>;
 
-    fn initialize(persister: &mut Self) -> Result<ChangeSet, Self::Error> {
+    fn initialize(persister: &mut Self) -> Result<ChangeSet<K>, Self::Error> {
         persister
             .dump()
             .map(Option::unwrap_or_default)
             .map_err(FileStoreError::Load)
     }
 
-    fn persist(persister: &mut Self, changeset: &ChangeSet) -> Result<(), Self::Error> {
+    fn persist(persister: &mut Self, changeset: &ChangeSet<K>) -> Result<(), Self::Error> {
         persister.append(changeset).map_err(FileStoreError::Write)
     }
 }
 
 /// Error type for [`PersistedWallet::load`].
 #[derive(Debug, PartialEq)]
-pub enum LoadWithPersistError<E> {
+pub enum LoadWithPersistError<E, K> {
     /// Error from persistence.
     Persist(E),
     /// Occurs when the loaded changeset cannot construct [`Wallet`].
-    InvalidChangeSet(LoadError),
+    InvalidChangeSet(LoadError<K>),
 }
 
-impl<E: fmt::Display> fmt::Display for LoadWithPersistError<E> {
+impl<E: fmt::Display, K: fmt::Display> fmt::Display for LoadWithPersistError<E, K> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Persist(err) => fmt::Display::fmt(err, f),
-            Self::InvalidChangeSet(err) => fmt::Display::fmt(&err, f),
+            Self::InvalidChangeSet(err) => fmt::Display::fmt(err, f),
         }
     }
 }
 
 #[cfg(feature = "std")]
-impl<E: fmt::Debug + fmt::Display> std::error::Error for LoadWithPersistError<E> {}
+impl<E: fmt::Debug + fmt::Display, K: fmt::Debug + fmt::Display> std::error::Error
+    for LoadWithPersistError<E, K>
+{
+}
 
 /// Error type for [`PersistedWallet::create`].
 #[derive(Debug)]
-pub enum CreateWithPersistError<E> {
+pub enum CreateWithPersistError<E, K>
+where
+    K: Ord,
+{
     /// Error from persistence.
     Persist(E),
     /// Persister already has wallet data.
-    DataAlreadyExists(Box<ChangeSet>),
+    DataAlreadyExists(Box<ChangeSet<K>>),
     /// Occurs when the provided descriptor(s) cannot construct [`Wallet`].
-    Descriptor(DescriptorError),
+    InvalidKeyRing(KeyRingError<K>),
 }
 
-impl<E: fmt::Display> fmt::Display for CreateWithPersistError<E> {
+impl<E: fmt::Display, K: fmt::Display + Ord> fmt::Display for CreateWithPersistError<E, K> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Persist(err) => write!(f, "{err}"),
@@ -382,7 +419,7 @@ impl<E: fmt::Display> fmt::Display for CreateWithPersistError<E> {
                 )?;
                 changeset_info(f, changeset)
             }
-            Self::Descriptor(err) => {
+            Self::InvalidKeyRing(err) => {
                 write!(f, "{err}")
             }
         }
@@ -390,45 +427,43 @@ impl<E: fmt::Display> fmt::Display for CreateWithPersistError<E> {
 }
 
 #[cfg(feature = "std")]
-impl<E: fmt::Debug + fmt::Display> std::error::Error for CreateWithPersistError<E> {}
+impl<E: fmt::Debug + fmt::Display, K: Ord + fmt::Debug + fmt::Display> std::error::Error
+    for CreateWithPersistError<E, K>
+{
+}
 
 /// Helper function to display basic information about a [`ChangeSet`].
-fn changeset_info(f: &mut fmt::Formatter<'_>, changeset: &ChangeSet) -> fmt::Result {
+fn changeset_info<K: Ord + fmt::Display>(
+    f: &mut fmt::Formatter<'_>,
+    changeset: &ChangeSet<K>,
+) -> fmt::Result {
     let network = changeset
+        .keyring
         .network
         .as_ref()
         .map_or("None".to_string(), |n| n.to_string());
 
-    let descriptor_checksum = changeset
-        .descriptor
-        .as_ref()
-        .and_then(|d| calc_checksum(&d.to_string()).ok())
-        .unwrap_or_else(|| "None".to_string());
+    writeln!(f, "  Network: {network}")?;
 
-    let change_descriptor_checksum = changeset
-        .change_descriptor
-        .as_ref()
-        .and_then(|d| calc_checksum(&d.to_string()).ok())
-        .unwrap_or_else(|| "None".to_string());
+    for (keychain, descriptor) in &changeset.keyring.descriptors {
+        let descriptor_checksum = calc_checksum(&descriptor.to_string()).unwrap();
+        writeln!(
+            f,
+            " Keychain: {keychain}, Descriptor Checksum: {descriptor_checksum}"
+        );
+    }
 
     let tx_count = changeset.tx_graph.txs.len();
+    writeln!(f, "  Transaction Count: {tx_count}")?;
 
     let anchor_count = changeset.tx_graph.anchors.len();
+    writeln!(f, "  Anchor Count: {anchor_count}")?;
 
     let block_count = if let Some(&count) = changeset.local_chain.blocks.keys().last() {
         count
     } else {
         0
     };
-
-    writeln!(f, "  Network: {network}")?;
-    writeln!(f, "  Descriptor Checksum: {descriptor_checksum}")?;
-    writeln!(
-        f,
-        "  Change Descriptor Checksum: {change_descriptor_checksum}"
-    )?;
-    writeln!(f, "  Transaction Count: {tx_count}")?;
-    writeln!(f, "  Anchor Count: {anchor_count}")?;
     writeln!(f, "  Block Count: {block_count}")?;
 
     Ok(())

@@ -7,7 +7,7 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use bitcoin::{Transaction, Txid};
 use chain::{BlockId, ChainPosition, ConfirmationBlockTime};
-
+use core::fmt::Debug;
 /// Events representing changes to wallet transactions.
 ///
 /// Returned after calling
@@ -84,13 +84,16 @@ pub enum WalletEvent {
 
 /// Generate events by comparing the chain tip and wallet transactions before and after applying
 /// `wallet::Update` to `Wallet`. Any changes are added to the list of returned `WalletEvent`s.
-pub(crate) fn wallet_events(
-    wallet: &Wallet,
+pub(crate) fn wallet_events<K>(
+    wallet: &Wallet<K>,
     chain_tip1: BlockId,
     chain_tip2: BlockId,
     wallet_txs1: BTreeMap<Txid, (Arc<Transaction>, ChainPosition<ConfirmationBlockTime>)>,
     wallet_txs2: BTreeMap<Txid, (Arc<Transaction>, ChainPosition<ConfirmationBlockTime>)>,
-) -> Vec<WalletEvent> {
+) -> Vec<WalletEvent>
+where
+    K: Ord + Debug + Clone,
+{
     let mut events: Vec<WalletEvent> = Vec::new();
 
     // find chain tip change
