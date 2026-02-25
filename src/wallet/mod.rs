@@ -356,9 +356,9 @@ where
         self.keyring.network()
     }
 
-    /// Get the (`keychain, descriptor`) pairs owned by the [`Wallet`]
-    pub fn keychains(&self) -> &BTreeMap<K, Descriptor<DescriptorPublicKey>> {
-        self.keyring.list_keychains()
+    /// Get a reference to the inner [`KeyRing`]
+    pub fn keyring(&self) -> &KeyRing<K> {
+        &self.keyring
     }
 
     /// Get a reference to the inner [`TxGraph`].
@@ -384,22 +384,6 @@ where
     /// Get all the checkpoints the wallet is currently storing indexed by height.
     pub fn checkpoints(&self) -> CheckPointIter {
         self.chain.iter_checkpoints()
-    }
-
-    // TODO PR #318: I think this one can be removed (users should be able to get the checksum for
-    //               for their descriptors from the KeyRing), but I just want to make sure. If it
-    //               stays, it should return an Option<String> in case the keychain provided doesn't
-    //               exist.
-    /// Return the checksum of the public descriptor associated to the `keychain`.
-    pub fn descriptor_checksum(&self, keychain: K) -> String {
-        self.keychains()
-            .get(&keychain)
-            .unwrap()
-            .to_string()
-            .split_once('#')
-            .unwrap()
-            .1
-            .to_string()
     }
 }
 
