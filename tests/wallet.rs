@@ -214,11 +214,15 @@ fn check_balance() {
 #[test]
 fn test_descriptor_checksum() {
     let (wallet, _) = get_funded_wallet_wpkh();
-    let checksum = wallet.descriptor_checksum(KeychainKind::External);
+    let checksum = wallet
+        .keyring()
+        .descriptor_checksum(KeychainKind::External)
+        .expect("keychain must exist");
     assert_eq!(checksum.len(), 8);
 
     let raw_descriptor = wallet
-        .keychains()
+        .keyring()
+        .list_keychains()
         .get(&KeychainKind::External)
         .unwrap()
         .to_string()

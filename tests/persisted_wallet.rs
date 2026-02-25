@@ -149,7 +149,8 @@ fn wallet_is_persisted() -> anyhow::Result<()> {
             let secp = Secp256k1::new();
             assert_eq!(
                 *wallet
-                    .keychains()
+                    .keyring()
+                    .list_keychains()
                     .get(&KeychainKind::External)
                     .expect("should exist"),
                 external_desc
@@ -206,7 +207,8 @@ fn wallet_is_persisted() -> anyhow::Result<()> {
                 .expect("wallet must exist");
 
             let internal_did = wallet
-                .keychains()
+                .keyring()
+                .list_keychains()
                 .get(&KeychainKind::Internal)
                 .expect("should exist")
                 .descriptor_id();
