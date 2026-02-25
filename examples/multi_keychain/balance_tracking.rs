@@ -41,7 +41,7 @@ fn main() {
 
     // List all keychains
     println!("1. All configured keychains:");
-    for (keychain, descriptor) in wallet.keychains() {
+    for (keychain, descriptor) in wallet.keyring().list_keychains() {
         println!("   {:?}: {}", keychain, descriptor);
     }
 

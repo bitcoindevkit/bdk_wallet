@@ -67,7 +67,7 @@ fn main() {
     // Show that all the wallet operations work the same way
     println!("Standard operations work as expected:");
     println!("  Network: {:?}", wallet.network());
-    println!("  Keychains: {}", wallet.keychains().len());
+    println!("  Keychains: {}", wallet.keyring().list_keychains().len());
     println!("  Balance: {:?}\n", wallet.balance());
 
     // ============================================================================

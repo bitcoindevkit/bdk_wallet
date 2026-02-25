@@ -100,10 +100,13 @@ fn main() {
         match params.load_wallet(&mut conn).unwrap() {
             Some(wallet) => {
                 println!("   Wallet recovered successfully!");
-                println!("   The wallet has {} keychains", wallet.keychains().len());
+                println!(
+                    "   The wallet has {} keychains",
+                    wallet.keyring().list_keychains().len()
+                );
 
                 // Show all keychains
-                for (keychain, descriptor) in wallet.keychains() {
+                for (keychain, descriptor) in wallet.keyring().list_keychains() {
                     println!("   - {:?}: {}", keychain, descriptor);
                 }
             }
