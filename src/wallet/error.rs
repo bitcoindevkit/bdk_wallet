@@ -13,8 +13,7 @@
 
 use crate::descriptor::policy::PolicyError;
 use crate::descriptor::{DescriptorError, ExtendedDescriptor};
-use crate::wallet::coin_selection;
-use crate::{descriptor, KeychainKind, LoadWithPersistError};
+use crate::{coin_selection, descriptor, KeychainKind, LoadWithPersistError};
 use alloc::{
     boxed::Box,
     string::{String, ToString},
@@ -22,8 +21,8 @@ use alloc::{
 use bitcoin::{absolute, psbt, Amount, BlockHash, Network, OutPoint, Sequence, Txid};
 use core::fmt;
 
-/// The error type when loading a [`Wallet`] from a [`ChangeSet`].
-#[derive(Debug, PartialEq)]
+/// The error type when loading a [`Wallet`](crate::Wallet) from a [`ChangeSet`](crate::ChangeSet).
+#[derive(Debug)]
 pub enum LoadError {
     /// There was a problem with the passed-in descriptor(s).
     Descriptor(crate::descriptor::DescriptorError),
@@ -54,7 +53,8 @@ impl fmt::Display for LoadError {
 #[cfg(feature = "std")]
 impl std::error::Error for LoadError {}
 
-/// Represents a mismatch with what is loaded and what is expected from [`LoadParams`].
+/// Represents a mismatch with what is loaded and what is expected from
+/// [`LoadParams`](crate::LoadParams).
 #[derive(Debug, PartialEq)]
 pub enum LoadMismatch {
     /// Network does not match.
@@ -130,8 +130,8 @@ impl From<LoadMismatch> for LoadError {
 /// Errors returned by miniscript when updating inconsistent PSBTs
 #[derive(Debug, Clone)]
 pub enum MiniscriptPsbtError {
-    /// Descriptor key conversion error
-    Conversion(miniscript::descriptor::ConversionError),
+    /// Non-definite key error
+    NonDefiniteKey(miniscript::descriptor::NonDefiniteKeyError),
     /// Return error type for PsbtExt::update_input_with_descriptor
     UtxoUpdate(miniscript::psbt::UtxoUpdateError),
     /// Return error type for PsbtExt::update_output_with_descriptor
@@ -141,7 +141,7 @@ pub enum MiniscriptPsbtError {
 impl fmt::Display for MiniscriptPsbtError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Conversion(err) => write!(f, "Conversion error: {err}"),
+            Self::NonDefiniteKey(err) => write!(f, "{err}"),
             Self::UtxoUpdate(err) => write!(f, "UTXO update error: {err}"),
             Self::OutputUpdate(err) => write!(f, "Output update error: {err}"),
         }

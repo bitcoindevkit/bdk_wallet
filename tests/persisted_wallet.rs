@@ -367,10 +367,7 @@ fn wallet_should_persist_anchors_and_recover() {
     if let ChainPosition::Confirmed {
         anchor: obtained_anchor,
         ..
-    } = wallet
-        .get_tx(txid)
-        .expect("should retrieve stored tx")
-        .chain_position
+    } = wallet.get_tx(txid).expect("should retrieve stored tx").pos
     {
         assert_eq!(obtained_anchor, expected_anchor)
     } else {
