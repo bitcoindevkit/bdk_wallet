@@ -226,7 +226,11 @@ impl<C> PsbtParams<C> {
     /// to sign.
     ///
     /// This may be called multiple times to add additional assets, however only the last
-    /// absolute or relative timelock is retained. See also `AssetsExt`.
+    /// absolute or relative timelock is retained.
+    ///
+    /// If adding a time-based absolute timelock here, you must also set a [`PsbtParams::locktime`]
+    /// which is time-based (i.e. UNIX timestamp) to use as a fallback, otherwise a
+    /// `LockTypeMismatch` error will occur.
     pub fn add_assets(&mut self, assets: Assets) -> &mut Self {
         let mut new = match self.assets {
             Some(ref existing) => {
