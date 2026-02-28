@@ -255,6 +255,64 @@ fn test_create_psbt_cltv() {
 }
 
 #[test]
+fn test_create_psbt_cltv_timestamp() {
+    use absolute::LockTime;
+    use absolute::LOCK_TIME_THRESHOLD;
+
+    let lock_time = LockTime::from_consensus(1734230218);
+    let desc = get_test_single_sig_cltv_timestamp();
+    let mut wallet = Wallet::create_single(desc)
+        .network(Network::Regtest)
+        .create_wallet_no_persist()
+        .unwrap();
+
+    // Receive coins
+    let op = receive_output(&mut wallet, Amount::ONE_BTC, ReceiveTo::Mempool(1));
+
+    let addr = wallet.reveal_next_address(KeychainKind::External);
+
+    // No assets fail
+    {
+        let mut params = PsbtParams::default();
+        params
+            .add_utxos(&[op])
+            .add_recipients([(addr.script_pubkey(), Amount::from_btc(0.42).unwrap())]);
+        let res = wallet.create_psbt(params);
+        assert!(
+            matches!(res, Err(CreatePsbtError::Plan(err)) if err == op),
+            "UTXO requires CLTV but the assets are insufficient",
+        );
+    }
+
+    // Add assets ok
+    {
+        let mut params = PsbtParams::default();
+        params
+            .add_utxos(&[op])
+            .add_assets(Assets::new().after(lock_time))
+            .locktime(LockTime::from_consensus(LOCK_TIME_THRESHOLD))
+            .add_recipients([(addr.script_pubkey(), Amount::from_btc(0.42).unwrap())]);
+        let (psbt, _) = wallet.create_psbt(params).unwrap();
+        assert_eq!(psbt.unsigned_tx.lock_time, lock_time);
+    }
+
+    // Locktime greater than required
+    {
+        let new_lock_time = 1772167108;
+        assert!(new_lock_time > lock_time.to_consensus_u32());
+        let mut params = PsbtParams::default();
+        params
+            .add_utxos(&[op])
+            .add_assets(Assets::new().after(lock_time))
+            .locktime(LockTime::from_consensus(new_lock_time))
+            .add_recipients([(addr.script_pubkey(), Amount::from_btc(0.42).unwrap())]);
+
+        let (psbt, _) = wallet.create_psbt(params).unwrap();
+        assert_eq!(psbt.unsigned_tx.lock_time.to_consensus_u32(), new_lock_time);
+    }
+}
+
+#[test]
 fn test_create_psbt_csv() {
     use bitcoin::relative;
     use bitcoin::Sequence;
