@@ -19,6 +19,7 @@ use alloc::{
     boxed::Box,
     string::{String, ToString},
 };
+use bdk_tx::bdk_coin_select;
 use bitcoin::{absolute, psbt, Amount, BlockHash, Network, OutPoint, Sequence, Txid};
 use core::fmt;
 

@@ -6,7 +6,7 @@ use core::fmt;
 
 use bdk_chain::{BlockId, CanonicalizationParams, ConfirmationBlockTime, FullTxOut, TxGraph};
 use bdk_coin_select::{ChangePolicy, DrainWeights};
-use bdk_tx::{FeeStrategy, Input, Output, ScriptSource};
+use bdk_tx::{bdk_coin_select, FeeStrategy, Input, Output, ScriptSource};
 use bitcoin::{
     absolute, psbt::PsbtSighashType, transaction::Version, Amount, FeeRate, OutPoint, ScriptBuf,
     Sequence, Transaction, Txid,
