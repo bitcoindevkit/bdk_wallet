@@ -24,7 +24,6 @@ bdk_chain = { version = "0.23.2", features = ["miniscript", "serde"], default-fe
 bitcoin = { version = "0.32.8", features = ["serde", "base64"], default-features = false }
 miniscript = { version = "12.3.5", features = ["serde"], default-features = false }
 rand_core = { version = "0.6.4" }
-bdk_coin_select = { version = "0.4.1" }
 serde_json = { version = "1" }
 serde = { version = "1", features = ["derive"] }
 
@@ -36,12 +35,13 @@ tempfile = { version = "3.26.0", optional = true }
 
 [dependencies.bdk_tx]
 version = "0.2.0"
+default-features = false
 git = "https://github.com/valuedmammal/bdk-tx"
 branch = "release/0_2_0"
 
 [features]
 default = ["std"]
-std = ["bitcoin/std", "bitcoin/rand-std", "miniscript/std", "bdk_chain/std"]
+std = ["bitcoin/std", "bitcoin/rand-std", "miniscript/std", "bdk_chain/std", "bdk_tx/std"]
 compiler = ["miniscript/compiler"]
 all-keys = ["keys-bip39"]
 keys-bip39 = ["bip39"]

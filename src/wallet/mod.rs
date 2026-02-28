@@ -35,8 +35,8 @@ use bdk_chain::{
     FullTxOut, Indexed, IndexedTxGraph, Indexer, KeychainIndexed, Merge,
 };
 use bdk_tx::{
-    selection_algorithm_lowest_fee_bnb, ConfirmationStatus, Finalizer, Input, InputCandidates,
-    OriginalTxStats, Output, RbfParams, ScriptSource, Selector, SelectorParams,
+    bdk_coin_select, selection_algorithm_lowest_fee_bnb, ConfirmationStatus, Finalizer, Input,
+    InputCandidates, OriginalTxStats, Output, RbfParams, ScriptSource, Selector, SelectorParams,
 };
 #[cfg(feature = "std")]
 use bitcoin::secp256k1::rand;
@@ -3160,14 +3160,17 @@ impl Wallet {
 
         // Create psbt
         let mut psbt = selection
-            .create_psbt(bdk_tx::PsbtParams {
-                version,
-                fallback_locktime,
-                fallback_sequence,
-                mandate_full_tx_for_segwit_v0: !params.only_witness_utxo,
-                sighash_type: params.sighash_type,
-                enable_anti_fee_sniping: params.enable_anti_fee_sniping,
-            })
+            .create_psbt_with_rng(
+                bdk_tx::PsbtParams {
+                    version,
+                    fallback_locktime,
+                    fallback_sequence,
+                    mandate_full_tx_for_segwit_v0: !params.only_witness_utxo,
+                    sighash_type: params.sighash_type,
+                    enable_anti_fee_sniping: params.enable_anti_fee_sniping,
+                },
+                rng,
+            )
             .map_err(CreatePsbtError::Psbt)?;
 
         // Add global xpubs.

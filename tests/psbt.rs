@@ -1,4 +1,5 @@
 use bdk_chain::{BlockId, ConfirmationBlockTime};
+use bdk_tx::bdk_coin_select;
 use bdk_tx::FeeStrategy;
 use bdk_wallet::bitcoin;
 use bdk_wallet::test_utils::*;
