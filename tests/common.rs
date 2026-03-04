@@ -17,6 +17,23 @@ pub fn parse_descriptor(s: &str) -> (Descriptor<DescriptorPublicKey>, KeyMap) {
         .expect("failed to parse descriptor")
 }
 
+#[macro_export]
+macro_rules! block_id {
+    ($height:expr, $hash:literal) => {{
+        bdk_chain::BlockId {
+            height: $height,
+            hash: bitcoin::hashes::Hash::hash($hash.as_bytes()),
+        }
+    }};
+}
+
+#[macro_export]
+macro_rules! hash {
+    ($index:literal) => {{
+        bitcoin::hashes::Hash::hash($index.as_bytes())
+    }};
+}
+
 /// Validate and return the transaction fee from a PSBT.
 /// Panics if extraction fails, fee calculation fails, or if calculated fee doesn't match PSBT's
 /// fee.
