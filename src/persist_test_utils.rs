@@ -34,14 +34,16 @@ use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
 
-const DESCRIPTORS: [&str; 4] = [
+/// Test descriptors
+pub const DESCRIPTORS: [&str; 4] = [
     "tr([5940b9b9/86'/0'/0']tpubDDVNqmq75GNPWQ9UNKfP43UwjaHU4GYfoPavojQbfpyfZp2KetWgjGBRRAy4tYCrAA6SB11mhQAkqxjh1VtQHyKwT4oYxpwLaGHvoKmtxZf/0/*)#44aqnlam",
     "tr([5940b9b9/86'/0'/0']tpubDDVNqmq75GNPWQ9UNKfP43UwjaHU4GYfoPavojQbfpyfZp2KetWgjGBRRAy4tYCrAA6SB11mhQAkqxjh1VtQHyKwT4oYxpwLaGHvoKmtxZf/1/*)#ypcpw2dr",
     "wpkh([41f2aed0/84h/1h/0h]tpubDDFSdQWw75hk1ewbwnNpPp5DvXFRKt68ioPoyJDY752cNHKkFxPWqkqCyCf4hxrEfpuxh46QisehL3m8Bi6MsAv394QVLopwbtfvryFQNUH/0/*)#g0w0ymmw",
     "wpkh([41f2aed0/84h/1h/0h]tpubDDFSdQWw75hk1ewbwnNpPp5DvXFRKt68ioPoyJDY752cNHKkFxPWqkqCyCf4hxrEfpuxh46QisehL3m8Bi6MsAv394QVLopwbtfvryFQNUH/1/*)#emtwewtk",
 ];
 
-fn create_one_inp_one_out_tx(txid: Txid, amount: u64) -> Transaction {
+/// Create 1-input, 1-output transaction.
+pub fn create_one_inp_one_out_tx(txid: Txid, amount: u64) -> Transaction {
     Transaction {
         version: transaction::Version::ONE,
         lock_time: absolute::LockTime::ZERO,
@@ -59,7 +61,8 @@ fn create_one_inp_one_out_tx(txid: Txid, amount: u64) -> Transaction {
     }
 }
 
-fn spk_at_index(descriptor: &Descriptor<DescriptorPublicKey>, index: u32) -> ScriptBuf {
+/// Derives the script pubkey of a `descriptor` at a derivation `index`.
+pub fn spk_at_index(descriptor: &Descriptor<DescriptorPublicKey>, index: u32) -> ScriptBuf {
     descriptor
         .derived_descriptor(&Secp256k1::verification_only(), index)
         .expect("must derive")

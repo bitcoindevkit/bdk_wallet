@@ -76,12 +76,42 @@ type IndexedTxGraphChangeSet =
 ///
 /// Existing fields may be extended in the future with additional sub-fields. New top-level fields
 /// are likely to be added as new features and core components are implemented. Existing fields may
-/// be removed in future versions of the library.
+/// be removed in future versions of the library following the deprecation policy below.
 ///
-/// The authors reserve the right to make breaking changes to the [`ChangeSet`] structure in
-/// a major version release. API changes affecting the types of data persisted will display
-/// prominently in the release notes. Users are advised to look for such changes and update their
-/// application accordingly.
+/// ## Version Compatibility
+///
+/// Any change to the [`ChangeSet`] data structure MUST correlate with a major version bump per
+/// [Semantic Versioning](https://semver.org/). We guarantee that version N can read and
+/// deserialize [`ChangeSet`] data written by version N-1 (one major version back), but this
+/// guarantee does NOT extend to version N-2 or earlier. New fields added in version N must
+/// implement [`Default`] so that when reading N-1 data, absent fields are populated with default
+/// values.
+///
+/// Limited forward compatibility is provided for downgrades: version N-1 will successfully
+/// deserialize version N data without errors by ignoring unknown fields. Users should be aware that
+/// features introduced in version N will not be available when downgrading to N-1, and that
+/// downgrading can result in loss of data if not backed up. For this reason we recommend carefully
+/// planning major upgrades and backing up necessary data to avoid compatibility issues.
+///
+/// Fields can be removed using a 3-version deprecation cycle: fields are marked deprecated in
+/// version N with a reason and instructions for migrating, the field is retained in version N+1
+/// for compatibility where it deserializes but may not be used, and finally removed in version
+/// N+2. This ensures the standard backwards compatibility guarantees while allowing the removal of
+/// deprecated fields.
+///
+/// ### Responsibilities
+///
+/// Library authors SHOULD test all upgrade paths using the persistence test suite and in CI.
+/// Library authors MUST document API changes prominently in the release notes and CHANGELOG,
+/// clearly mark deprecated fields including migration instructions, and follow the 3-version
+/// deprecation cycle before removing fields.
+///
+/// Users SHOULD back up wallet data before major version upgrades, test upgrades in non-production
+/// environments first, and monitor the release notes for warnings and updates. Users MUST complete
+/// migrations within the compatibility window, and not skip major versions (i.e. upgrade major
+/// versions sequentially).
+///
+/// ### Custom Persistence Implementations
 ///
 /// The resulting interface is designed to give the user more control of what to persist and when
 /// to persist it. Custom implementations should consider and account for the possibility of
@@ -117,6 +147,7 @@ pub struct ChangeSet {
     /// Changes to [`KeychainTxOutIndex`](keychain_txout::KeychainTxOutIndex).
     pub indexer: keychain_txout::ChangeSet,
     /// Changes to locked outpoints.
+    #[serde(default)]
     pub locked_outpoints: locked_outpoints::ChangeSet,
 }
 
