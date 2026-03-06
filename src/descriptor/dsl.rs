@@ -440,7 +440,7 @@ macro_rules! apply_modifier {
 /// ```
 /// # use std::str::FromStr;
 /// let (my_descriptor, my_keys_map, network_kinds) = bdk_wallet::descriptor!(sh(wsh(and_v(v:pk("cVt4o7BGAig1UXywgGSmARhxMdzP5qvQsxKkSsc1XEkw3tDTQFpy"),older(50)))))?;
-/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// # Ok::<(), Box<dyn core::error::Error>>(())
 /// ```
 ///
 /// -------
@@ -478,7 +478,7 @@ macro_rules! apply_modifier {
 ///
 /// assert_eq!(descriptor_a, descriptor_b);
 /// assert_eq!(key_map_a.len(), key_map_b.len());
-/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// # Ok::<(), Box<dyn core::error::Error>>(())
 /// ```
 ///
 /// ------
@@ -498,7 +498,7 @@ macro_rules! apply_modifier {
 ///         multi(2, my_key_1, my_key_2)
 ///     )
 /// }?;
-/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// # Ok::<(), Box<dyn core::error::Error>>(())
 /// ```
 ///
 /// ------
@@ -510,7 +510,7 @@ macro_rules! apply_modifier {
 ///     bitcoin::PrivateKey::from_wif("cVt4o7BGAig1UXywgGSmARhxMdzP5qvQsxKkSsc1XEkw3tDTQFpy")?;
 ///
 /// let (descriptor, key_map, networks_kinds) = bdk_wallet::descriptor!(wpkh(my_key))?;
-/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// # Ok::<(), Box<dyn core::error::Error>>(())
 /// ```
 ///
 /// [`Vec`]: alloc::vec::Vec

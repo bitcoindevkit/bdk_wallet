@@ -51,8 +51,7 @@ impl fmt::Display for LoadError {
     }
 }
 
-#[cfg(feature = "std")]
-impl std::error::Error for LoadError {}
+impl core::error::Error for LoadError {}
 
 /// Represents a mismatch with what is loaded and what is expected from [`LoadParams`].
 #[derive(Debug, PartialEq)]
@@ -148,8 +147,7 @@ impl fmt::Display for MiniscriptPsbtError {
     }
 }
 
-#[cfg(feature = "std")]
-impl std::error::Error for MiniscriptPsbtError {}
+impl core::error::Error for MiniscriptPsbtError {}
 
 #[derive(Debug)]
 /// Error returned from [`TxBuilder::finish`]
@@ -312,8 +310,7 @@ impl From<coin_selection::InsufficientFunds> for CreateTxError {
     }
 }
 
-#[cfg(feature = "std")]
-impl std::error::Error for CreateTxError {}
+impl core::error::Error for CreateTxError {}
 
 #[derive(Debug)]
 /// Error returned from [`Wallet::build_fee_bump`]
@@ -362,5 +359,4 @@ impl fmt::Display for BuildFeeBumpError {
     }
 }
 
-#[cfg(feature = "std")]
-impl std::error::Error for BuildFeeBumpError {}
+impl core::error::Error for BuildFeeBumpError {}

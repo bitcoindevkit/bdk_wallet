@@ -171,5 +171,4 @@ impl fmt::Display for IndexOutOfBoundsError {
     }
 }
 
-#[cfg(feature = "std")]
-impl std::error::Error for IndexOutOfBoundsError {}
+impl core::error::Error for IndexOutOfBoundsError {}

@@ -141,8 +141,7 @@ impl fmt::Display for InsufficientFunds {
     }
 }
 
-#[cfg(feature = "std")]
-impl std::error::Error for InsufficientFunds {}
+impl core::error::Error for InsufficientFunds {}
 
 #[derive(Debug)]
 /// Remaining amount after performing coin selection

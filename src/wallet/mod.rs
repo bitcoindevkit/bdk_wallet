@@ -1178,7 +1178,7 @@ impl Wallet {
     ///     println!("secret_key: {}", secret_key);
     /// }
     ///
-    /// Ok::<(), Box<dyn std::error::Error>>(())
+    /// Ok::<(), Box<dyn core::error::Error>>(())
     /// ```
     pub fn get_signers(&self, keychain: KeychainKind) -> Arc<SignersContainer> {
         match keychain {

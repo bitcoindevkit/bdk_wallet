@@ -202,8 +202,7 @@ impl From<IndexOutOfBoundsError> for SignerError {
     }
 }
 
-#[cfg(feature = "std")]
-impl std::error::Error for SignerError {}
+impl core::error::Error for SignerError {}
 
 /// Signing context
 ///

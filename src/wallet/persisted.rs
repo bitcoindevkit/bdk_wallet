@@ -1,5 +1,5 @@
 use core::{
-    fmt,
+    error, fmt,
     future::Future,
     marker::PhantomData,
     ops::{Deref, DerefMut},
@@ -321,7 +321,7 @@ impl core::fmt::Display for FileStoreError {
 }
 
 #[cfg(feature = "file_store")]
-impl std::error::Error for FileStoreError {}
+impl error::Error for FileStoreError {}
 
 #[cfg(feature = "file_store")]
 impl WalletPersister for bdk_file_store::Store<ChangeSet> {
@@ -357,8 +357,7 @@ impl<E: fmt::Display> fmt::Display for LoadWithPersistError<E> {
     }
 }
 
-#[cfg(feature = "std")]
-impl<E: fmt::Debug + fmt::Display> std::error::Error for LoadWithPersistError<E> {}
+impl<E: fmt::Debug + fmt::Display> error::Error for LoadWithPersistError<E> {}
 
 /// Error type for [`PersistedWallet::create`].
 #[derive(Debug)]
@@ -389,8 +388,7 @@ impl<E: fmt::Display> fmt::Display for CreateWithPersistError<E> {
     }
 }
 
-#[cfg(feature = "std")]
-impl<E: fmt::Debug + fmt::Display> std::error::Error for CreateWithPersistError<E> {}
+impl<E: fmt::Debug + fmt::Display> error::Error for CreateWithPersistError<E> {}
 
 /// Helper function to display basic information about a [`ChangeSet`].
 fn changeset_info(f: &mut fmt::Formatter<'_>, changeset: &ChangeSet) -> fmt::Result {

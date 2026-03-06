@@ -11,7 +11,7 @@
 
 extern crate bdk_wallet;
 
-use std::error::Error;
+use core::error::Error;
 
 use bdk_wallet::descriptor::{policy::BuildSatisfaction, ExtractPolicy, IntoWalletDescriptor};
 use bdk_wallet::signer::SignersContainer;

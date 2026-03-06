@@ -545,8 +545,7 @@ impl From<IndexOutOfBoundsError> for PolicyError {
     }
 }
 
-#[cfg(feature = "std")]
-impl std::error::Error for PolicyError {}
+impl core::error::Error for PolicyError {}
 
 impl Policy {
     fn new(item: SatisfiableItem) -> Self {

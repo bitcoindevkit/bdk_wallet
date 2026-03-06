@@ -304,7 +304,7 @@ impl<Ctx: ScriptContext + 'static> ExtScriptContext for Ctx {
 /// let (descriptor, _, _) = bdk_wallet::descriptor!(pkh(key))?;
 /// //                                               ^^^^^ changing this to `wpkh` would make it compile
 ///
-/// # Ok::<_, Box<dyn std::error::Error>>(())
+/// # Ok::<_, Box<dyn core::error::Error>>(())
 /// ```
 pub trait IntoDescriptorKey<Ctx: ScriptContext>: Sized {
     /// Turn the key into a [`DescriptorKey`] within the requested [`ScriptContext`]
@@ -472,7 +472,7 @@ use bdk_wallet::bitcoin::NetworkKind;
 use bdk_wallet::keys::{DerivableKey, ExtendedKey};
 use bdk_wallet::keys::bip39::{Mnemonic, Language};
 
-# fn main() -> Result<(), Box<dyn std::error::Error>> {
+# fn main() -> Result<(), Box<dyn core::error::Error>> {
 let xkey: ExtendedKey =
     Mnemonic::parse_in(
         Language::English,
@@ -1038,8 +1038,7 @@ impl fmt::Display for KeyError {
     }
 }
 
-#[cfg(feature = "std")]
-impl std::error::Error for KeyError {}
+impl core::error::Error for KeyError {}
 
 #[cfg_attr(coverage_nightly, coverage(off))]
 #[cfg(test)]

@@ -94,7 +94,7 @@ fn wallet_is_persisted() -> anyhow::Result<()> {
         CreateDb: Fn(&Path) -> anyhow::Result<Db>,
         OpenDb: Fn(&Path) -> anyhow::Result<Db>,
         Db: WalletPersister,
-        Db::Error: std::error::Error + Send + Sync + 'static,
+        Db::Error: core::error::Error + Send + Sync + 'static,
     {
         let temp_dir = tempfile::tempdir().expect("must create tempdir");
         let file_path = temp_dir.path().join(filename);
@@ -240,7 +240,7 @@ fn wallet_load_checks() -> anyhow::Result<()> {
         CreateDb: Fn(&Path) -> anyhow::Result<Db>,
         OpenDb: Fn(&Path) -> anyhow::Result<Db>,
         Db: WalletPersister + std::fmt::Debug,
-        Db::Error: std::error::Error + Send + Sync + 'static,
+        Db::Error: core::error::Error + Send + Sync + 'static,
     {
         let temp_dir = tempfile::tempdir().expect("must create tempdir");
         let file_path = temp_dir.path().join(filename);

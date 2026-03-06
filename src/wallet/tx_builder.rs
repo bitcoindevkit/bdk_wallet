@@ -787,8 +787,7 @@ impl fmt::Display for AddUtxoError {
     }
 }
 
-#[cfg(feature = "std")]
-impl std::error::Error for AddUtxoError {}
+impl core::error::Error for AddUtxoError {}
 
 #[derive(Debug)]
 /// Error returned from [`TxBuilder::add_foreign_utxo`].
@@ -827,8 +826,7 @@ impl fmt::Display for AddForeignUtxoError {
     }
 }
 
-#[cfg(feature = "std")]
-impl std::error::Error for AddForeignUtxoError {}
+impl core::error::Error for AddForeignUtxoError {}
 
 type TxSort<T> = dyn (Fn(&T, &T) -> core::cmp::Ordering) + Send + Sync;
 

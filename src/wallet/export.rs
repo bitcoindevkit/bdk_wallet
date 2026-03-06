@@ -38,7 +38,7 @@
 //! )
 //! .network(Network::Testnet)
 //! .create_wallet_no_persist()?;
-//! # Ok::<_, Box<dyn std::error::Error>>(())
+//! # Ok::<_, Box<dyn core::error::Error>>(())
 //! ```
 //!
 //! ### Export a `Wallet` to FullyNoded format
@@ -55,7 +55,7 @@
 //! let export = FullyNodedExport::export_wallet(&wallet, "exported wallet", true).unwrap();
 //!
 //! println!("Exported: {}", export.to_string());
-//! # Ok::<_, Box<dyn std::error::Error>>(())
+//! # Ok::<_, Box<dyn core::error::Error>>(())
 //! ```
 //!
 //! ### Export a `Wallet` to Caravan format
@@ -72,7 +72,7 @@
 //! let export = CaravanExport::export_wallet(&wallet, "My Multisig Wallet").unwrap();
 //!
 //! println!("Exported: {}", export.to_string());
-//! # Ok::<_, Box<dyn std::error::Error>>(())
+//! # Ok::<_, Box<dyn core::error::Error>>(())
 //! ```
 //!
 //! ### Import from Caravan format
@@ -113,7 +113,7 @@
 //! let (external, internal) = import.to_descriptors()?;
 //! # assert_eq!(external, "wsh(sortedmulti(2,[73756c7f/48'/0'/0'/2']tpubDCKxNyM3bLgbEX13Mcd8mYxbVg9ajDkWXMh29hMWBurKfVmBfWAM96QVP3zaUcN51HvkZ3ar4VwP82kC8JZhhux8vFQoJintSpVBwpFvyU3/0/*,[f9f62194/48'/0'/0'/2']tpubDDp3ZSH1yCwusRppH7zgSxq2t1VEUyXSeEp8E5aFS8m43MknUjiF1bSLo3CGWAxbDyhF1XowA5ukPzyJZjznYk3kYi6oe7QxtX2euvKWsk4/0/*))#pgthjwtg");
 //! # assert_eq!(internal, "wsh(sortedmulti(2,[73756c7f/48'/0'/0'/2']tpubDCKxNyM3bLgbEX13Mcd8mYxbVg9ajDkWXMh29hMWBurKfVmBfWAM96QVP3zaUcN51HvkZ3ar4VwP82kC8JZhhux8vFQoJintSpVBwpFvyU3/1/*,[f9f62194/48'/0'/0'/2']tpubDDp3ZSH1yCwusRppH7zgSxq2t1VEUyXSeEp8E5aFS8m43MknUjiF1bSLo3CGWAxbDyhF1XowA5ukPzyJZjznYk3kYi6oe7QxtX2euvKWsk4/1/*))#cmcnua7a");
-//! # Ok::<_, Box<dyn std::error::Error>>(())
+//! # Ok::<_, Box<dyn core::error::Error>>(())
 //! ```
 //!
 //! ## Important Notes on Import/Export Operations
