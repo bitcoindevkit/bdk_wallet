@@ -705,16 +705,17 @@ impl CoinSelectionAlgorithm for SingleRandomDraw {
 }
 
 fn calculate_cs_result(
-    mut selected_utxos: Vec<OutputGroup>,
-    mut required_utxos: Vec<OutputGroup>,
+    selected_utxos: Vec<OutputGroup>,
+    required_utxos: Vec<OutputGroup>,
     excess: Excess,
 ) -> CoinSelectionResult {
-    selected_utxos.append(&mut required_utxos);
-    let fee_amount = selected_utxos.iter().map(|u| u.fee).sum();
-    let selected = selected_utxos
+    let mut selected = required_utxos;
+    selected.extend(selected_utxos);
+    let fee_amount = selected.iter().map(|u| u.fee).sum();
+    let selected = selected
         .into_iter()
-        .map(|u| u.weighted_utxo.utxo)
-        .collect::<Vec<_>>();
+        .map(|output_group| output_group.weighted_utxo.utxo)
+        .collect();
 
     CoinSelectionResult {
         selected,
