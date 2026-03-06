@@ -20,6 +20,8 @@ use alloc::{
     string::{String, ToString},
 };
 use bitcoin::{absolute, psbt, Amount, BlockHash, Network, OutPoint, Sequence, Txid};
+
+use chain::BlockId;
 use core::fmt;
 
 /// The error type when loading a [`Wallet`] from a [`ChangeSet`].
@@ -64,6 +66,13 @@ pub enum LoadMismatch {
         /// The expected network.
         expected: Network,
     },
+    /// Birthday does not match.
+    Birthday {
+        /// The birthday that is loaded.
+        loaded: Option<BlockId>,
+        /// The expected birthday.
+        expected: Option<BlockId>,
+    },
     /// Genesis hash does not match.
     Genesis {
         /// The genesis hash that is loaded.
@@ -87,6 +96,17 @@ impl fmt::Display for LoadMismatch {
         match self {
             LoadMismatch::Network { loaded, expected } => {
                 write!(f, "Network mismatch: loaded {loaded}, expected {expected}")
+            }
+            LoadMismatch::Birthday { loaded, expected } => {
+                let loaded = match loaded {
+                    Some(loaded) => format!("{}:{}", loaded.height, loaded.hash),
+                    None => "None".to_string(),
+                };
+                let expected = match expected {
+                    Some(expected) => format!("{}:{}", expected.height, expected.hash),
+                    None => "None".to_string(),
+                };
+                write!(f, "Birthday mismatch: loaded {loaded}, expected {expected}")
             }
             LoadMismatch::Genesis { loaded, expected } => {
                 write!(
