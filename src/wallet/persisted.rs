@@ -393,6 +393,7 @@ impl<E: fmt::Display> fmt::Display for CreateWithPersistError<E> {
 impl<E: fmt::Debug + fmt::Display> std::error::Error for CreateWithPersistError<E> {}
 
 /// Helper function to display basic information about a [`ChangeSet`].
+#[allow(deprecated)]
 fn changeset_info(f: &mut fmt::Formatter<'_>, changeset: &ChangeSet) -> fmt::Result {
     let network = changeset
         .network
