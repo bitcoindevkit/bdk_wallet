@@ -105,8 +105,10 @@ type IndexedTxGraphChangeSet =
 #[derive(Default, Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct ChangeSet {
     /// Descriptor for recipient addresses.
+    #[deprecated(since = "3.0.0", note = "To be removed in v5.0")]
     pub descriptor: Option<Descriptor<DescriptorPublicKey>>,
     /// Descriptor for change addresses.
+    #[deprecated(since = "3.0.0", note = "To be removed in v5.0")]
     pub change_descriptor: Option<Descriptor<DescriptorPublicKey>>,
     /// Stores the network type of the transaction data.
     pub network: Option<bitcoin::Network>,
@@ -122,6 +124,7 @@ pub struct ChangeSet {
 
 impl Merge for ChangeSet {
     /// Merge another [`ChangeSet`] into itself.
+    #[allow(deprecated)]
     fn merge(&mut self, other: Self) {
         if other.descriptor.is_some() {
             debug_assert!(
@@ -154,6 +157,7 @@ impl Merge for ChangeSet {
         Merge::merge(&mut self.indexer, other.indexer);
     }
 
+    #[allow(deprecated)]
     fn is_empty(&self) -> bool {
         self.descriptor.is_none()
             && self.change_descriptor.is_none()
@@ -215,6 +219,7 @@ impl ChangeSet {
     }
 
     /// Recover a [`ChangeSet`] from sqlite database.
+    #[allow(deprecated)]
     pub fn from_sqlite(db_tx: &chain::rusqlite::Transaction) -> chain::rusqlite::Result<Self> {
         use bitcoin::{OutPoint, Txid};
         use chain::rusqlite::OptionalExtension;
@@ -269,6 +274,7 @@ impl ChangeSet {
     }
 
     /// Persist [`ChangeSet`] to sqlite database.
+    #[allow(deprecated)]
     pub fn persist_to_sqlite(
         &self,
         db_tx: &chain::rusqlite::Transaction,
