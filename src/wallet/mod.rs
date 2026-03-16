@@ -3013,7 +3013,7 @@ impl Wallet {
     ///     .add_utxos(&[outpoint])
     ///     .add_recipients([(address, amount)])
     ///     .coin_selection(SelectionStrategy::LowestFee)
-    ///     .fee(FeeStrategy::FeeRate(FeeRate::BROADCAST_MIN));
+    ///     .fee_rate(FeeRate::BROADCAST_MIN);
     ///
     /// let (psbt, finalizer) = wallet.create_psbt(params)?;
     /// # Ok::<_, anyhow::Error>(())
@@ -3090,7 +3090,7 @@ impl Wallet {
         let mut selector = Selector::new(
             &input_candidates,
             SelectorParams {
-                fee_strategy: params.fee_strategy.clone(),
+                fee_strategy: bdk_tx::FeeStrategy::FeeRate(params.fee_rate),
                 target_outputs,
                 change_script,
                 change_policy: params.change_policy,
@@ -3229,11 +3229,11 @@ impl Wallet {
     pub fn replace_by_fee_and_recipients(
         &self,
         txs: &[Arc<Transaction>],
-        feerate: FeeRate,
+        fee_rate: FeeRate,
         recipients: Vec<(ScriptBuf, Amount)>,
     ) -> Result<(Psbt, Finalizer), ReplaceByFeeError> {
         let params = PsbtParams {
-            fee_strategy: bdk_tx::FeeStrategy::FeeRate(feerate),
+            fee_rate,
             recipients,
             ..Default::default()
         }
@@ -3361,7 +3361,7 @@ impl Wallet {
         let mut selector = Selector::new(
             &input_candidates,
             SelectorParams {
-                fee_strategy: params.fee_strategy.clone(),
+                fee_strategy: bdk_tx::FeeStrategy::FeeRate(params.fee_rate),
                 target_outputs,
                 change_script,
                 change_policy: params.change_policy,

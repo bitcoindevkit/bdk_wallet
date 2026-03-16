@@ -6,7 +6,7 @@ use core::fmt;
 
 use bdk_chain::{BlockId, CanonicalizationParams, ConfirmationBlockTime, FullTxOut, TxGraph};
 use bdk_coin_select::{ChangePolicy, DrainWeights};
-use bdk_tx::{bdk_coin_select, FeeStrategy, Input, Output, ScriptSource};
+use bdk_tx::{bdk_coin_select, Input, Output, ScriptSource};
 use bitcoin::{
     absolute, psbt::PsbtSighashType, transaction::Version, Amount, FeeRate, OutPoint, ScriptBuf,
     Sequence, Transaction, Txid,
@@ -43,8 +43,8 @@ pub struct PsbtParams<C> {
     pub(crate) change_script: Option<ScriptSource>,
     /// Optional assets for creating a spend plan.
     pub(crate) assets: Option<Assets>,
-    /// Fee targeting strategy.
-    pub(crate) fee_strategy: FeeStrategy,
+    /// Target fee rate.
+    pub(crate) fee_rate: FeeRate,
     /// Policy for creating change outputs.
     pub(crate) change_policy: ChangePolicy,
     /// Whether to spend all available coins.
@@ -92,7 +92,7 @@ impl Default for PsbtParams<CreateTx> {
             assets: Default::default(),
             recipients: Default::default(),
             change_script: Default::default(),
-            fee_strategy: FeeStrategy::FeeRate(FeeRate::BROADCAST_MIN),
+            fee_rate: FeeRate::BROADCAST_MIN,
             change_policy: ChangePolicy {
                 min_value: 330,
                 drain_weights: DrainWeights::TR_KEYSPEND,
@@ -170,7 +170,7 @@ impl PsbtParams<CreateTx> {
             assets: self.assets,
             recipients: self.recipients,
             change_script: self.change_script,
-            fee_strategy: self.fee_strategy,
+            fee_rate: self.fee_rate,
             change_policy: self.change_policy,
             drain_wallet: self.drain_wallet,
             coin_selection: self.coin_selection,
@@ -276,11 +276,11 @@ impl<C> PsbtParams<C> {
         self
     }
 
-    /// Set the fee targeting strategy. See [`FeeStrategy`] for more.
+    /// Set the target [`FeeRate`].
     ///
     /// If not set, defaults to [`FeeRate::BROADCAST_MIN`].
-    pub fn fee(&mut self, fee: FeeStrategy) -> &mut Self {
-        self.fee_strategy = fee;
+    pub fn fee_rate(&mut self, fee_rate: FeeRate) -> &mut Self {
+        self.fee_rate = fee_rate;
         self
     }
 
@@ -482,6 +482,7 @@ pub enum SelectionStrategy {
     /// Lowest fee, a variation of Branch 'n Bound that allows for change
     /// while minimizing transaction fees. Refer to
     /// [`LowestFee`](bdk_coin_select::metrics::LowestFee) metric for more.
+    // TODO: This can be a struct variant with configurable longterm_feerate, max_rounds.
     LowestFee,
 }
 
@@ -594,16 +595,13 @@ mod test {
         let mut params = PsbtParams::default().replace_txs(&[Arc::new(tx)]);
         params.add_recipients([(ScriptBuf::new_op_return([0xb1, 0x0c]), Amount::ZERO)]);
         let feerate = FeeRate::from_sat_per_vb_unchecked(8);
-        params.fee(FeeStrategy::FeeRate(feerate));
+        params.fee_rate(feerate);
 
         // Get utxos
         assert_eq!(params.utxos(), &[outpoint_0].into());
 
         assert_eq!(params.replace, [txid1].into());
-        assert!(matches!(
-            params.fee_strategy,
-            FeeStrategy::FeeRate(r) if r == feerate,
-        ));
+        assert_eq!(params.fee_rate, feerate);
         assert_eq!(
             params.recipients,
             [(ScriptBuf::new_op_return([0xb1, 0x0c]), Amount::ZERO)]

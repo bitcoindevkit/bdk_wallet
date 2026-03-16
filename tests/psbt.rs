@@ -1,6 +1,5 @@
 use bdk_chain::{BlockId, ConfirmationBlockTime};
 use bdk_tx::bdk_coin_select;
-use bdk_tx::FeeStrategy;
 use bdk_wallet::bitcoin;
 use bdk_wallet::test_utils::*;
 use bdk_wallet::{error::CreatePsbtError, psbt, KeychainKind, PsbtParams, SignOptions, Wallet};
@@ -54,7 +53,7 @@ fn test_create_psbt() {
         .coin_selection(psbt::SelectionStrategy::LowestFee)
         .add_recipients([(addr.script_pubkey(), Amount::from_btc(0.42).unwrap())])
         .change_script(change_spk.into())
-        .fee(FeeStrategy::FeeRate(feerate))
+        .fee_rate(feerate)
         .fallback_sequence(bitcoin::Sequence::MAX)
         .ordering(bdk_wallet::TxOrdering::Shuffle)
         .add_global_xpubs();
@@ -511,7 +510,7 @@ fn test_create_psbt_utxo_filter() {
     assert_eq!(wallet.balance().total().to_sat(), 2100);
 
     let mut params = PsbtParams::default();
-    params.fee(FeeStrategy::FeeRate(FeeRate::ZERO));
+    params.fee_rate(FeeRate::ZERO);
     // Avoid selection of dust utxos
     params.filter_utxos(|txo| {
         let min_non_dust = txo.txout.script_pubkey.minimal_non_dust(); // 330
