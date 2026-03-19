@@ -171,9 +171,46 @@ impl SatisfiableItem {
     }
 
     /// Returns a unique id for the [`SatisfiableItem`]
+    ///
+    /// The id is computed as a checksum over a canonical string representation of
+    /// the item's *structural* data:
+    ///
+    /// - For **leaf items** (signatures, preimages, timelocks) the representation is the JSON
+    ///   serialization of the item itself.
+    /// - For **[`SatisfiableItem::Thresh`]** the representation is
+    ///   `thresh(<k>,[<child_id0>,<child_id1>,...])`, using only the threshold value and the
+    ///   already-stable ids of the child policies. This deliberately excludes `contribution` and
+    ///   `satisfaction` from child [`Policy`] nodes, which are runtime-dependent (they change based
+    ///   on which signing keys are present), and would otherwise cause the id to vary for the same
+    ///   descriptor structure.
+    ///
+    /// This ensures that the policy id is fixed for a given descriptor structure and
+    /// key set, regardless of whether private or public keys are loaded into the signer.
+    ///
+    /// # Migration note
+    ///
+    /// The id derivation for [`SatisfiableItem::Thresh`] nodes was changed to fix id instability
+    /// caused by runtime key state (see [issue #123]). Any previously persisted
+    /// [`SatisfiableItem::Thresh`] node ids are now stale and must be recomputed from the
+    /// descriptor.
+    ///
+    /// [issue #123]: https://github.com/bitcoindevkit/bdk_wallet/issues/123
     pub fn id(&self) -> String {
-        calc_checksum(&serde_json::to_string(self).expect("Failed to serialize a SatisfiableItem"))
-            .expect("Failed to compute a SatisfiableItem id")
+        let payload = match self {
+            SatisfiableItem::Thresh { items, threshold } => {
+                // Use only structural data: threshold + child policy ids.
+                // Child policy contribution/satisfaction bake in runtime state and must
+                // not influence the id.
+                let child_ids = items
+                    .iter()
+                    .map(|p| p.id.as_str())
+                    .collect::<Vec<_>>()
+                    .join(",");
+                format!("thresh({threshold},[{child_ids}])")
+            }
+            _ => serde_json::to_string(self).expect("Failed to serialize a SatisfiableItem"),
+        };
+        calc_checksum(&payload).expect("Failed to compute a SatisfiableItem id")
     }
 }
 
@@ -1876,6 +1913,79 @@ mod test {
                 condition: Default::default()
             }
         );
+    }
+
+    #[test]
+    fn test_thresh_policy_id_stable_regardless_of_keys() {
+        // Regression: policy node IDs for compound (Thresh) items must not depend on
+        // whether private or public keys are present in the descriptor.
+        //
+        // Previously, `SatisfiableItem::Thresh` was serialized to JSON for the id
+        // calculation. Because `SatisfiableItem::Thresh` contains `Vec<Policy>`, and
+        // `Policy` carries `contribution` / `satisfaction` (runtime state that differs
+        // when private keys are available), the id changed based on the signing context
+        // rather than the descriptor structure.
+        let secp = Secp256k1::new();
+
+        // all public keys — each child policy has contribution: Satisfaction::None
+        let (_prv0a, pub0a, _) = setup_keys(TPRV0_STR, PATH, &secp);
+        let (_prv1a, pub1a, _) = setup_keys(TPRV1_STR, PATH, &secp);
+        let desc = descriptor!(sh(and_v(v: pk(pub0a), pk(pub1a)))).unwrap();
+        let (wallet_desc, keymap) = desc
+            .into_wallet_descriptor(&secp, NetworkKind::Test)
+            .unwrap();
+        let signers = Arc::new(SignersContainer::build(keymap, &wallet_desc, &secp));
+        let id_all_pub = wallet_desc
+            .extract_policy(&signers, BuildSatisfaction::None, &secp)
+            .unwrap()
+            .unwrap()
+            .id;
+
+        // prv0 + pub1 — first child has contribution: Complete, second: None
+        let (prv0b, _pub0b, _) = setup_keys(TPRV0_STR, PATH, &secp);
+        let (_prv1b, pub1b, _) = setup_keys(TPRV1_STR, PATH, &secp);
+        let desc = descriptor!(sh(and_v(v: pk(prv0b), pk(pub1b)))).unwrap();
+        let (wallet_desc, keymap) = desc
+            .into_wallet_descriptor(&secp, NetworkKind::Test)
+            .unwrap();
+        let signers = Arc::new(SignersContainer::build(keymap, &wallet_desc, &secp));
+        let id_mixed = wallet_desc
+            .extract_policy(&signers, BuildSatisfaction::None, &secp)
+            .unwrap()
+            .unwrap()
+            .id;
+
+        // pub0 + prv1 — first child has contribution: None, second: Complete
+        let (_prv0c, pub0c, _) = setup_keys(TPRV0_STR, PATH, &secp);
+        let (prv1c, _pub1c, _) = setup_keys(TPRV1_STR, PATH, &secp);
+        let desc = descriptor!(sh(and_v(v: pk(pub0c), pk(prv1c)))).unwrap();
+        let (wallet_desc, keymap) = desc
+            .into_wallet_descriptor(&secp, NetworkKind::Test)
+            .unwrap();
+        let signers = Arc::new(SignersContainer::build(keymap, &wallet_desc, &secp));
+        let id_mixed_inv = wallet_desc
+            .extract_policy(&signers, BuildSatisfaction::None, &secp)
+            .unwrap()
+            .unwrap()
+            .id;
+
+        // all private keys — both children have contribution: Complete
+        let (prv0d, _pub0d, _) = setup_keys(TPRV0_STR, PATH, &secp);
+        let (prv1d, _pub1d, _) = setup_keys(TPRV1_STR, PATH, &secp);
+        let desc = descriptor!(sh(and_v(v: pk(prv0d), pk(prv1d)))).unwrap();
+        let (wallet_desc, keymap) = desc
+            .into_wallet_descriptor(&secp, NetworkKind::Test)
+            .unwrap();
+        let signers = Arc::new(SignersContainer::build(keymap, &wallet_desc, &secp));
+        let id_all_prv = wallet_desc
+            .extract_policy(&signers, BuildSatisfaction::None, &secp)
+            .unwrap()
+            .unwrap()
+            .id;
+
+        assert_eq!(id_all_pub, id_mixed, "pub+pub vs prv+pub ids differ");
+        assert_eq!(id_all_pub, id_mixed_inv, "pub+pub vs pub+prv ids differ");
+        assert_eq!(id_all_pub, id_all_prv, "pub+pub vs prv+prv ids differ");
     }
 
     #[test]
