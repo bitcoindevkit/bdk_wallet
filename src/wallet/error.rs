@@ -23,6 +23,9 @@ use bitcoin::{absolute, psbt, Amount, BlockHash, Network, OutPoint, Sequence, Tx
 use core::fmt;
 
 /// The error type when loading a [`Wallet`] from a [`ChangeSet`].
+///
+/// [`Wallet`]: crate::wallet::Wallet
+/// [`ChangeSet`]: crate::wallet::ChangeSet
 #[derive(Debug, PartialEq)]
 pub enum LoadError {
     /// There was a problem with the passed-in descriptor(s).
@@ -54,6 +57,8 @@ impl fmt::Display for LoadError {
 impl core::error::Error for LoadError {}
 
 /// Represents a mismatch with what is loaded and what is expected from [`LoadParams`].
+///
+/// [`LoadParams`]: crate::wallet::LoadParams
 #[derive(Debug, PartialEq)]
 pub enum LoadMismatch {
     /// Network does not match.
