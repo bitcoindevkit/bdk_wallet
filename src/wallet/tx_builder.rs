@@ -931,6 +931,7 @@ mod test {
         };
     }
 
+    use crate::test_utils::*;
     use bitcoin::consensus::deserialize;
     use bitcoin::hex::FromHex;
     use bitcoin::TxOut;
@@ -1156,7 +1157,6 @@ mod test {
 
     #[test]
     fn test_exclude_unconfirmed() {
-        use crate::test_utils::*;
         use bdk_chain::BlockId;
         use bitcoin::{hashes::Hash, BlockHash, Network};
 
@@ -1246,7 +1246,6 @@ mod test {
 
     #[test]
     fn test_build_fee_bump_remove_change_output_single_desc() {
-        use crate::test_utils::*;
         use bdk_chain::BlockId;
         use bitcoin::{hashes::Hash, BlockHash, Network};
 
@@ -1292,8 +1291,6 @@ mod test {
 
     #[test]
     fn duplicated_utxos_in_add_utxos_are_only_added_once() {
-        use crate::test_utils::get_funded_wallet_wpkh;
-
         let (mut wallet, _) = get_funded_wallet_wpkh();
         let utxo = wallet.list_unspent().next().unwrap();
         let op = utxo.outpoint;
@@ -1306,7 +1303,6 @@ mod test {
 
     #[test]
     fn not_duplicated_utxos_in_required_list() {
-        use crate::test_utils::get_funded_wallet_wpkh;
         let (mut wallet1, _) = get_funded_wallet_wpkh();
         let utxo1 @ LocalOutput { outpoint, .. } = wallet1.list_unspent().next().unwrap();
         let mut builder = wallet1.build_tx();
@@ -1321,10 +1317,54 @@ mod test {
         assert_eq!(vec![fake_weighted_utxo], builder.params.utxos);
     }
 
+    // This test demonstrates that `add_utxo` only considers the final insertion.
+    #[test]
+    fn test_add_utxo_final_outpoint_retained() {
+        // Create empty wallet
+        let (desc, change_desc) = get_test_wpkh_and_change_desc();
+        let mut wallet = Wallet::create(desc, change_desc)
+            .network(bdk_wallet::bitcoin::Network::Regtest)
+            .create_wallet_no_persist()
+            .unwrap();
+
+        let outpoint_0 = receive_output(
+            &mut wallet,
+            Amount::from_sat(35_000),
+            ReceiveTo::Mempool(50),
+        );
+        let outpoint_1 = receive_output(
+            &mut wallet,
+            Amount::from_sat(25_200),
+            ReceiveTo::Mempool(100),
+        );
+
+        let send_to = wallet.next_unused_address(KeychainKind::External).address;
+        let mut tx_builder = wallet.build_tx();
+        tx_builder
+            .add_utxo(outpoint_0)
+            .unwrap()
+            .add_utxo(outpoint_1)
+            .unwrap()
+            .add_utxo(outpoint_0)
+            .unwrap()
+            .add_recipient(send_to.script_pubkey(), Amount::from_sat(60_000))
+            .fee_rate(FeeRate::from_sat_per_vb(1).unwrap())
+            .ordering(crate::TxOrdering::Untouched);
+        let psbt = tx_builder.finish().unwrap();
+
+        assert_eq!(
+            psbt.unsigned_tx
+                .input
+                .iter()
+                .map(|txin| txin.previous_output)
+                .collect::<Vec<_>>(),
+            vec![outpoint_1, outpoint_0],
+            "Last outpoint added should be retained"
+        );
+    }
+
     #[test]
     fn not_duplicated_foreign_utxos_with_same_outpoint_but_different_weight() {
-        use crate::test_utils::{get_funded_wallet_single, get_funded_wallet_wpkh, get_test_wpkh};
-
         // Use two different wallets to avoid adding local UTXOs
         let (wallet1, txid1) = get_funded_wallet_wpkh();
         let (mut wallet2, txid2) = get_funded_wallet_single(get_test_wpkh());
@@ -1380,7 +1420,6 @@ mod test {
     // Test that local outputs have precedence over utxos added via `add_foreign_utxo`
     #[test]
     fn test_local_utxos_have_precedence_over_foreign_utxos() {
-        use crate::test_utils::get_funded_wallet_wpkh;
         let (mut wallet, _) = get_funded_wallet_wpkh();
 
         let utxo = wallet.list_unspent().next().unwrap();

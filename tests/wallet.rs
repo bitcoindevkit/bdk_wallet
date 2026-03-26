@@ -2961,3 +2961,55 @@ fn test_tx_ordering_untouched_preserves_insertion_ordering() {
     // Check vout is sorted by recipient insertion order
     assert!(txouts == vec![400, 300, 500]);
 }
+
+// BnB coin selection should find a solution using the optional UTXO.
+// This demonstrates that `calculate_cs_result` correctly orders required UTXOs before selected
+// ones.
+#[test]
+fn test_tx_ordering_untouched_preserves_insertion_ordering_bnb_success() {
+    // Create empty wallet
+    let (desc, change_desc) = get_test_wpkh_and_change_desc();
+    let mut wallet = Wallet::create(desc, change_desc)
+        .network(bdk_wallet::bitcoin::Network::Regtest)
+        .create_wallet_no_persist()
+        .unwrap();
+
+    // Set up UTXOs with specific values so BnB can find an exact match (avoiding change).
+    // - outpoint_0 (required): 35,000 sat - not enough alone
+    // - outpoint_1 (optional): 25,200 sat
+    // - Target: 60,000 sat
+    // - Expected fee: 200 sat
+
+    let outpoint_0 = receive_output(
+        &mut wallet,
+        Amount::from_sat(35_000),
+        ReceiveTo::Mempool(50),
+    );
+    let outpoint_1 = receive_output(
+        &mut wallet,
+        Amount::from_sat(25_200),
+        ReceiveTo::Mempool(100),
+    );
+
+    let send_to = wallet.next_unused_address(KeychainKind::External).address;
+    let mut tx_builder = wallet.build_tx();
+    tx_builder
+        .add_utxo(outpoint_0)
+        .unwrap()
+        .add_recipient(send_to.script_pubkey(), Amount::from_sat(60_000))
+        .fee_rate(FeeRate::from_sat_per_vb(1).unwrap())
+        .ordering(bdk_wallet::TxOrdering::Untouched);
+    let psbt = tx_builder.finish().unwrap();
+
+    // Verify that both UTXOs are selected in the correct order:
+    // required (outpoint_0) should appear before optional (outpoint_1)
+    assert_eq!(
+        psbt.unsigned_tx
+            .input
+            .iter()
+            .map(|txin| txin.previous_output)
+            .collect::<Vec<_>>(),
+        vec![outpoint_0, outpoint_1],
+        "UTXOs should be ordered with required first, then selected"
+    );
+}
