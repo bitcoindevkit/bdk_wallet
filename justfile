@@ -3,6 +3,7 @@ alias c := check
 alias f := fmt
 alias t := test
 alias p := pre-push
+alias d := doc
 
 _default:
    @just --list
@@ -28,5 +29,9 @@ fmt:
 test:
    cargo test --all-features
 
+# Check docs on the workspace
+doc:
+   RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps
+
 # Run pre-push suite: format, check, and test
-pre-push: fmt check test
+pre-push: fmt check test doc

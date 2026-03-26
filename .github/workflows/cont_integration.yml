@@ -146,3 +146,18 @@ jobs:
       - name: Clippy
         run: cargo clippy --all-features --all-targets -- -D warnings
 
+  docs_check:
+    name: Check cargo doc
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      # This action automatically reads and applies rust-toolchain.toml
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: true
+      - name: Check docs
+        run: RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps
