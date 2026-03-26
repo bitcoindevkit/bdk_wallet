@@ -1,6 +1,6 @@
 use alloc::boxed::Box;
 
-use bdk_chain::keychain_txout::DEFAULT_LOOKAHEAD;
+use bdk_chain::{keychain_txout::DEFAULT_LOOKAHEAD, BlockId};
 use bitcoin::{BlockHash, Network, NetworkKind};
 use miniscript::descriptor::KeyMap;
 
@@ -64,6 +64,7 @@ pub struct CreateParams {
     pub(crate) change_descriptor: Option<DescriptorToExtract>,
     pub(crate) change_descriptor_keymap: KeyMap,
     pub(crate) network: Network,
+    pub(crate) birthday: Option<BlockId>,
     pub(crate) genesis_hash: Option<BlockHash>,
     pub(crate) lookahead: u32,
     pub(crate) use_spk_cache: bool,
@@ -75,6 +76,7 @@ impl CreateParams {
     /// Default values:
     /// * `change_descriptor` = `None`
     /// * `network` = [`Network::Bitcoin`]
+    /// * `birthday` = `None`
     /// * `genesis_hash` = `None`
     /// * `lookahead` = [`DEFAULT_LOOKAHEAD`]
     ///
@@ -87,6 +89,7 @@ impl CreateParams {
             change_descriptor: None,
             change_descriptor_keymap: KeyMap::default(),
             network: Network::Bitcoin,
+            birthday: None,
             genesis_hash: None,
             lookahead: DEFAULT_LOOKAHEAD,
             use_spk_cache: false,
@@ -97,6 +100,7 @@ impl CreateParams {
     ///
     /// Default values:
     /// * `network` = [`Network::Bitcoin`]
+    /// * `birthday` = `None`
     /// * `genesis_hash` = `None`
     /// * `lookahead` = [`DEFAULT_LOOKAHEAD`]
     pub fn new<D: IntoWalletDescriptor + Send + 'static>(
@@ -109,6 +113,7 @@ impl CreateParams {
             change_descriptor: Some(make_descriptor_to_extract(change_descriptor)),
             change_descriptor_keymap: KeyMap::default(),
             network: Network::Bitcoin,
+            birthday: None,
             genesis_hash: None,
             lookahead: DEFAULT_LOOKAHEAD,
             use_spk_cache: false,
@@ -123,6 +128,7 @@ impl CreateParams {
     ///
     /// Default values:
     /// * `network` = [`Network::Bitcoin`]
+    /// * `birthday` = `None`
     /// * `genesis_hash` = `None`
     /// * `lookahead` = [`DEFAULT_LOOKAHEAD`]
     pub fn new_two_path<D: IntoWalletDescriptor + Send + Clone + 'static>(
@@ -134,6 +140,7 @@ impl CreateParams {
             change_descriptor: Some(make_two_path_descriptor_to_extract(two_path_descriptor, 1)),
             change_descriptor_keymap: KeyMap::default(),
             network: Network::Bitcoin,
+            birthday: None,
             genesis_hash: None,
             lookahead: DEFAULT_LOOKAHEAD,
             use_spk_cache: false,
@@ -150,9 +157,18 @@ impl CreateParams {
         self
     }
 
-    /// Set [`Self::network`].
+    /// Set the wallet's network.
     pub fn network(mut self, network: Network) -> Self {
         self.network = network;
+        self
+    }
+
+    /// Set the wallet's `birthday`.
+    ///
+    /// The `birthday` can be used to limit how far back a block-based chain-source is queried for
+    /// wallet information. Synching will begin from the birthday onwards, excluding older blocks.
+    pub fn birthday(mut self, birthday: BlockId) -> Self {
+        self.birthday = Some(birthday);
         self
     }
 
@@ -217,6 +233,7 @@ pub struct LoadParams {
     pub(crate) change_descriptor_keymap: KeyMap,
     pub(crate) lookahead: u32,
     pub(crate) check_network: Option<Network>,
+    pub(crate) check_birthday: Option<BlockId>,
     pub(crate) check_genesis_hash: Option<BlockHash>,
     pub(crate) check_descriptor: Option<Option<DescriptorToExtract>>,
     pub(crate) check_change_descriptor: Option<Option<DescriptorToExtract>>,
@@ -234,6 +251,7 @@ impl LoadParams {
             change_descriptor_keymap: KeyMap::default(),
             lookahead: DEFAULT_LOOKAHEAD,
             check_network: None,
+            check_birthday: None,
             check_genesis_hash: None,
             check_descriptor: None,
             check_change_descriptor: None,
@@ -273,6 +291,12 @@ impl LoadParams {
     /// Checks that the given network matches the one loaded from persistence.
     pub fn check_network(mut self, network: Network) -> Self {
         self.check_network = Some(network);
+        self
+    }
+
+    /// Checks that the given `birthday matches` the one loaded from persistence.
+    pub fn check_birthday(mut self, birthday: BlockId) -> Self {
+        self.check_birthday = Some(birthday);
         self
     }
 
