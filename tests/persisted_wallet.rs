@@ -428,6 +428,31 @@ fn single_descriptor_wallet_persist_and_recover() {
 }
 
 #[test]
+fn two_path_descriptor_wallet_persist_and_recover() {
+    use bdk_chain::rusqlite;
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let db_path = temp_dir.path().join("wallet.db");
+    let mut db = rusqlite::Connection::open(db_path).unwrap();
+
+    let two_path_descriptor = get_test_two_path_wpkh();
+    let mut wallet = Wallet::create_from_two_path_descriptor(two_path_descriptor)
+        .network(Network::Testnet4)
+        .create_wallet(&mut db)
+        .unwrap();
+    let _ = wallet.reveal_addresses_to(KeychainKind::External, 2);
+    assert!(wallet.persist(&mut db).unwrap());
+
+    let loaded = Wallet::load()
+        .two_path_descriptor(two_path_descriptor)
+        .check_network(Network::Testnet4)
+        .load_wallet(&mut db)
+        .unwrap()
+        .expect("wallet must exist");
+    assert_eq!(loaded.derivation_index(KeychainKind::External), Some(2));
+}
+
+#[test]
 fn wallet_changeset_is_persisted() {
     persist_wallet_changeset("store.db", |path| {
         Ok(bdk_file_store::Store::create(DB_MAGIC, path)?)
