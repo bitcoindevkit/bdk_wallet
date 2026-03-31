@@ -1,7 +1,7 @@
 use alloc::boxed::Box;
 
 use bdk_chain::keychain_txout::DEFAULT_LOOKAHEAD;
-use bitcoin::{BlockHash, Network, NetworkKind};
+use bitcoin::{Amount, BlockHash, Network, NetworkKind};
 use miniscript::descriptor::KeyMap;
 
 use crate::{
@@ -67,6 +67,7 @@ pub struct CreateParams {
     pub(crate) genesis_hash: Option<BlockHash>,
     pub(crate) lookahead: u32,
     pub(crate) use_spk_cache: bool,
+    pub(crate) min_output_value: Option<Amount>,
 }
 
 impl CreateParams {
@@ -90,6 +91,7 @@ impl CreateParams {
             genesis_hash: None,
             lookahead: DEFAULT_LOOKAHEAD,
             use_spk_cache: false,
+            min_output_value: None,
         }
     }
 
@@ -112,6 +114,7 @@ impl CreateParams {
             genesis_hash: None,
             lookahead: DEFAULT_LOOKAHEAD,
             use_spk_cache: false,
+            min_output_value: None,
         }
     }
 
@@ -137,6 +140,7 @@ impl CreateParams {
             genesis_hash: None,
             lookahead: DEFAULT_LOOKAHEAD,
             use_spk_cache: false,
+            min_output_value: None,
         }
     }
 
@@ -182,6 +186,25 @@ impl CreateParams {
         self
     }
 
+    /// Use a minimum output value for the wallet.
+    ///
+    /// Outputs with a value below this threshold are ignored by the wallet, similar to
+    /// a custom dust limit.
+    ///
+    /// **WARNING:** This affects [`balance`], [`list_unspent`], [`list_output`],
+    /// [`sent_and_received`], [`net_value`], and coin selection. Outputs below this value
+    /// will not appear in these methods and will not be selected for spending.
+    ///
+    /// [`balance`]: Wallet::balance
+    /// [`list_unspent`]: Wallet::list_unspent
+    /// [`list_output`]: Wallet::list_output
+    /// [`sent_and_received`]: Wallet::sent_and_received
+    /// [`net_value`]: Wallet::net_value
+    pub fn min_output_value(mut self, value: Amount) -> Self {
+        self.min_output_value = Some(value);
+        self
+    }
+
     /// Create [`PersistedWallet`] with the given [`WalletPersister`].
     pub fn create_wallet<P>(
         self,
@@ -222,6 +245,7 @@ pub struct LoadParams {
     pub(crate) check_change_descriptor: Option<Option<DescriptorToExtract>>,
     pub(crate) extract_keys: bool,
     pub(crate) use_spk_cache: bool,
+    pub(crate) min_output_value: Option<Amount>,
 }
 
 impl LoadParams {
@@ -239,6 +263,7 @@ impl LoadParams {
             check_change_descriptor: None,
             extract_keys: false,
             use_spk_cache: false,
+            min_output_value: None,
         }
     }
 
@@ -306,6 +331,28 @@ impl LoadParams {
     /// pubkeys using [`CreateParams::use_spk_cache`].
     pub fn use_spk_cache(mut self, use_spk_cache: bool) -> Self {
         self.use_spk_cache = use_spk_cache;
+        self
+    }
+
+    /// Use a custom minimum output value for the wallet.
+    ///
+    /// Outputs with a value below this threshold are ignored by the wallet, similar to
+    /// a custom dust limit. Unlike the standard dust limit, this is a
+    /// user-defined threshold that applies to balance, output listing, and tx construction.
+    ///
+    /// **WARNING:** This affects [`balance`], [`list_unspent`], [`list_output`],
+    /// [`sent_and_received`], [`net_value`], and coin selection. Outputs below this value
+    /// will not appear in these methods and will not be selected for spending.
+    /// [`get_utxo`] and fee calculations are not affected.
+    ///
+    /// [`balance`]: Wallet::balance
+    /// [`list_unspent`]: Wallet::list_unspent
+    /// [`list_output`]: Wallet::list_output
+    /// [`sent_and_received`]: Wallet::sent_and_received
+    /// [`net_value`]: Wallet::net_value
+    /// [`get_utxo`]: Wallet::get_utxo
+    pub fn min_output_value(mut self, value: Amount) -> Self {
+        self.min_output_value = Some(value);
         self
     }
 
