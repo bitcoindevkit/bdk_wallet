@@ -2,14 +2,14 @@ use std::str::FromStr;
 
 use assert_matches::assert_matches;
 use bdk_chain::{ChainPosition, ConfirmationBlockTime};
+use bdk_wallet::KeychainKind;
 use bdk_wallet::coin_selection::LargestFirstCoinSelection;
 use bdk_wallet::error::CreateTxError;
 use bdk_wallet::psbt::PsbtUtils;
 use bdk_wallet::test_utils::*;
-use bdk_wallet::KeychainKind;
 use bitcoin::{
-    absolute, hashes::Hash, psbt, transaction, Address, Amount, FeeRate, OutPoint, ScriptBuf,
-    Sequence, Transaction, TxOut, Weight,
+    Address, Amount, FeeRate, OutPoint, ScriptBuf, Sequence, Transaction, TxOut, Weight, absolute,
+    hashes::Hash, psbt, transaction,
 };
 
 mod common;

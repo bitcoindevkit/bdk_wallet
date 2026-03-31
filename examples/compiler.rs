@@ -18,8 +18,8 @@ use core::error::Error;
 use std::str::FromStr;
 
 use bitcoin::Network;
-use miniscript::policy::Concrete;
 use miniscript::Descriptor;
+use miniscript::policy::Concrete;
 
 use bdk_wallet::{KeychainKind, Wallet};
 

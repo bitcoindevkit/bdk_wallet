@@ -1,7 +1,7 @@
 #![allow(unused)]
 
 use bitcoin::secp256k1::Secp256k1;
-use miniscript::{descriptor::KeyMap, Descriptor, DescriptorPublicKey};
+use miniscript::{Descriptor, DescriptorPublicKey, descriptor::KeyMap};
 
 /// The satisfaction size of P2WPKH is 108 WU =
 /// 1 (elements in witness) + 1 (size) + 72 (signature + sighash) + 1 (size) + 33 (pubkey).

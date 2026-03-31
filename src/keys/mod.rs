@@ -24,10 +24,9 @@ use crate::descriptor::{CheckMiniscript, DescriptorError};
 use crate::wallet::utils::SecpCtx;
 
 use bitcoin::{
-    bip32,
+    NetworkKind, PrivateKey, PublicKey, bip32,
     key::XOnlyPublicKey,
     secp256k1::{self, Secp256k1, Signing},
-    NetworkKind, PrivateKey, PublicKey,
 };
 use miniscript::{
     descriptor::{Descriptor, DescriptorMultiXKey, DescriptorXKey, Wildcard},
@@ -35,11 +34,11 @@ use miniscript::{
 };
 use rand_core::{CryptoRng, RngCore};
 
+pub use miniscript::ScriptContext;
 pub use miniscript::descriptor::{
     DescriptorPublicKey, DescriptorSecretKey, KeyMap, SinglePriv, SinglePub, SinglePubKey,
     SortedMultiVec,
 };
-pub use miniscript::ScriptContext;
 
 #[cfg(feature = "keys-bip39")]
 #[cfg_attr(docsrs, doc(cfg(feature = "keys-bip39")))]
@@ -229,8 +228,8 @@ impl<Ctx: ScriptContext + 'static> ExtScriptContext for Ctx {
 /// use bdk_wallet::bitcoin::PublicKey;
 ///
 /// use bdk_wallet::keys::{
-///     mainnet_network_kind, DescriptorKey, DescriptorPublicKey, IntoDescriptorKey, KeyError,
-///     ScriptContext, SinglePub, SinglePubKey,
+///     DescriptorKey, DescriptorPublicKey, IntoDescriptorKey, KeyError, ScriptContext, SinglePub,
+///     SinglePubKey, mainnet_network_kind,
 /// };
 ///
 /// pub struct MyKeyType {
@@ -391,7 +390,7 @@ impl<Ctx: ScriptContext> From<bip32::Xpriv> for ExtendedKey<Ctx> {
 /// an [`Xpub`] can implement only the required `into_extended_key()` method.
 ///
 /// ```
-/// use bdk_wallet::bitcoin::{bip32, NetworkKind};
+/// use bdk_wallet::bitcoin::{NetworkKind, bip32};
 /// use bdk_wallet::keys::{DerivableKey, ExtendedKey, KeyError, ScriptContext};
 ///
 /// struct MyCustomKeyType {
@@ -419,9 +418,9 @@ impl<Ctx: ScriptContext> From<bip32::Xpriv> for ExtendedKey<Ctx> {
 /// For types that don't internally encode the [`NetworkKind`] in which they are valid, only the
 /// network kind specified in the [`Xpriv`] or [`Xpub`] will be considered valid.
 /// ```
-/// use bdk_wallet::bitcoin::{bip32, NetworkKind};
+/// use bdk_wallet::bitcoin::{NetworkKind, bip32};
 /// use bdk_wallet::keys::{
-///     any_network_kind, DerivableKey, DescriptorKey, ExtendedKey, KeyError, ScriptContext,
+///     DerivableKey, DescriptorKey, ExtendedKey, KeyError, ScriptContext, any_network_kind,
 /// };
 ///
 /// struct MyCustomKeyType {
@@ -1081,7 +1080,10 @@ mod test {
             bip32::Xpriv::generate_with_entropy_default(TEST_ENTROPY).unwrap();
 
         assert_eq!(generated_xprv.valid_network_kinds, mainnet_network_kind());
-        assert_eq!(generated_xprv.to_string(), "xprv9s21ZrQH143K4Xr1cJyqTvuL2FWR8eicgY9boWqMBv8MDVUZ65AXHnzBrK1nyomu6wdcabRgmGTaAKawvhAno1V5FowGpTLVx3jxzE5uk3Q");
+        assert_eq!(
+            generated_xprv.to_string(),
+            "xprv9s21ZrQH143K4Xr1cJyqTvuL2FWR8eicgY9boWqMBv8MDVUZ65AXHnzBrK1nyomu6wdcabRgmGTaAKawvhAno1V5FowGpTLVx3jxzE5uk3Q"
+        );
     }
 
     #[test]

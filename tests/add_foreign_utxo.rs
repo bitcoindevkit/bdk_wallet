@@ -1,11 +1,11 @@
 use std::str::FromStr;
 
+use bdk_wallet::KeychainKind;
 use bdk_wallet::psbt::PsbtUtils;
 use bdk_wallet::signer::SignOptions;
 use bdk_wallet::test_utils::*;
 use bdk_wallet::tx_builder::AddForeignUtxoError;
-use bdk_wallet::KeychainKind;
-use bitcoin::{psbt, Address, Amount};
+use bitcoin::{Address, Amount, psbt};
 
 mod common;
 

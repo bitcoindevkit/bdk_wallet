@@ -13,8 +13,8 @@
 //! This module provides helper functions and types to assist users in migrating wallet data
 //! when upgrading between major versions of the `bdk_wallet` crate.
 
-use crate::rusqlite::{self, Connection};
 use crate::KeychainKind::{self, External, Internal};
+use crate::rusqlite::{self, Connection};
 use alloc::{
     string::{FromUtf8Error, String, ToString},
     vec::Vec,
@@ -104,8 +104,8 @@ pub fn get_pre_v1_wallet_keychains(
 
 #[cfg(test)]
 mod test {
-    use crate::rusqlite::{self, Connection};
     use crate::KeychainKind::{External, Internal};
+    use crate::rusqlite::{self, Connection};
 
     const SCHEMA_SQL: &str = "CREATE TABLE last_derivation_indices (keychain TEXT, value INTEGER);
                               CREATE UNIQUE INDEX idx_indices_keychain ON last_derivation_indices(keychain);

@@ -77,7 +77,9 @@ mod test {
     #[test]
     fn test_calc_checksum_invalid_character() {
         let sparkle_heart = unsafe { core::str::from_utf8_unchecked(&[240, 159, 146, 150]) };
-        let invalid_desc = format!("wpkh(tprv8ZgxMBicQKsPdpkqS7Eair4YxjcuuvDPNYmKX3sCniCf16tHEVrjjiSXEkFRnUH77yXc6ZcwHHcL{sparkle_heart}fjdi5qUvw3VDfgYiH5mNsj5izuiu2N/1/2/*)");
+        let invalid_desc = format!(
+            "wpkh(tprv8ZgxMBicQKsPdpkqS7Eair4YxjcuuvDPNYmKX3sCniCf16tHEVrjjiSXEkFRnUH77yXc6ZcwHHcL{sparkle_heart}fjdi5qUvw3VDfgYiH5mNsj5izuiu2N/1/2/*)"
+        );
 
         assert_matches!(
             calc_checksum(&invalid_desc),

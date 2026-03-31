@@ -44,8 +44,8 @@ use alloc::sync::Arc;
 use bitcoin::psbt::{self, Psbt};
 use bitcoin::script::PushBytes;
 use bitcoin::{
-    absolute, transaction::Version, Amount, FeeRate, OutPoint, ScriptBuf, Sequence, Transaction,
-    TxIn, TxOut, Txid, Weight,
+    Amount, FeeRate, OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Txid, Weight,
+    absolute, transaction::Version,
 };
 use rand_core::RngCore;
 
@@ -931,9 +931,9 @@ mod test {
         };
     }
 
+    use bitcoin::TxOut;
     use bitcoin::consensus::deserialize;
     use bitcoin::hex::FromHex;
-    use bitcoin::TxOut;
 
     use super::*;
     #[test]
@@ -1023,7 +1023,7 @@ mod test {
 
     #[test]
     fn test_output_ordering_custom_with_sha256() {
-        use bitcoin::hashes::{sha256, Hash};
+        use bitcoin::hashes::{Hash, sha256};
 
         let original_tx = ordering_test_tx!();
         let mut tx_1 = original_tx.clone();
@@ -1158,7 +1158,7 @@ mod test {
     fn test_exclude_unconfirmed() {
         use crate::test_utils::*;
         use bdk_chain::BlockId;
-        use bitcoin::{hashes::Hash, BlockHash, Network};
+        use bitcoin::{BlockHash, Network, hashes::Hash};
 
         let mut wallet = Wallet::create_single(get_test_tr_single_sig())
             .network(Network::Regtest)
@@ -1248,7 +1248,7 @@ mod test {
     fn test_build_fee_bump_remove_change_output_single_desc() {
         use crate::test_utils::*;
         use bdk_chain::BlockId;
-        use bitcoin::{hashes::Hash, BlockHash, Network};
+        use bitcoin::{BlockHash, Network, hashes::Hash};
 
         let mut wallet = Wallet::create_single(get_test_tr_single_sig())
             .network(Network::Regtest)
@@ -1343,32 +1343,36 @@ mod test {
         let mut builder = wallet2.build_tx();
 
         // add foreign UTXO with satisfaction weight x
-        assert!(builder
-            .add_foreign_utxo(
-                utxo1.outpoint,
-                psbt::Input {
-                    non_witness_utxo: Some(tx1.as_ref().clone()),
-                    ..Default::default()
-                },
-                satisfaction_weight,
-            )
-            .is_ok());
+        assert!(
+            builder
+                .add_foreign_utxo(
+                    utxo1.outpoint,
+                    psbt::Input {
+                        non_witness_utxo: Some(tx1.as_ref().clone()),
+                        ..Default::default()
+                    },
+                    satisfaction_weight,
+                )
+                .is_ok()
+        );
 
         let modified_satisfaction_weight = satisfaction_weight - Weight::from_wu(6);
 
         assert_ne!(satisfaction_weight, modified_satisfaction_weight);
 
         // add foreign UTXO with same outpoint but satisfaction weight x - 6wu
-        assert!(builder
-            .add_foreign_utxo(
-                utxo1.outpoint,
-                psbt::Input {
-                    non_witness_utxo: Some(tx1.as_ref().clone()),
-                    ..Default::default()
-                },
-                modified_satisfaction_weight,
-            )
-            .is_ok());
+        assert!(
+            builder
+                .add_foreign_utxo(
+                    utxo1.outpoint,
+                    psbt::Input {
+                        non_witness_utxo: Some(tx1.as_ref().clone()),
+                        ..Default::default()
+                    },
+                    modified_satisfaction_weight,
+                )
+                .is_ok()
+        );
 
         assert_eq!(builder.params.utxos.len(), 1);
         assert_eq!(

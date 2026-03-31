@@ -3,13 +3,13 @@ use std::sync::Arc;
 
 use assert_matches::assert_matches;
 use bdk_chain::{BlockId, CanonicalizationParams, ConfirmationBlockTime};
+use bdk_wallet::KeychainKind;
 use bdk_wallet::coin_selection;
-use bdk_wallet::descriptor::{calc_checksum, DescriptorError};
+use bdk_wallet::descriptor::{DescriptorError, calc_checksum};
 use bdk_wallet::error::CreateTxError;
 use bdk_wallet::psbt::PsbtUtils;
 use bdk_wallet::signer::{SignOptions, SignerError};
 use bdk_wallet::test_utils::*;
-use bdk_wallet::KeychainKind;
 use bdk_wallet::{AddressInfo, Balance, PersistedWallet, Update, Wallet, WalletTx};
 use bitcoin::constants::COINBASE_MATURITY;
 use bitcoin::hashes::Hash;
@@ -17,11 +17,11 @@ use bitcoin::script::PushBytesBuf;
 use bitcoin::sighash::{EcdsaSighashType, TapSighashType};
 use bitcoin::taproot::TapNodeHash;
 use bitcoin::{
-    absolute, transaction, Address, Amount, BlockHash, FeeRate, Network, OutPoint, ScriptBuf,
-    Sequence, SignedAmount, Transaction, TxIn, TxOut, Txid,
+    Address, Amount, BlockHash, FeeRate, Network, OutPoint, ScriptBuf, Sequence, SignedAmount,
+    Transaction, TxIn, TxOut, Txid, absolute, transaction,
 };
-use rand::rngs::StdRng;
 use rand::SeedableRng;
+use rand::rngs::StdRng;
 
 mod common;
 
@@ -812,7 +812,9 @@ fn test_create_tx_input_hd_keypaths() {
     use bitcoin::bip32::{DerivationPath, Fingerprint};
     use core::str::FromStr;
 
-    let (mut wallet, _) = get_funded_wallet_single("wpkh([d34db33f/44'/0'/0']tpubDEnoLuPdBep9bzw5LoGYpsxUQYheRQ9gcgrJhJEcdKFB9cWQRyYmkCyRoTqeD4tJYiVVgt6A3rN6rWn9RYhR9sBsGxji29LYWHuKKbdb1ev/0/*)");
+    let (mut wallet, _) = get_funded_wallet_single(
+        "wpkh([d34db33f/44'/0'/0']tpubDEnoLuPdBep9bzw5LoGYpsxUQYheRQ9gcgrJhJEcdKFB9cWQRyYmkCyRoTqeD4tJYiVVgt6A3rN6rWn9RYhR9sBsGxji29LYWHuKKbdb1ev/0/*)",
+    );
     let addr = wallet.next_unused_address(KeychainKind::External);
     let mut builder = wallet.build_tx();
     builder.drain_to(addr.script_pubkey()).drain_wallet();
@@ -833,7 +835,9 @@ fn test_create_tx_output_hd_keypaths() {
     use bitcoin::bip32::{DerivationPath, Fingerprint};
     use core::str::FromStr;
 
-    let (mut wallet, _) = get_funded_wallet_single("wpkh([d34db33f/44'/0'/0']tpubDEnoLuPdBep9bzw5LoGYpsxUQYheRQ9gcgrJhJEcdKFB9cWQRyYmkCyRoTqeD4tJYiVVgt6A3rN6rWn9RYhR9sBsGxji29LYWHuKKbdb1ev/0/*)");
+    let (mut wallet, _) = get_funded_wallet_single(
+        "wpkh([d34db33f/44'/0'/0']tpubDEnoLuPdBep9bzw5LoGYpsxUQYheRQ9gcgrJhJEcdKFB9cWQRyYmkCyRoTqeD4tJYiVVgt6A3rN6rWn9RYhR9sBsGxji29LYWHuKKbdb1ev/0/*)",
+    );
 
     let addr = wallet.next_unused_address(KeychainKind::External);
     let mut builder = wallet.build_tx();
@@ -1125,7 +1129,9 @@ fn test_create_tx_policy_path_use_csv() {
 
 #[test]
 fn test_create_tx_policy_path_ignored_subtree_with_csv() {
-    let (mut wallet, _) = get_funded_wallet_single("wsh(or_d(pk(cRjo6jqfVNP33HhSS76UhXETZsGTZYx8FMFvR9kpbtCSV1PmdZdu),or_i(and_v(v:pkh(cVpPVruEDdmutPzisEsYvtST1usBR3ntr8pXSyt6D2YYqXRyPcFW),older(30)),and_v(v:pkh(cMnkdebixpXMPfkcNEjjGin7s94hiehAH4mLbYkZoh9KSiNNmqC8),older(90)))))");
+    let (mut wallet, _) = get_funded_wallet_single(
+        "wsh(or_d(pk(cRjo6jqfVNP33HhSS76UhXETZsGTZYx8FMFvR9kpbtCSV1PmdZdu),or_i(and_v(v:pkh(cVpPVruEDdmutPzisEsYvtST1usBR3ntr8pXSyt6D2YYqXRyPcFW),older(30)),and_v(v:pkh(cMnkdebixpXMPfkcNEjjGin7s94hiehAH4mLbYkZoh9KSiNNmqC8),older(90)))))",
+    );
 
     let external_policy = wallet.policies(KeychainKind::External).unwrap().unwrap();
     let root_id = external_policy.id;
@@ -1147,7 +1153,9 @@ fn test_create_tx_policy_path_ignored_subtree_with_csv() {
 #[test]
 fn test_create_tx_global_xpubs_with_origin() {
     use bitcoin::bip32;
-    let (mut wallet, _) = get_funded_wallet_single("wpkh([73756c7f/48'/0'/0'/2']tpubDCKxNyM3bLgbEX13Mcd8mYxbVg9ajDkWXMh29hMWBurKfVmBfWAM96QVP3zaUcN51HvkZ3ar4VwP82kC8JZhhux8vFQoJintSpVBwpFvyU3/0/*)");
+    let (mut wallet, _) = get_funded_wallet_single(
+        "wpkh([73756c7f/48'/0'/0'/2']tpubDCKxNyM3bLgbEX13Mcd8mYxbVg9ajDkWXMh29hMWBurKfVmBfWAM96QVP3zaUcN51HvkZ3ar4VwP82kC8JZhhux8vFQoJintSpVBwpFvyU3/0/*)",
+    );
     let addr = wallet.next_unused_address(KeychainKind::External);
     let mut builder = wallet.build_tx();
     builder
@@ -1299,7 +1307,9 @@ fn test_get_psbt_input() {
     expected = "MissingKeyOrigin(\"tpubDCKxNyM3bLgbEX13Mcd8mYxbVg9ajDkWXMh29hMWBurKfVmBfWAM96QVP3zaUcN51HvkZ3ar4VwP82kC8JZhhux8vFQoJintSpVBwpFvyU3\")"
 )]
 fn test_create_tx_global_xpubs_origin_missing() {
-    let (mut wallet, _) = get_funded_wallet_single("wpkh(tpubDCKxNyM3bLgbEX13Mcd8mYxbVg9ajDkWXMh29hMWBurKfVmBfWAM96QVP3zaUcN51HvkZ3ar4VwP82kC8JZhhux8vFQoJintSpVBwpFvyU3/0/*)");
+    let (mut wallet, _) = get_funded_wallet_single(
+        "wpkh(tpubDCKxNyM3bLgbEX13Mcd8mYxbVg9ajDkWXMh29hMWBurKfVmBfWAM96QVP3zaUcN51HvkZ3ar4VwP82kC8JZhhux8vFQoJintSpVBwpFvyU3/0/*)",
+    );
     let addr = wallet.next_unused_address(KeychainKind::External);
     let mut builder = wallet.build_tx();
     builder
@@ -1311,7 +1321,9 @@ fn test_create_tx_global_xpubs_origin_missing() {
 #[test]
 fn test_create_tx_global_xpubs_master_without_origin() {
     use bitcoin::bip32;
-    let (mut wallet, _) = get_funded_wallet_single("wpkh(tpubD6NzVbkrYhZ4Y55A58Gv9RSNF5hy84b5AJqYy7sCcjFrkcLpPre8kmgfit6kY1Zs3BLgeypTDBZJM222guPpdz7Cup5yzaMu62u7mYGbwFL/0/*)");
+    let (mut wallet, _) = get_funded_wallet_single(
+        "wpkh(tpubD6NzVbkrYhZ4Y55A58Gv9RSNF5hy84b5AJqYy7sCcjFrkcLpPre8kmgfit6kY1Zs3BLgeypTDBZJM222guPpdz7Cup5yzaMu62u7mYGbwFL/0/*)",
+    );
     let addr = wallet.next_unused_address(KeychainKind::External);
     let mut builder = wallet.build_tx();
     builder
@@ -1361,7 +1373,9 @@ fn test_fee_amount_negative_drain_val() {
 
 #[test]
 fn test_sign_single_xprv() {
-    let (mut wallet, _) = get_funded_wallet_single("wpkh(tprv8ZgxMBicQKsPd3EupYiPRhaMooHKUHJxNsTfYuScep13go8QFfHdtkG9nRkFGb7busX4isf6X9dURGCoKgitaApQ6MupRhZMcELAxTBRJgS/*)");
+    let (mut wallet, _) = get_funded_wallet_single(
+        "wpkh(tprv8ZgxMBicQKsPd3EupYiPRhaMooHKUHJxNsTfYuScep13go8QFfHdtkG9nRkFGb7busX4isf6X9dURGCoKgitaApQ6MupRhZMcELAxTBRJgS/*)",
+    );
     let addr = wallet.next_unused_address(KeychainKind::External);
     let mut builder = wallet.build_tx();
     builder.drain_to(addr.script_pubkey()).drain_wallet();
@@ -1376,7 +1390,9 @@ fn test_sign_single_xprv() {
 
 #[test]
 fn test_sign_single_xprv_with_master_fingerprint_and_path() {
-    let (mut wallet, _) = get_funded_wallet_single("wpkh([d34db33f/84h/1h/0h]tprv8ZgxMBicQKsPd3EupYiPRhaMooHKUHJxNsTfYuScep13go8QFfHdtkG9nRkFGb7busX4isf6X9dURGCoKgitaApQ6MupRhZMcELAxTBRJgS/*)");
+    let (mut wallet, _) = get_funded_wallet_single(
+        "wpkh([d34db33f/84h/1h/0h]tprv8ZgxMBicQKsPd3EupYiPRhaMooHKUHJxNsTfYuScep13go8QFfHdtkG9nRkFGb7busX4isf6X9dURGCoKgitaApQ6MupRhZMcELAxTBRJgS/*)",
+    );
     let addr = wallet.next_unused_address(KeychainKind::External);
     let mut builder = wallet.build_tx();
     builder.drain_to(addr.script_pubkey()).drain_wallet();
@@ -1391,7 +1407,9 @@ fn test_sign_single_xprv_with_master_fingerprint_and_path() {
 
 #[test]
 fn test_sign_single_xprv_bip44_path() {
-    let (mut wallet, _) = get_funded_wallet_single("wpkh(tprv8ZgxMBicQKsPd3EupYiPRhaMooHKUHJxNsTfYuScep13go8QFfHdtkG9nRkFGb7busX4isf6X9dURGCoKgitaApQ6MupRhZMcELAxTBRJgS/44'/0'/0'/0/*)");
+    let (mut wallet, _) = get_funded_wallet_single(
+        "wpkh(tprv8ZgxMBicQKsPd3EupYiPRhaMooHKUHJxNsTfYuScep13go8QFfHdtkG9nRkFGb7busX4isf6X9dURGCoKgitaApQ6MupRhZMcELAxTBRJgS/44'/0'/0'/0/*)",
+    );
     let addr = wallet.next_unused_address(KeychainKind::External);
     let mut builder = wallet.build_tx();
     builder.drain_to(addr.script_pubkey()).drain_wallet();
@@ -1406,7 +1424,9 @@ fn test_sign_single_xprv_bip44_path() {
 
 #[test]
 fn test_sign_single_xprv_sh_wpkh() {
-    let (mut wallet, _) = get_funded_wallet_single("sh(wpkh(tprv8ZgxMBicQKsPd3EupYiPRhaMooHKUHJxNsTfYuScep13go8QFfHdtkG9nRkFGb7busX4isf6X9dURGCoKgitaApQ6MupRhZMcELAxTBRJgS/*))");
+    let (mut wallet, _) = get_funded_wallet_single(
+        "sh(wpkh(tprv8ZgxMBicQKsPd3EupYiPRhaMooHKUHJxNsTfYuScep13go8QFfHdtkG9nRkFGb7busX4isf6X9dURGCoKgitaApQ6MupRhZMcELAxTBRJgS/*))",
+    );
     let addr = wallet.next_unused_address(KeychainKind::External);
     let mut builder = wallet.build_tx();
     builder.drain_to(addr.script_pubkey()).drain_wallet();
@@ -1437,7 +1457,9 @@ fn test_sign_single_wif() {
 
 #[test]
 fn test_sign_single_xprv_no_hd_keypaths() {
-    let (mut wallet, _) = get_funded_wallet_single("wpkh(tprv8ZgxMBicQKsPd3EupYiPRhaMooHKUHJxNsTfYuScep13go8QFfHdtkG9nRkFGb7busX4isf6X9dURGCoKgitaApQ6MupRhZMcELAxTBRJgS/*)");
+    let (mut wallet, _) = get_funded_wallet_single(
+        "wpkh(tprv8ZgxMBicQKsPd3EupYiPRhaMooHKUHJxNsTfYuScep13go8QFfHdtkG9nRkFGb7busX4isf6X9dURGCoKgitaApQ6MupRhZMcELAxTBRJgS/*)",
+    );
     let addr = wallet.next_unused_address(KeychainKind::External);
     let mut builder = wallet.build_tx();
     builder.drain_to(addr.script_pubkey()).drain_wallet();
@@ -1528,7 +1550,9 @@ fn test_signing_only_one_of_multiple_inputs() {
 
 #[test]
 fn test_try_finalize_sign_option() {
-    let (mut wallet, _) = get_funded_wallet_single("wpkh(tprv8ZgxMBicQKsPd3EupYiPRhaMooHKUHJxNsTfYuScep13go8QFfHdtkG9nRkFGb7busX4isf6X9dURGCoKgitaApQ6MupRhZMcELAxTBRJgS/*)");
+    let (mut wallet, _) = get_funded_wallet_single(
+        "wpkh(tprv8ZgxMBicQKsPd3EupYiPRhaMooHKUHJxNsTfYuScep13go8QFfHdtkG9nRkFGb7busX4isf6X9dURGCoKgitaApQ6MupRhZMcELAxTBRJgS/*)",
+    );
 
     for try_finalize in &[true, false] {
         let addr = wallet.next_unused_address(KeychainKind::External);
@@ -1613,7 +1637,9 @@ fn test_taproot_try_finalize_sign_option() {
 fn test_sign_nonstandard_sighash() {
     let sighash = EcdsaSighashType::NonePlusAnyoneCanPay;
 
-    let (mut wallet, _) = get_funded_wallet_single("wpkh(tprv8ZgxMBicQKsPd3EupYiPRhaMooHKUHJxNsTfYuScep13go8QFfHdtkG9nRkFGb7busX4isf6X9dURGCoKgitaApQ6MupRhZMcELAxTBRJgS/*)");
+    let (mut wallet, _) = get_funded_wallet_single(
+        "wpkh(tprv8ZgxMBicQKsPd3EupYiPRhaMooHKUHJxNsTfYuScep13go8QFfHdtkG9nRkFGb7busX4isf6X9dURGCoKgitaApQ6MupRhZMcELAxTBRJgS/*)",
+    );
     let addr = wallet.next_unused_address(KeychainKind::External);
     let mut builder = wallet.build_tx();
     builder
@@ -1665,10 +1691,12 @@ fn test_unused_address() {
         .expect("wallet");
 
     // `list_unused_addresses` should be empty if we haven't revealed any
-    assert!(wallet
-        .list_unused_addresses(KeychainKind::External)
-        .next()
-        .is_none());
+    assert!(
+        wallet
+            .list_unused_addresses(KeychainKind::External)
+            .next()
+            .is_none()
+    );
 
     assert_eq!(
         wallet
@@ -1802,8 +1830,7 @@ fn test_peek_address_at_index_not_derivable() {
 
 #[test]
 fn test_returns_index_and_address() {
-    let descriptor =
-        "wpkh(tpubEBr4i6yk5nf5DAaJpsi9N2pPYBeJ7fZ5Z9rmN4977iYLCGco1VyjB9tvvuvYtfZzjD5A8igzgw3HeWeeKFmanHYqksqZXYXGsw5zjnj7KM9/*)";
+    let descriptor = "wpkh(tpubEBr4i6yk5nf5DAaJpsi9N2pPYBeJ7fZ5Z9rmN4977iYLCGco1VyjB9tvvuvYtfZzjD5A8igzgw3HeWeeKFmanHYqksqZXYXGsw5zjnj7KM9/*)";
     let mut wallet = Wallet::create(descriptor, get_test_wpkh())
         .network(Network::Testnet)
         .create_wallet_no_persist()
@@ -2240,10 +2267,11 @@ fn test_taproot_script_spend_sign_all_leaves() {
         "Unable to finalize tx"
     );
 
-    assert!(psbt
-        .inputs
-        .iter()
-        .all(|i| i.tap_script_sigs.len() == i.tap_scripts.len()));
+    assert!(
+        psbt.inputs
+            .iter()
+            .all(|i| i.tap_script_sigs.len() == i.tap_scripts.len())
+    );
 }
 
 #[test]
@@ -2279,11 +2307,9 @@ fn test_taproot_script_spend_sign_include_some_leaves() {
         "Unable to finalize tx"
     );
 
-    assert!(psbt.inputs[0]
-        .tap_script_sigs
-        .iter()
-        .all(|s| included_script_leaves.contains(&s.0 .1)
-            && !excluded_script_leaves.contains(&s.0 .1)));
+    assert!(psbt.inputs[0].tap_script_sigs.iter().all(
+        |s| included_script_leaves.contains(&s.0.1) && !excluded_script_leaves.contains(&s.0.1)
+    ));
 }
 
 #[test]
@@ -2319,11 +2345,9 @@ fn test_taproot_script_spend_sign_exclude_some_leaves() {
         "Unable to finalize tx"
     );
 
-    assert!(psbt.inputs[0]
-        .tap_script_sigs
-        .iter()
-        .all(|s| included_script_leaves.contains(&s.0 .1)
-            && !excluded_script_leaves.contains(&s.0 .1)));
+    assert!(psbt.inputs[0].tap_script_sigs.iter().all(
+        |s| included_script_leaves.contains(&s.0.1) && !excluded_script_leaves.contains(&s.0.1)
+    ));
 }
 
 #[test]
@@ -2616,7 +2640,9 @@ fn test_fee_rate_sign_no_grinding_high_r() {
     // Our goal is to obtain a transaction with a signature with high-R (71 bytes
     // instead of 70). We then check that our fee rate and fee calculation is
     // alright.
-    let (mut wallet, _) = get_funded_wallet_single("wpkh(tprv8ZgxMBicQKsPd3EupYiPRhaMooHKUHJxNsTfYuScep13go8QFfHdtkG9nRkFGb7busX4isf6X9dURGCoKgitaApQ6MupRhZMcELAxTBRJgS/*)");
+    let (mut wallet, _) = get_funded_wallet_single(
+        "wpkh(tprv8ZgxMBicQKsPd3EupYiPRhaMooHKUHJxNsTfYuScep13go8QFfHdtkG9nRkFGb7busX4isf6X9dURGCoKgitaApQ6MupRhZMcELAxTBRJgS/*)",
+    );
     let addr = wallet.next_unused_address(KeychainKind::External);
     let fee_rate = FeeRate::from_sat_per_vb_unchecked(1);
     let mut builder = wallet.build_tx();
@@ -2683,7 +2709,9 @@ fn test_fee_rate_sign_grinding_low_r() {
     // by setting the `allow_grinding` signing option as true.
     // We then check that our fee rate and fee calculation is alright and that our
     // signature is 70 bytes.
-    let (mut wallet, _) = get_funded_wallet_single("wpkh(tprv8ZgxMBicQKsPd3EupYiPRhaMooHKUHJxNsTfYuScep13go8QFfHdtkG9nRkFGb7busX4isf6X9dURGCoKgitaApQ6MupRhZMcELAxTBRJgS/*)");
+    let (mut wallet, _) = get_funded_wallet_single(
+        "wpkh(tprv8ZgxMBicQKsPd3EupYiPRhaMooHKUHJxNsTfYuScep13go8QFfHdtkG9nRkFGb7busX4isf6X9dURGCoKgitaApQ6MupRhZMcELAxTBRJgS/*)",
+    );
     let addr = wallet.next_unused_address(KeychainKind::External);
     let fee_rate = FeeRate::from_sat_per_vb_unchecked(1);
     let mut builder = wallet.build_tx();
@@ -2865,17 +2893,21 @@ fn test_wallet_transactions_relevant() {
         .count();
 
     assert_eq!(relevant_tx_count_before, relevant_tx_count_after);
-    assert!(!test_wallet
-        .transactions()
-        .any(|wallet_tx| wallet_tx.tx_node.txid == other_txid));
-    assert!(test_wallet
-        .tx_graph()
-        .list_canonical_txs(
-            test_wallet.local_chain(),
-            chain_tip,
-            CanonicalizationParams::default()
-        )
-        .any(|wallet_tx| wallet_tx.tx_node.txid == other_txid));
+    assert!(
+        !test_wallet
+            .transactions()
+            .any(|wallet_tx| wallet_tx.tx_node.txid == other_txid)
+    );
+    assert!(
+        test_wallet
+            .tx_graph()
+            .list_canonical_txs(
+                test_wallet.local_chain(),
+                chain_tip,
+                CanonicalizationParams::default()
+            )
+            .any(|wallet_tx| wallet_tx.tx_node.txid == other_txid)
+    );
     assert!(full_tx_count_before < full_tx_count_after);
     assert!(canonical_tx_count_before < canonical_tx_count_after);
 }
