@@ -319,8 +319,8 @@ impl Satisfaction {
             Satisfaction::PartialComplete { .. } => Err(PolicyError::AddOnPartialComplete),
             Satisfaction::Partial {
                 n,
-                ref mut conditions,
-                ref mut items,
+                conditions,
+                items,
                 ..
             } => {
                 if inner_index >= *n || items.contains(&inner_index) {
@@ -1133,17 +1133,15 @@ impl ExtractPolicy for Descriptor<DescriptorPublicKey> {
                     secp,
                 ))),
                 ShInner::Ms(ms) => Ok(ms.extract_policy(signers, build_sat, secp)?),
-                ShInner::SortedMulti(ref keys) => make_sortedmulti(keys, signers, build_sat, secp),
+                ShInner::SortedMulti(keys) => make_sortedmulti(keys, signers, build_sat, secp),
                 ShInner::Wsh(wsh) => match wsh.as_inner() {
                     WshInner::Ms(ms) => Ok(ms.extract_policy(signers, build_sat, secp)?),
-                    WshInner::SortedMulti(ref keys) => {
-                        make_sortedmulti(keys, signers, build_sat, secp)
-                    }
+                    WshInner::SortedMulti(keys) => make_sortedmulti(keys, signers, build_sat, secp),
                 },
             },
             Descriptor::Wsh(wsh) => match wsh.as_inner() {
                 WshInner::Ms(ms) => Ok(ms.extract_policy(signers, build_sat, secp)?),
-                WshInner::SortedMulti(ref keys) => make_sortedmulti(keys, signers, build_sat, secp),
+                WshInner::SortedMulti(keys) => make_sortedmulti(keys, signers, build_sat, secp),
             },
             Descriptor::Bare(ms) => Ok(ms.as_inner().extract_policy(signers, build_sat, secp)?),
             Descriptor::Tr(tr) => {

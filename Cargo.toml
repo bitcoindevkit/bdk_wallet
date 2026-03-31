@@ -9,7 +9,7 @@ keywords = ["bitcoin", "wallet", "descriptor", "psbt"]
 readme = "README.md"
 license = "MIT OR Apache-2.0"
 authors = ["Bitcoin Dev Kit Developers"]
-edition = "2021"
+edition = "2024"
 rust-version = "1.85.0"
 
 [package.metadata.docs.rs]

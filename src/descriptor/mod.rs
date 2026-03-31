@@ -237,7 +237,7 @@ impl IntoWalletDescriptor for DescriptorTemplateOut {
                 // reset the `network_kind` to make sure the wallet struct gets a
                 // descriptor with the right `network_kind` everywhere.
                 let pk = match pk {
-                    DescriptorPublicKey::XPub(ref xpub) => {
+                    DescriptorPublicKey::XPub(xpub) => {
                         let mut xpub = xpub.clone();
                         xpub.xkey.network = self.network_kind;
 
