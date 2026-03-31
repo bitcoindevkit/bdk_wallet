@@ -14,14 +14,14 @@
 //! This module contains the definition of various common script templates that are ready to be
 //! used. See the documentation of each template for an example.
 
-use bitcoin::{bip32, NetworkKind};
+use bitcoin::{NetworkKind, bip32};
 use miniscript::{Legacy, Segwitv0, Tap};
 
 use super::{ExtendedDescriptor, IntoWalletDescriptor, KeyMap};
 use crate::descriptor::DescriptorError;
 use crate::keys::{DerivableKey, IntoDescriptorKey, ValidNetworkKinds};
 use crate::wallet::utils::SecpCtx;
-use crate::{descriptor, KeychainKind};
+use crate::{KeychainKind, descriptor};
 
 /// Type alias for the return type of [`DescriptorTemplate`], [`descriptor!`](crate::descriptor!)
 /// and others.
@@ -644,8 +644,8 @@ mod test {
 
     use assert_matches::assert_matches;
     use bitcoin::Network;
-    use miniscript::descriptor::{DescriptorPublicKey, KeyMap};
     use miniscript::Descriptor;
+    use miniscript::descriptor::{DescriptorPublicKey, KeyMap};
 
     use crate::descriptor::{DescriptorError, DescriptorMeta};
     use crate::keys::ValidNetworkKinds;

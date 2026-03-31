@@ -14,12 +14,12 @@
 use crate::descriptor::policy::PolicyError;
 use crate::descriptor::{DescriptorError, ExtendedDescriptor};
 use crate::wallet::coin_selection;
-use crate::{descriptor, KeychainKind, LoadWithPersistError};
+use crate::{KeychainKind, LoadWithPersistError, descriptor};
 use alloc::{
     boxed::Box,
     string::{String, ToString},
 };
-use bitcoin::{absolute, psbt, Amount, BlockHash, Network, OutPoint, Sequence, Txid};
+use bitcoin::{Amount, BlockHash, Network, OutPoint, Sequence, Txid, absolute, psbt};
 use core::fmt;
 
 /// The error type when loading a [`Wallet`] from a [`ChangeSet`].
@@ -233,7 +233,10 @@ impl fmt::Display for CreateTxError {
                 requested,
                 required,
             } => {
-                write!(f, "TxBuilder requested timelock of `{requested}`, but at least `{required}` is required to spend from this script")
+                write!(
+                    f,
+                    "TxBuilder requested timelock of `{requested}`, but at least `{required}` is required to spend from this script"
+                )
             }
             CreateTxError::RbfSequenceCsv { sequence, csv } => {
                 write!(

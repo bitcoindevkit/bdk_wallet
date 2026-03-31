@@ -1,12 +1,12 @@
-use bdk_esplora::{esplora_client, EsploraAsyncExt};
+use bdk_esplora::{EsploraAsyncExt, esplora_client};
 use bdk_wallet::{
+    KeychainKind, SignOptions, Wallet,
     bitcoin::{Amount, FeeRate, Network},
     psbt::PsbtUtils,
     rusqlite::Connection,
-    KeychainKind, SignOptions, Wallet,
 };
 use std::{collections::BTreeSet, io::Write};
-use tokio::time::{sleep, Duration};
+use tokio::time::{Duration, sleep};
 
 const SEND_AMOUNT: Amount = Amount::from_sat(5000);
 const STOP_GAP: usize = 5;

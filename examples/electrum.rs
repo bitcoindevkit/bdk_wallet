@@ -1,12 +1,12 @@
-use bdk_electrum::electrum_client;
 use bdk_electrum::BdkElectrumClient;
+use bdk_electrum::electrum_client;
+use bdk_wallet::Wallet;
 use bdk_wallet::bitcoin::Amount;
 use bdk_wallet::bitcoin::FeeRate;
 use bdk_wallet::bitcoin::Network;
 use bdk_wallet::chain::collections::HashSet;
 use bdk_wallet::psbt::PsbtUtils;
 use bdk_wallet::rusqlite::Connection;
-use bdk_wallet::Wallet;
 use bdk_wallet::{KeychainKind, SignOptions};
 use std::io::Write;
 use std::thread::sleep;

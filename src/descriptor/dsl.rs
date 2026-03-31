@@ -82,10 +82,10 @@ macro_rules! impl_top_level_pk {
 #[macro_export]
 macro_rules! impl_top_level_tr {
     ( $internal_key:expr, $tap_tree:expr ) => {{
+        use $crate::miniscript::Tap;
         use $crate::miniscript::descriptor::{
             Descriptor, DescriptorPublicKey, KeyMap, TapTree, Tr,
         };
-        use $crate::miniscript::Tap;
 
         #[allow(unused_imports)]
         use $crate::keys::{DescriptorKey, IntoDescriptorKey, ValidNetworkKinds};
@@ -361,27 +361,13 @@ macro_rules! apply_modifier {
             })
     }};
 
-    ( a: $inner:expr ) => {{
-        $crate::apply_modifier!(Alt, $inner)
-    }};
-    ( s: $inner:expr ) => {{
-        $crate::apply_modifier!(Swap, $inner)
-    }};
-    ( c: $inner:expr ) => {{
-        $crate::apply_modifier!(Check, $inner)
-    }};
-    ( d: $inner:expr ) => {{
-        $crate::apply_modifier!(DupIf, $inner)
-    }};
-    ( v: $inner:expr ) => {{
-        $crate::apply_modifier!(Verify, $inner)
-    }};
-    ( j: $inner:expr ) => {{
-        $crate::apply_modifier!(NonZero, $inner)
-    }};
-    ( n: $inner:expr ) => {{
-        $crate::apply_modifier!(ZeroNotEqual, $inner)
-    }};
+    ( a: $inner:expr ) => {{ $crate::apply_modifier!(Alt, $inner) }};
+    ( s: $inner:expr ) => {{ $crate::apply_modifier!(Swap, $inner) }};
+    ( c: $inner:expr ) => {{ $crate::apply_modifier!(Check, $inner) }};
+    ( d: $inner:expr ) => {{ $crate::apply_modifier!(DupIf, $inner) }};
+    ( v: $inner:expr ) => {{ $crate::apply_modifier!(Verify, $inner) }};
+    ( j: $inner:expr ) => {{ $crate::apply_modifier!(NonZero, $inner) }};
+    ( n: $inner:expr ) => {{ $crate::apply_modifier!(ZeroNotEqual, $inner) }};
 
     // Modifiers expanded to other operators
     ( t: $inner:expr ) => {{
@@ -833,10 +819,10 @@ mod test {
     use alloc::string::ToString;
     use core::str::FromStr;
 
-    use bitcoin::{bip32, secp256k1::Secp256k1, Network, NetworkKind, PrivateKey};
+    use bitcoin::{Network, NetworkKind, PrivateKey, bip32, secp256k1::Secp256k1};
     use miniscript::{
-        descriptor::{DescriptorPublicKey, KeyMap},
         Descriptor, Legacy, Segwitv0,
+        descriptor::{DescriptorPublicKey, KeyMap},
     };
 
     use crate::descriptor::{DescriptorError, DescriptorMeta};
@@ -888,10 +874,12 @@ mod test {
         .unwrap();
 
         check(
-            descriptor!(bare(multi(1,pubkey1,pubkey2))),
+            descriptor!(bare(multi(1, pubkey1, pubkey2))),
             false,
             true,
-            &["512103a34b99f22c790c4e36b2b3c2c35a36db06226e41c692fc82b8b56ac1c540c5bd21032e58afe51f9ed8ad3cc7897f634d881fdbe49a81564629ded8156bebd2ffd1af52ae"],
+            &[
+                "512103a34b99f22c790c4e36b2b3c2c35a36db06226e41c692fc82b8b56ac1c540c5bd21032e58afe51f9ed8ad3cc7897f634d881fdbe49a81564629ded8156bebd2ffd1af52ae",
+            ],
         );
         check(
             descriptor!(pk(pubkey1)),
@@ -1182,9 +1170,18 @@ mod test {
         let (key1, _key_map, _valid_network_kinds) = desc_key1.extract(&secp).unwrap();
         let (key2, _key_map, _valid_network_kinds) = desc_key2.extract(&secp).unwrap();
         let (key3, _key_map, _valid_network_kinds) = desc_key3.extract(&secp).unwrap();
-        assert_eq!(key_map.get(&key1).unwrap().to_string(), "tprv8ZgxMBicQKsPcx5nBGsR63Pe8KnRUqmbJNENAfGftF3yuXoMMoVJJcYeUw5eVkm9WBPjWYt6HMWYJNesB5HaNVBaFc1M6dRjWSYnmewUMYy/0/*");
-        assert_eq!(key_map.get(&key2).unwrap().to_string(), "tprv8ZgxMBicQKsPegBHHnq7YEgM815dG24M2Jk5RVqipgDxF1HJ1tsnT815X5Fd5FRfMVUs8NZs9XCb6y9an8hRPThnhfwfXJ36intaekySHGF/2147483647'/0/*");
-        assert_eq!(key_map.get(&key3).unwrap().to_string(), "tprv8ZgxMBicQKsPdZXrcHNLf5JAJWFAoJ2TrstMRdSKtEggz6PddbuSkvHKM9oKJyFgZV1B7rw8oChspxyYbtmEXYyg1AjfWbL3ho3XHDpHRZf/10/20/30/40/*");
+        assert_eq!(
+            key_map.get(&key1).unwrap().to_string(),
+            "tprv8ZgxMBicQKsPcx5nBGsR63Pe8KnRUqmbJNENAfGftF3yuXoMMoVJJcYeUw5eVkm9WBPjWYt6HMWYJNesB5HaNVBaFc1M6dRjWSYnmewUMYy/0/*"
+        );
+        assert_eq!(
+            key_map.get(&key2).unwrap().to_string(),
+            "tprv8ZgxMBicQKsPegBHHnq7YEgM815dG24M2Jk5RVqipgDxF1HJ1tsnT815X5Fd5FRfMVUs8NZs9XCb6y9an8hRPThnhfwfXJ36intaekySHGF/2147483647'/0/*"
+        );
+        assert_eq!(
+            key_map.get(&key3).unwrap().to_string(),
+            "tprv8ZgxMBicQKsPdZXrcHNLf5JAJWFAoJ2TrstMRdSKtEggz6PddbuSkvHKM9oKJyFgZV1B7rw8oChspxyYbtmEXYyg1AjfWbL3ho3XHDpHRZf/10/20/30/40/*"
+        );
     }
 
     // Verify that the `ScriptContext` is correctly validated (i.e. passing a type that only
@@ -1197,7 +1194,10 @@ mod test {
         let desc_key: DescriptorKey<Legacy> = (xprv, path).into_descriptor_key().unwrap();
 
         let (desc, _key_map, _valid_network_kinds) = descriptor!(pkh(desc_key)).unwrap();
-        assert_eq!(desc.to_string(), "pkh(tpubD6NzVbkrYhZ4WR7a4vY1VT3khMJMeAxVsfq9TBJyJWrNk247zCJtV7AWf6UJP7rAVsn8NNKdJi3gFyKPTmWZS9iukb91xbn2HbFSMQm2igY/0/*)#yrnz9pp2");
+        assert_eq!(
+            desc.to_string(),
+            "pkh(tpubD6NzVbkrYhZ4WR7a4vY1VT3khMJMeAxVsfq9TBJyJWrNk247zCJtV7AWf6UJP7rAVsn8NNKdJi3gFyKPTmWZS9iukb91xbn2HbFSMQm2igY/0/*)#yrnz9pp2"
+        );
     }
 
     #[test]
@@ -1207,7 +1207,10 @@ mod test {
         let (descriptor, _, _) =
             descriptor!(wsh(thresh(2,n:d:v:older(1),s:pk(private_key),s:pk(private_key)))).unwrap();
 
-        assert_eq!(descriptor.to_string(), "wsh(thresh(2,ndv:older(1),s:pk(02e96fe52ef0e22d2f131dd425ce1893073a3c6ad20e8cac36726393dfb4856a4c),s:pk(02e96fe52ef0e22d2f131dd425ce1893073a3c6ad20e8cac36726393dfb4856a4c)))#zzk3ux8g")
+        assert_eq!(
+            descriptor.to_string(),
+            "wsh(thresh(2,ndv:older(1),s:pk(02e96fe52ef0e22d2f131dd425ce1893073a3c6ad20e8cac36726393dfb4856a4c),s:pk(02e96fe52ef0e22d2f131dd425ce1893073a3c6ad20e8cac36726393dfb4856a4c)))#zzk3ux8g"
+        )
     }
 
     #[test]
@@ -1239,7 +1242,10 @@ mod test {
         let (descriptor, _, _) =
             descriptor!(tr(private_key, { pk(private_key), pk(private_key) })).unwrap();
 
-        assert_eq!(descriptor.to_string(), "tr(02e96fe52ef0e22d2f131dd425ce1893073a3c6ad20e8cac36726393dfb4856a4c,{pk(02e96fe52ef0e22d2f131dd425ce1893073a3c6ad20e8cac36726393dfb4856a4c),pk(02e96fe52ef0e22d2f131dd425ce1893073a3c6ad20e8cac36726393dfb4856a4c)})#xy5fjw6d")
+        assert_eq!(
+            descriptor.to_string(),
+            "tr(02e96fe52ef0e22d2f131dd425ce1893073a3c6ad20e8cac36726393dfb4856a4c,{pk(02e96fe52ef0e22d2f131dd425ce1893073a3c6ad20e8cac36726393dfb4856a4c),pk(02e96fe52ef0e22d2f131dd425ce1893073a3c6ad20e8cac36726393dfb4856a4c)})#xy5fjw6d"
+        )
     }
 
     #[test]
@@ -1248,6 +1254,9 @@ mod test {
             PrivateKey::from_wif("cSQPHDBwXGjVzWRqAHm6zfvQhaTuj1f2bFH58h55ghbjtFwvmeXR").unwrap();
         let (descriptor, _, _) = descriptor!(tr(private_key, pk(private_key))).unwrap();
 
-        assert_eq!(descriptor.to_string(), "tr(02e96fe52ef0e22d2f131dd425ce1893073a3c6ad20e8cac36726393dfb4856a4c,pk(02e96fe52ef0e22d2f131dd425ce1893073a3c6ad20e8cac36726393dfb4856a4c))#lzl2vmc7")
+        assert_eq!(
+            descriptor.to_string(),
+            "tr(02e96fe52ef0e22d2f131dd425ce1893073a3c6ad20e8cac36726393dfb4856a4c,pk(02e96fe52ef0e22d2f131dd425ce1893073a3c6ad20e8cac36726393dfb4856a4c))#lzl2vmc7"
+        )
     }
 }

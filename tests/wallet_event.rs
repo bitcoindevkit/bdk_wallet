@@ -1,7 +1,7 @@
 use bdk_chain::{BlockId, CheckPoint, ConfirmationBlockTime};
-use bdk_wallet::test_utils::{get_test_wpkh_and_change_desc, new_wallet_and_funding_update};
 use bdk_wallet::Update;
 use bdk_wallet::WalletEvent;
+use bdk_wallet::test_utils::{get_test_wpkh_and_change_desc, new_wallet_and_funding_update};
 use bitcoin::block::Header;
 use bitcoin::hashes::Hash;
 use bitcoin::{Address, Amount, Block, BlockHash, FeeRate, Transaction, TxMerkleNode};

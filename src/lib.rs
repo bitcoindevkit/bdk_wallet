@@ -44,8 +44,8 @@ pub(crate) use bdk_chain::collections;
 pub use bdk_chain::rusqlite;
 #[cfg(feature = "rusqlite")]
 pub use bdk_chain::rusqlite_impl;
-pub use descriptor::template;
 pub use descriptor::HdKeyPaths;
+pub use descriptor::template;
 pub use signer;
 pub use signer::SignOptions;
 pub use tx_builder::*;

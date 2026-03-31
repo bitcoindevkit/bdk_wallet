@@ -1,5 +1,5 @@
 use bdk_chain::{
-    indexed_tx_graph, keychain_txout, local_chain, tx_graph, ConfirmationBlockTime, Merge,
+    ConfirmationBlockTime, Merge, indexed_tx_graph, keychain_txout, local_chain, tx_graph,
 };
 use miniscript::{Descriptor, DescriptorPublicKey};
 use serde::{Deserialize, Serialize};
@@ -249,8 +249,8 @@ impl ChangeSet {
     /// Recover a [`ChangeSet`] from sqlite database.
     pub fn from_sqlite(db_tx: &chain::rusqlite::Transaction) -> chain::rusqlite::Result<Self> {
         use bitcoin::{OutPoint, Txid};
-        use chain::rusqlite::OptionalExtension;
         use chain::Impl;
+        use chain::rusqlite::OptionalExtension;
 
         let mut changeset = Self::default();
 
@@ -305,8 +305,8 @@ impl ChangeSet {
         &self,
         db_tx: &chain::rusqlite::Transaction,
     ) -> chain::rusqlite::Result<()> {
-        use chain::rusqlite::named_params;
         use chain::Impl;
+        use chain::rusqlite::named_params;
 
         let mut descriptor_statement = db_tx.prepare_cached(&format!(
             "INSERT INTO {}(id, descriptor) VALUES(:id, :descriptor) ON CONFLICT(id) DO UPDATE SET descriptor=:descriptor",

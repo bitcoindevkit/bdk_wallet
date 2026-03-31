@@ -13,7 +13,7 @@ extern crate bdk_wallet;
 
 use core::error::Error;
 
-use bdk_wallet::descriptor::{policy::BuildSatisfaction, ExtractPolicy, IntoWalletDescriptor};
+use bdk_wallet::descriptor::{ExtractPolicy, IntoWalletDescriptor, policy::BuildSatisfaction};
 use bdk_wallet::signer::SignersContainer;
 use bitcoin::NetworkKind;
 

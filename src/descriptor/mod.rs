@@ -21,9 +21,10 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use bitcoin::{
+    NetworkKind, PublicKey, TxOut,
     bip32::{ChildNumber, DerivationPath, Fingerprint, KeySource, Xpub},
     key::XOnlyPublicKey,
-    psbt, secp256k1, taproot, NetworkKind, PublicKey, TxOut,
+    psbt, secp256k1, taproot,
 };
 use miniscript::descriptor::{
     DefiniteDescriptorKey, DescriptorMultiXKey, DescriptorSecretKey, DescriptorType,
@@ -618,8 +619,8 @@ mod test {
     use assert_matches::assert_matches;
     use bitcoin::hex::FromHex;
     use bitcoin::secp256k1::Secp256k1;
-    use bitcoin::{bip32, Psbt};
     use bitcoin::{NetworkKind, ScriptBuf};
+    use bitcoin::{Psbt, bip32};
 
     use super::*;
     use crate::psbt::PsbtUtils;
@@ -642,9 +643,11 @@ mod test {
         )
         .unwrap();
 
-        assert!(descriptor
-            .derive_from_psbt_input(&psbt.inputs[0], psbt.get_utxo_for(0), &Secp256k1::new())
-            .is_some());
+        assert!(
+            descriptor
+                .derive_from_psbt_input(&psbt.inputs[0], psbt.get_utxo_for(0), &Secp256k1::new())
+                .is_some()
+        );
     }
 
     #[test]
@@ -673,9 +676,11 @@ mod test {
         )
         .unwrap();
 
-        assert!(descriptor
-            .derive_from_psbt_input(&psbt.inputs[0], psbt.get_utxo_for(0), &Secp256k1::new())
-            .is_some());
+        assert!(
+            descriptor
+                .derive_from_psbt_input(&psbt.inputs[0], psbt.get_utxo_for(0), &Secp256k1::new())
+                .is_some()
+        );
     }
 
     #[test]
@@ -697,9 +702,11 @@ mod test {
         )
         .unwrap();
 
-        assert!(descriptor
-            .derive_from_psbt_input(&psbt.inputs[0], psbt.get_utxo_for(0), &Secp256k1::new())
-            .is_some());
+        assert!(
+            descriptor
+                .derive_from_psbt_input(&psbt.inputs[0], psbt.get_utxo_for(0), &Secp256k1::new())
+                .is_some()
+        );
     }
 
     #[test]
@@ -727,14 +734,16 @@ mod test {
         )
         .unwrap();
 
-        assert!(descriptor
-            .derive_from_psbt_input(&psbt.inputs[0], psbt.get_utxo_for(0), &Secp256k1::new())
-            .is_some());
+        assert!(
+            descriptor
+                .derive_from_psbt_input(&psbt.inputs[0], psbt.get_utxo_for(0), &Secp256k1::new())
+                .is_some()
+        );
     }
 
     #[test]
     fn test_to_wallet_descriptor_fixup_network_kinds() {
-        use crate::keys::{any_network_kind, IntoDescriptorKey};
+        use crate::keys::{IntoDescriptorKey, any_network_kind};
 
         let secp = Secp256k1::new();
 
@@ -766,7 +775,10 @@ mod test {
             wildcard: Wildcard::Unhardened,
         });
 
-        assert_eq!(wallet_desc.to_string(), "wpkh(tpubD6NzVbkrYhZ4XtJzoDja5snUjBNQRP5B3f4Hyn1T1x6PVPxzzVjvw6nJx2D8RBCxog9GEVjZoyStfepTz7TtKoBVdkCtnc7VCJh9dD4RAU9/0/*)#a3svx0ha");
+        assert_eq!(
+            wallet_desc.to_string(),
+            "wpkh(tpubD6NzVbkrYhZ4XtJzoDja5snUjBNQRP5B3f4Hyn1T1x6PVPxzzVjvw6nJx2D8RBCxog9GEVjZoyStfepTz7TtKoBVdkCtnc7VCJh9dD4RAU9/0/*)#a3svx0ha"
+        );
         assert_eq!(
             keymap
                 .get(&desc_pubkey)
@@ -870,7 +882,10 @@ mod test {
             .into_wallet_descriptor(&secp, NetworkKind::Test)
             .unwrap();
         let wallet_desc_str = wallet_desc.to_string();
-        assert_eq!(wallet_desc_str, "wpkh(tpubD6NzVbkrYhZ4XHndKkuB8FifXm8r5FQHwrN6oZuWCz13qb93rtgKvD4PQsqC4HP4yhV3tA2fqr2RbY5mNXfM7RxXUoeABoDtsFUq2zJq6YK/1/2/*)#67ju93jw");
+        assert_eq!(
+            wallet_desc_str,
+            "wpkh(tpubD6NzVbkrYhZ4XHndKkuB8FifXm8r5FQHwrN6oZuWCz13qb93rtgKvD4PQsqC4HP4yhV3tA2fqr2RbY5mNXfM7RxXUoeABoDtsFUq2zJq6YK/1/2/*)#67ju93jw"
+        );
 
         let (wallet_desc2, _) = wallet_desc_str
             .into_wallet_descriptor(&secp, NetworkKind::Test)
