@@ -355,15 +355,15 @@ impl Wallet {
             ..Default::default()
         };
 
-        let tx_graph = make_indexed_graph(
-            &mut stage,
-            Default::default(),
+        let index = make_keychain_index(
             Default::default(),
             descriptor,
             change_descriptor,
             params.lookahead,
             params.use_spk_cache,
         )?;
+        stage.indexer.merge(index.initial_changeset());
+        let tx_graph = IndexedTxGraph::new(index);
 
         Ok(Wallet {
             signers,
@@ -559,10 +559,9 @@ impl Wallet {
             .map(|(op, _)| op)
             .collect();
 
-        let mut stage = ChangeSet::default();
+        let stage = ChangeSet::default();
 
-        let tx_graph = make_indexed_graph(
-            &mut stage,
+        let tx_graph = make_loaded_indexed_graph(
             changeset.tx_graph,
             changeset.indexer,
             descriptor,
@@ -2828,8 +2827,50 @@ fn new_local_utxo(
     }
 }
 
-fn make_indexed_graph(
-    stage: &mut ChangeSet,
+fn make_keychain_index(
+    indexer_changeset: chain::keychain_txout::ChangeSet,
+    descriptor: ExtendedDescriptor,
+    change_descriptor: Option<ExtendedDescriptor>,
+    lookahead: u32,
+    use_spk_cache: bool,
+) -> Result<KeychainTxOutIndex<KeychainKind>, DescriptorError> {
+    let mut idx = KeychainTxOutIndex::from_changeset(lookahead, use_spk_cache, indexer_changeset);
+
+    let descriptor_inserted = idx
+        .insert_descriptor(KeychainKind::External, descriptor)
+        .expect("already checked to be a unique, wildcard, non-multipath descriptor");
+    assert!(
+        descriptor_inserted,
+        "this must be the first time we are seeing this descriptor"
+    );
+
+    let change_descriptor = match change_descriptor {
+        Some(change_descriptor) => change_descriptor,
+        None => return Ok(idx),
+    };
+
+    let change_descriptor_inserted = idx
+        .insert_descriptor(KeychainKind::Internal, change_descriptor)
+        .map_err(|e| {
+            use bdk_chain::indexer::keychain_txout::InsertDescriptorError;
+            match e {
+                InsertDescriptorError::DescriptorAlreadyAssigned { .. } => {
+                    crate::descriptor::error::Error::ExternalAndInternalAreTheSame
+                }
+                InsertDescriptorError::KeychainAlreadyAssigned { .. } => {
+                    unreachable!("this is the first time we're assigning internal")
+                }
+            }
+        })?;
+    assert!(
+        change_descriptor_inserted,
+        "this must be the first time we are seeing this descriptor"
+    );
+
+    Ok(idx)
+}
+
+fn make_loaded_indexed_graph(
     tx_graph_changeset: chain::tx_graph::ChangeSet<ConfirmationBlockTime>,
     indexer_changeset: chain::keychain_txout::ChangeSet,
     descriptor: ExtendedDescriptor,
@@ -2838,50 +2879,25 @@ fn make_indexed_graph(
     use_spk_cache: bool,
 ) -> Result<IndexedTxGraph<ConfirmationBlockTime, KeychainTxOutIndex<KeychainKind>>, DescriptorError>
 {
-    let (indexed_graph, changeset) = IndexedTxGraph::from_changeset(
+    let (indexed_graph, reindex_changeset) = IndexedTxGraph::from_changeset(
         chain::indexed_tx_graph::ChangeSet {
             tx_graph: tx_graph_changeset,
             indexer: indexer_changeset,
         },
-        |idx_cs| -> Result<KeychainTxOutIndex<KeychainKind>, DescriptorError> {
-            let mut idx = KeychainTxOutIndex::from_changeset(lookahead, use_spk_cache, idx_cs);
-
-            let descriptor_inserted = idx
-                .insert_descriptor(KeychainKind::External, descriptor)
-                .expect("already checked to be a unique, wildcard, non-multipath descriptor");
-            assert!(
-                descriptor_inserted,
-                "this must be the first time we are seeing this descriptor"
-            );
-
-            let change_descriptor = match change_descriptor {
-                Some(change_descriptor) => change_descriptor,
-                None => return Ok(idx),
-            };
-
-            let change_descriptor_inserted = idx
-                .insert_descriptor(KeychainKind::Internal, change_descriptor)
-                .map_err(|e| {
-                    use bdk_chain::indexer::keychain_txout::InsertDescriptorError;
-                    match e {
-                        InsertDescriptorError::DescriptorAlreadyAssigned { .. } => {
-                            crate::descriptor::error::Error::ExternalAndInternalAreTheSame
-                        }
-                        InsertDescriptorError::KeychainAlreadyAssigned { .. } => {
-                            unreachable!("this is the first time we're assigning internal")
-                        }
-                    }
-                })?;
-            assert!(
-                change_descriptor_inserted,
-                "this must be the first time we are seeing this descriptor"
-            );
-
-            Ok(idx)
+        |idx_cs| {
+            make_keychain_index(
+                idx_cs,
+                descriptor,
+                change_descriptor,
+                lookahead,
+                use_spk_cache,
+            )
         },
     )?;
-    stage.tx_graph.merge(changeset.tx_graph);
-    stage.indexer.merge(changeset.indexer);
+    debug_assert!(
+        reindex_changeset.is_empty(),
+        "loading a wallet should not stage new changes"
+    );
     Ok(indexed_graph)
 }
 
