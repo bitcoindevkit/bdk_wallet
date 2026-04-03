@@ -1492,10 +1492,10 @@ impl Wallet {
 
         if tx.output.is_empty() {
             // Uh oh, our transaction has no outputs.
-            // We allow this when:
-            // - We have a drain_to address and the utxos we must spend (this happens,
-            // for example, when we RBF).
-            // - We have a drain_to address and drain_wallet set.
+            // We allow this when we have a `drain_to` address and either:
+            // - `drain_wallet` is enabled
+            // - there are utxos we must spend (this happens, for example, when
+            // sweeping specific UTXOs to a given address)
             // Otherwise, we don't know who we should send the funds to, and how much
             // we should send!
             if params.drain_to.is_some() && (params.drain_wallet || !params.utxos.is_empty()) {
