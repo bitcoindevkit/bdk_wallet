@@ -311,6 +311,7 @@ impl Wallet {
     /// Create a new [`Wallet`] with given `params`.
     ///
     /// Refer to [`Wallet::create`] for more.
+    #[allow(deprecated)]
     pub fn create_with_params(params: CreateParams) -> Result<Self, DescriptorError> {
         let secp = SecpCtx::new();
         let network = params.network;
@@ -430,6 +431,7 @@ impl Wallet {
     /// Load [`Wallet`] from the given previously persisted [`ChangeSet`] and `params`.
     ///
     /// Returns `Ok(None)` if the changeset is empty. Refer to [`Wallet::load`] for more.
+    #[allow(deprecated)]
     pub fn load_with_params(
         changeset: ChangeSet,
         params: LoadParams,
