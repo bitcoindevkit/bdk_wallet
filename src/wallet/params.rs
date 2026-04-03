@@ -270,6 +270,28 @@ impl LoadParams {
         self
     }
 
+    /// Checks that the provided two-path descriptor matches exactly what is loaded for both the
+    /// external and internal keychains.
+    ///
+    /// # Note
+    ///
+    /// You must also specify [`extract_keys`](Self::extract_keys) if you wish to add a signer
+    /// for an expected descriptor containing secrets.
+    pub fn two_path_descriptor<D>(mut self, expected_descriptor: D) -> Self
+    where
+        D: IntoWalletDescriptor + Send + Clone + 'static,
+    {
+        let external: DescriptorToExtract =
+            make_two_path_descriptor_to_extract(expected_descriptor.clone(), 0);
+        let internal: DescriptorToExtract =
+            make_two_path_descriptor_to_extract(expected_descriptor, 1);
+
+        self.check_descriptor = Some(Some(external));
+        self.check_change_descriptor = Some(Some(internal));
+
+        self
+    }
+
     /// Checks that the given network matches the one loaded from persistence.
     pub fn check_network(mut self, network: Network) -> Self {
         self.check_network = Some(network);
