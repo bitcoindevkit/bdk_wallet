@@ -170,6 +170,71 @@ fn test_list_output() {
     }
 }
 
+#[test]
+fn test_birthday_genesis_only() {
+    let desc = get_test_wpkh();
+    let wallet = Wallet::create_single(desc)
+        .network(Network::Regtest)
+        .create_wallet_no_persist()
+        .unwrap();
+
+    // Assert that the wallet's birthday is genesis, since no `birthday` was set.
+    assert_eq!(wallet.birthday().height(), 0);
+}
+
+#[test]
+fn test_birthday_single_checkpoint() {
+    let desc = get_test_wpkh();
+    let birthday = BlockId {
+        height: 42,
+        hash: BlockHash::all_zeros(),
+    };
+    let wallet = Wallet::create_single(desc)
+        .network(Network::Regtest)
+        .birthday(birthday)
+        .create_wallet_no_persist()
+        .unwrap();
+
+    // Assert that the wallet's birthday is the checkpoint of height `42`.
+    assert_eq!(wallet.birthday().height(), 42);
+}
+
+#[test]
+fn test_birthday_multiple_checkpoints() {
+    let desc = get_test_wpkh();
+    let birthday = BlockId {
+        height: 42,
+        hash: BlockHash::all_zeros(),
+    };
+    let mut wallet = Wallet::create_single(desc)
+        .network(Network::Regtest)
+        .birthday(birthday)
+        .create_wallet_no_persist()
+        .unwrap();
+
+    let update_a = Update {
+        chain: Some(wallet.latest_checkpoint().insert(BlockId {
+            height: 43,
+            hash: BlockHash::all_zeros(),
+        })),
+        ..Default::default()
+    };
+    wallet.apply_update(update_a).unwrap();
+
+    let update_b = Update {
+        chain: Some(wallet.latest_checkpoint().insert(BlockId {
+            height: 77,
+            hash: BlockHash::all_zeros(),
+        })),
+        ..Default::default()
+    };
+    wallet.apply_update(update_b).unwrap();
+
+    // Assert that the wallet's birthday is still the checkpoint
+    // of height `42` if more checkpoints were added after it.
+    assert_eq!(wallet.birthday().height(), 42);
+}
+
 macro_rules! from_str {
     ($e:expr, $t:ty) => {{
         use core::str::FromStr;
