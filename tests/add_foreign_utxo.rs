@@ -5,7 +5,7 @@ use bdk_wallet::signer::SignOptions;
 use bdk_wallet::test_utils::*;
 use bdk_wallet::tx_builder::AddForeignUtxoError;
 use bdk_wallet::KeychainKind;
-use bitcoin::{psbt, Address, Amount};
+use bitcoin::{psbt, Address, Amount, OutPoint};
 
 mod common;
 
@@ -29,6 +29,8 @@ fn test_add_foreign_utxo() {
         ..Default::default()
     };
 
+    wallet1.insert_txout(utxo.outpoint, utxo.txout);
+
     let mut builder = wallet1.build_tx();
     builder
         .add_recipient(addr.script_pubkey(), Amount::from_sat(60_000))
@@ -36,7 +38,6 @@ fn test_add_foreign_utxo() {
         .add_foreign_utxo(utxo.outpoint, psbt_input, foreign_utxo_satisfaction)
         .unwrap();
     let mut psbt = builder.finish().unwrap();
-    wallet1.insert_txout(utxo.outpoint, utxo.txout);
     let fee = check_fee!(wallet1, psbt);
     let (sent, received) =
         wallet1.sent_and_received(&psbt.clone().extract_tx().expect("failed to extract tx"));
@@ -83,41 +84,6 @@ fn test_add_foreign_utxo() {
 }
 
 #[test]
-fn test_calculate_fee_with_missing_foreign_utxo() {
-    use bdk_chain::tx_graph::CalculateFeeError;
-    let (mut wallet1, _) = get_funded_wallet_wpkh();
-    let (wallet2, _) =
-        get_funded_wallet_single("wpkh(cVbZ8ovhye9AoAHFsqobCf7LxbXDAECy9Kb8TZdfsDYMZGBUyCnm)");
-
-    let addr = Address::from_str("2N1Ffz3WaNzbeLFBb51xyFMHYSEUXcbiSoX")
-        .unwrap()
-        .assume_checked();
-    let utxo = wallet2.list_unspent().next().expect("must take!");
-    let foreign_utxo_satisfaction = wallet2
-        .public_descriptor(KeychainKind::External)
-        .max_weight_to_satisfy()
-        .unwrap();
-
-    let psbt_input = psbt::Input {
-        witness_utxo: Some(utxo.txout.clone()),
-        ..Default::default()
-    };
-
-    let mut builder = wallet1.build_tx();
-    builder
-        .add_recipient(addr.script_pubkey(), Amount::from_sat(60_000))
-        .only_witness_utxo()
-        .add_foreign_utxo(utxo.outpoint, psbt_input, foreign_utxo_satisfaction)
-        .unwrap();
-    let psbt = builder.finish().unwrap();
-    let tx = psbt.extract_tx().expect("failed to extract tx");
-    let res = wallet1.calculate_fee(&tx);
-    assert!(
-        matches!(res, Err(CalculateFeeError::MissingTxOut(outpoints)) if outpoints[0] == utxo.outpoint)
-    );
-}
-
-#[test]
 fn test_add_foreign_utxo_invalid_psbt_input() {
     let (mut wallet, _) = get_funded_wallet_wpkh();
     let outpoint = wallet.list_unspent().next().expect("must exist").outpoint;
@@ -127,13 +93,166 @@ fn test_add_foreign_utxo_invalid_psbt_input() {
         .unwrap();
 
     let mut builder = wallet.build_tx();
-    let result =
-        builder.add_foreign_utxo(outpoint, psbt::Input::default(), foreign_utxo_satisfaction);
-    assert!(matches!(result, Err(AddForeignUtxoError::MissingUtxo)));
+    let err = builder
+        .add_foreign_utxo(outpoint, psbt::Input::default(), foreign_utxo_satisfaction)
+        .unwrap_err();
+    assert!(!err.to_string().is_empty());
+    assert!(matches!(err, AddForeignUtxoError::MissingUtxo));
 }
 
 #[test]
-fn test_add_foreign_utxo_where_outpoint_doesnt_match_psbt_input() {
+fn test_add_foreign_utxo_requires_inserted_txout() {
+    let (mut wallet1, _) = get_funded_wallet_wpkh();
+    let (wallet2, _) =
+        get_funded_wallet_single("wpkh(cVbZ8ovhye9AoAHFsqobCf7LxbXDAECy9Kb8TZdfsDYMZGBUyCnm)");
+
+    let utxo = wallet2.list_unspent().next().expect("must take!");
+    let foreign_utxo_satisfaction = wallet2
+        .public_descriptor(KeychainKind::External)
+        .max_weight_to_satisfy()
+        .unwrap();
+
+    {
+        let mut builder = wallet1.build_tx();
+        let err = builder
+            .add_foreign_utxo(
+                utxo.outpoint,
+                psbt::Input {
+                    witness_utxo: Some(utxo.txout.clone()),
+                    ..Default::default()
+                },
+                foreign_utxo_satisfaction,
+            )
+            .unwrap_err();
+        assert!(!err.to_string().is_empty());
+        assert!(
+            matches!(err, AddForeignUtxoError::MissingRegisteredTxOut(outpoint) if outpoint == utxo.outpoint)
+        );
+    }
+
+    wallet1.insert_txout(utxo.outpoint, utxo.txout.clone());
+
+    {
+        let mut builder = wallet1.build_tx();
+        let result = builder.add_foreign_utxo(
+            utxo.outpoint,
+            psbt::Input {
+                witness_utxo: Some(utxo.txout),
+                ..Default::default()
+            },
+            foreign_utxo_satisfaction,
+        );
+        assert!(
+            result.is_ok(),
+            "should succeed once the txout is inserted into wallet"
+        );
+    }
+}
+
+#[test]
+fn test_add_foreign_utxo_requires_inserted_tx() {
+    let (mut wallet1, _) = get_funded_wallet_wpkh();
+    let (wallet2, txid2) =
+        get_funded_wallet_single("wpkh(cVbZ8ovhye9AoAHFsqobCf7LxbXDAECy9Kb8TZdfsDYMZGBUyCnm)");
+
+    let utxo = wallet2.list_unspent().next().expect("must take!");
+    let tx2 = wallet2.get_tx(txid2).unwrap().tx_node.tx;
+    let foreign_utxo_satisfaction = wallet2
+        .public_descriptor(KeychainKind::External)
+        .max_weight_to_satisfy()
+        .unwrap();
+
+    {
+        let mut builder = wallet1.build_tx();
+        let err = builder
+            .add_foreign_utxo(
+                utxo.outpoint,
+                psbt::Input {
+                    non_witness_utxo: Some(tx2.as_ref().clone()),
+                    ..Default::default()
+                },
+                foreign_utxo_satisfaction,
+            )
+            .unwrap_err();
+        assert!(!err.to_string().is_empty());
+        assert!(
+            matches!(err, AddForeignUtxoError::MissingRegisteredTx(outpoint) if outpoint == utxo.outpoint)
+        );
+    }
+
+    wallet1.insert_tx(tx2.as_ref().clone());
+
+    {
+        let mut builder = wallet1.build_tx();
+        let result = builder.add_foreign_utxo(
+            utxo.outpoint,
+            psbt::Input {
+                non_witness_utxo: Some(tx2.as_ref().clone()),
+                ..Default::default()
+            },
+            foreign_utxo_satisfaction,
+        );
+        assert!(
+            result.is_ok(),
+            "should succeed once the parent tx is inserted into wallet"
+        );
+    }
+}
+
+#[test]
+/// When both `non_witness_utxo` and `witness_utxo` are present, the parent tx must be inserted.
+fn test_add_foreign_utxo_requires_inserted_tx_when_both_prevout_forms_are_present() {
+    let (mut wallet1, _) = get_funded_wallet_wpkh();
+    let (wallet2, txid2) =
+        get_funded_wallet_single("wpkh(cVbZ8ovhye9AoAHFsqobCf7LxbXDAECy9Kb8TZdfsDYMZGBUyCnm)");
+
+    let utxo = wallet2.list_unspent().next().expect("must take!");
+    let tx2 = wallet2.get_tx(txid2).unwrap().tx_node.tx;
+    let foreign_utxo_satisfaction = wallet2
+        .public_descriptor(KeychainKind::External)
+        .max_weight_to_satisfy()
+        .unwrap();
+
+    wallet1.insert_txout(utxo.outpoint, utxo.txout.clone());
+
+    {
+        let mut builder = wallet1.build_tx();
+        let result = builder.add_foreign_utxo(
+            utxo.outpoint,
+            psbt::Input {
+                witness_utxo: Some(utxo.txout.clone()),
+                non_witness_utxo: Some(tx2.as_ref().clone()),
+                ..Default::default()
+            },
+            foreign_utxo_satisfaction,
+        );
+        assert!(
+            matches!(result, Err(AddForeignUtxoError::MissingRegisteredTx(outpoint)) if outpoint == utxo.outpoint)
+        );
+    }
+
+    wallet1.insert_tx(tx2.as_ref().clone());
+
+    {
+        let mut builder = wallet1.build_tx();
+        let result = builder.add_foreign_utxo(
+            utxo.outpoint,
+            psbt::Input {
+                witness_utxo: Some(utxo.txout),
+                non_witness_utxo: Some(tx2.as_ref().clone()),
+                ..Default::default()
+            },
+            foreign_utxo_satisfaction,
+        );
+        assert!(
+            result.is_ok(),
+            "should require the parent tx when non_witness_utxo is present"
+        );
+    }
+}
+
+#[test]
+fn test_add_foreign_utxo_rejects_non_witness_utxo_with_wrong_txid() {
     let (mut wallet1, txid1) = get_funded_wallet_wpkh();
     let (wallet2, txid2) =
         get_funded_wallet_single("wpkh(cVbZ8ovhye9AoAHFsqobCf7LxbXDAECy9Kb8TZdfsDYMZGBUyCnm)");
@@ -147,32 +266,78 @@ fn test_add_foreign_utxo_where_outpoint_doesnt_match_psbt_input() {
         .max_weight_to_satisfy()
         .unwrap();
 
-    let mut builder = wallet1.build_tx();
-    assert!(
-        builder
+    {
+        let mut builder = wallet1.build_tx();
+        let err = builder
             .add_foreign_utxo(
                 utxo2.outpoint,
                 psbt::Input {
                     non_witness_utxo: Some(tx1.as_ref().clone()),
                     ..Default::default()
                 },
-                satisfaction_weight
+                satisfaction_weight,
             )
-            .is_err(),
-        "should fail when outpoint doesn't match psbt_input"
-    );
+            .unwrap_err();
+        assert!(!err.to_string().is_empty());
+        assert!(
+            matches!(
+                err,
+                AddForeignUtxoError::InvalidTxid {
+                    input_txid,
+                    foreign_utxo,
+                } if input_txid == tx1.compute_txid() && foreign_utxo == utxo2.outpoint
+            ),
+            "should fail when outpoint doesn't match psbt_input"
+        );
+    }
+    wallet1.insert_tx(tx2.as_ref().clone());
+    {
+        let mut builder = wallet1.build_tx();
+        assert!(
+            builder
+                .add_foreign_utxo(
+                    utxo2.outpoint,
+                    psbt::Input {
+                        non_witness_utxo: Some(tx2.as_ref().clone()),
+                        ..Default::default()
+                    },
+                    satisfaction_weight
+                )
+                .is_ok(),
+            "should be ok when outpoint does match psbt_input"
+        );
+    }
+}
+
+#[test]
+fn test_add_foreign_utxo_rejects_non_witness_utxo_with_out_of_bounds_vout() {
+    let (mut wallet1, _) = get_funded_wallet_wpkh();
+    let (wallet2, txid2) =
+        get_funded_wallet_single("wpkh(cVbZ8ovhye9AoAHFsqobCf7LxbXDAECy9Kb8TZdfsDYMZGBUyCnm)");
+
+    let tx2 = wallet2.get_tx(txid2).unwrap().tx_node.tx;
+    let invalid_outpoint = OutPoint::new(txid2, tx2.output.len() as u32);
+    let satisfaction_weight = wallet2
+        .public_descriptor(KeychainKind::External)
+        .max_weight_to_satisfy()
+        .unwrap();
+
+    let mut builder = wallet1.build_tx();
+    let err = builder
+        .add_foreign_utxo(
+            invalid_outpoint,
+            psbt::Input {
+                non_witness_utxo: Some(tx2.as_ref().clone()),
+                ..Default::default()
+            },
+            satisfaction_weight,
+        )
+        .unwrap_err();
+    assert!(!err.to_string().is_empty());
+
     assert!(
-        builder
-            .add_foreign_utxo(
-                utxo2.outpoint,
-                psbt::Input {
-                    non_witness_utxo: Some(tx2.as_ref().clone()),
-                    ..Default::default()
-                },
-                satisfaction_weight
-            )
-            .is_ok(),
-        "should be ok when outpoint does match psbt_input"
+        matches!(err, AddForeignUtxoError::InvalidOutpoint(outpoint) if outpoint == invalid_outpoint),
+        "should fail when vout is outside the parent tx outputs"
     );
 }
 
@@ -190,6 +355,8 @@ fn test_add_foreign_utxo_only_witness_utxo() {
         .public_descriptor(KeychainKind::External)
         .max_weight_to_satisfy()
         .unwrap();
+
+    wallet1.insert_txout(utxo2.outpoint, utxo2.txout.clone());
 
     {
         let mut builder = wallet1.build_tx();
@@ -227,10 +394,12 @@ fn test_add_foreign_utxo_only_witness_utxo() {
     }
 
     {
+        let tx2 = wallet2.get_tx(txid2).unwrap().tx_node.tx;
+        wallet1.insert_tx(tx2.as_ref().clone());
+
         let mut builder = wallet1.build_tx();
         builder.add_recipient(addr.script_pubkey(), Amount::from_sat(60_000));
 
-        let tx2 = wallet2.get_tx(txid2).unwrap().tx_node.tx;
         let psbt_input = psbt::Input {
             non_witness_utxo: Some(tx2.as_ref().clone()),
             ..Default::default()
@@ -265,6 +434,8 @@ fn test_taproot_foreign_utxo() {
         "`non_witness_utxo` should never be populated for taproot"
     );
 
+    wallet1.insert_txout(utxo.outpoint, utxo.txout);
+
     let mut builder = wallet1.build_tx();
     builder
         .add_recipient(addr.script_pubkey(), Amount::from_sat(60_000))
@@ -273,7 +444,6 @@ fn test_taproot_foreign_utxo() {
     let psbt = builder.finish().unwrap();
     let (sent, received) =
         wallet1.sent_and_received(&psbt.clone().extract_tx().expect("failed to extract tx"));
-    wallet1.insert_txout(utxo.outpoint, utxo.txout);
     let fee = check_fee!(wallet1, psbt);
 
     assert_eq!(
