@@ -2961,3 +2961,260 @@ fn test_tx_ordering_untouched_preserves_insertion_ordering() {
     // Check vout is sorted by recipient insertion order
     assert!(txouts == vec![400, 300, 500]);
 }
+
+#[test]
+fn test_trusted_pending_balance_from_owned_outpoints() {
+    let (mut wallet, txid) = get_funded_wallet_wpkh();
+    let tx = Transaction {
+        input: vec![TxIn {
+            previous_output: OutPoint { txid, vout: 0 },
+            ..Default::default()
+        }],
+        output: vec![TxOut {
+            value: Amount::from_sat(500),
+            script_pubkey: wallet
+                .next_unused_address(KeychainKind::Internal)
+                .address
+                .script_pubkey(),
+        }],
+        version: transaction::Version::ONE,
+        lock_time: absolute::LockTime::ZERO,
+    };
+
+    insert_tx(&mut wallet, tx.clone());
+
+    let balance = wallet.balance();
+
+    assert!(balance.trusted_pending > Amount::ZERO);
+    assert_eq!(balance.untrusted_pending, Amount::ZERO);
+}
+
+#[test]
+fn test_untrusted_pending_balance_from_external_inputs() {
+    let (descriptor, change_descriptor) = get_test_wpkh_and_change_desc();
+    let mut wallet = Wallet::create(descriptor, change_descriptor)
+        .network(Network::Regtest)
+        .create_wallet_no_persist()
+        .expect("wallet");
+
+    let txid = Txid::from_raw_hash(Hash::all_zeros());
+
+    let tx = Transaction {
+        input: vec![TxIn {
+            previous_output: OutPoint { txid, vout: 0 },
+            ..Default::default()
+        }],
+        output: vec![TxOut {
+            value: Amount::from_sat(500),
+            script_pubkey: wallet
+                .next_unused_address(KeychainKind::External)
+                .address
+                .script_pubkey(),
+        }],
+        version: transaction::Version::ONE,
+        lock_time: absolute::LockTime::ZERO,
+    };
+
+    insert_tx(&mut wallet, tx.clone());
+
+    let balance = wallet.balance();
+
+    assert!(balance.untrusted_pending > Amount::ZERO);
+    assert_eq!(balance.trusted_pending, Amount::ZERO);
+}
+
+#[test]
+fn test_trusted_pending_transitive_chain() {
+    let (mut wallet, txid) = get_funded_wallet_wpkh();
+
+    let tx_a = Transaction {
+        input: vec![TxIn {
+            previous_output: OutPoint { txid, vout: 0 },
+            ..Default::default()
+        }],
+        output: vec![TxOut {
+            value: Amount::from_sat(500),
+            script_pubkey: wallet
+                .next_unused_address(KeychainKind::External)
+                .address
+                .script_pubkey(),
+        }],
+        version: transaction::Version::ONE,
+        lock_time: absolute::LockTime::ZERO,
+    };
+
+    let tx_a_txid = tx_a.compute_txid();
+    insert_tx(&mut wallet, tx_a);
+
+    let tx_b = Transaction {
+        input: vec![TxIn {
+            previous_output: OutPoint {
+                txid: tx_a_txid,
+                vout: 0,
+            },
+            ..Default::default()
+        }],
+        output: vec![TxOut {
+            value: Amount::from_sat(500),
+            script_pubkey: wallet
+                .next_unused_address(KeychainKind::External)
+                .address
+                .script_pubkey(),
+        }],
+        version: transaction::Version::ONE,
+        lock_time: absolute::LockTime::ZERO,
+    };
+    insert_tx(&mut wallet, tx_b);
+
+    let balance = wallet.balance();
+
+    assert!(balance.trusted_pending > Amount::ZERO);
+    assert_eq!(balance.untrusted_pending, Amount::ZERO);
+}
+
+#[test]
+fn test_pay_to_internal_from_not_trusted() {
+    let (mut wallet, _) = get_funded_wallet_wpkh();
+
+    // Build a tx whose input comes from an unknown (external) outpoint,
+    // but whose output goes to our change (internal) keychain address.
+    let external_txid = Txid::from_raw_hash(Hash::all_zeros());
+    let tx = Transaction {
+        input: vec![TxIn {
+            previous_output: OutPoint {
+                txid: external_txid,
+                vout: 0,
+            },
+            ..Default::default()
+        }],
+        output: vec![TxOut {
+            value: Amount::from_sat(500),
+            script_pubkey: wallet
+                .next_unused_address(KeychainKind::Internal)
+                .address
+                .script_pubkey(),
+        }],
+        version: transaction::Version::ONE,
+        lock_time: absolute::LockTime::ZERO,
+    };
+
+    insert_tx(&mut wallet, tx);
+
+    let balance = wallet.balance();
+
+    // The output is ours but the input is not owned, so it must be untrusted_pending.
+    assert!(balance.untrusted_pending > Amount::ZERO);
+    assert_eq!(balance.trusted_pending, Amount::ZERO);
+}
+
+#[test]
+fn test_trusted_pending_does_not_propagate_through_foreign_outputs() {
+    let (mut wallet, txid) = get_funded_wallet_wpkh();
+
+    let foreign_addr = Address::from_str("bcrt1q3qtze4ys45tgdvguj66zrk4fu6hq3a3v9pfly5")
+        .expect("valid address")
+        .require_network(Network::Regtest)
+        .unwrap();
+
+    let tx_a = Transaction {
+        input: vec![TxIn {
+            previous_output: OutPoint { txid, vout: 0 },
+            ..Default::default()
+        }],
+        output: vec![
+            TxOut {
+                value: Amount::from_sat(25_000),
+                script_pubkey: foreign_addr.script_pubkey(),
+            },
+            TxOut {
+                value: Amount::from_sat(24_000),
+                script_pubkey: wallet
+                    .next_unused_address(KeychainKind::Internal)
+                    .address
+                    .script_pubkey(),
+            },
+        ],
+        version: transaction::Version::ONE,
+        lock_time: absolute::LockTime::ZERO,
+    };
+    let tx_a_txid = tx_a.compute_txid();
+    insert_tx(&mut wallet, tx_a);
+
+    let tx_b = Transaction {
+        input: vec![TxIn {
+            previous_output: OutPoint {
+                txid: tx_a_txid,
+                vout: 0,
+            },
+            ..Default::default()
+        }],
+        output: vec![TxOut {
+            value: Amount::from_sat(20_000),
+            script_pubkey: wallet
+                .next_unused_address(KeychainKind::External)
+                .address
+                .script_pubkey(),
+        }],
+        version: transaction::Version::ONE,
+        lock_time: absolute::LockTime::ZERO,
+    };
+    insert_tx(&mut wallet, tx_b);
+
+    let balance = wallet.balance();
+
+    assert!(balance.trusted_pending > Amount::ZERO);
+    assert!(balance.untrusted_pending > Amount::ZERO);
+}
+
+#[test]
+fn test_spending_untrusted_is_untrusted() {
+    let (mut wallet, _) = get_funded_wallet_wpkh();
+
+    let external_tx = Transaction {
+        input: vec![TxIn {
+            previous_output: OutPoint {
+                txid: Txid::all_zeros(), // not owned by wallet
+                vout: 0,
+            },
+            ..Default::default()
+        }],
+        output: vec![TxOut {
+            value: Amount::from_sat(50_000),
+            script_pubkey: wallet
+                .next_unused_address(KeychainKind::External)
+                .address
+                .script_pubkey(),
+        }],
+        version: transaction::Version::ONE,
+        lock_time: absolute::LockTime::ZERO,
+    };
+
+    let external_txid = external_tx.compute_txid();
+    insert_tx(&mut wallet, external_tx);
+
+    let tx_spend = Transaction {
+        input: vec![TxIn {
+            previous_output: OutPoint {
+                txid: external_txid,
+                vout: 0,
+            },
+            ..Default::default()
+        }],
+        output: vec![TxOut {
+            value: Amount::from_sat(45_000),
+            script_pubkey: wallet
+                .next_unused_address(KeychainKind::Internal)
+                .address
+                .script_pubkey(),
+        }],
+        version: transaction::Version::ONE,
+        lock_time: absolute::LockTime::ZERO,
+    };
+
+    insert_tx(&mut wallet, tx_spend);
+
+    let balance = wallet.balance();
+
+    assert_eq!(balance.untrusted_pending, Amount::from_sat(45_000));
+    assert_eq!(balance.trusted_pending, Amount::ZERO);
+}
