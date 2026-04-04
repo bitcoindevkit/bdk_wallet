@@ -2961,3 +2961,113 @@ fn test_tx_ordering_untouched_preserves_insertion_ordering() {
     // Check vout is sorted by recipient insertion order
     assert!(txouts == vec![400, 300, 500]);
 }
+
+#[test]
+fn test_trusted_pending_balance_from_owned_outpoints() {
+    let (mut wallet, txid) = get_funded_wallet_wpkh();
+    let tx = Transaction {
+        input: vec![TxIn {
+            previous_output: OutPoint { txid, vout: 0 },
+            ..Default::default()
+        }],
+        output: vec![TxOut {
+            value: Amount::from_sat(500),
+            script_pubkey: wallet
+                .next_unused_address(KeychainKind::Internal)
+                .address
+                .script_pubkey(),
+        }],
+        version: transaction::Version::ONE,
+        lock_time: absolute::LockTime::ZERO,
+    };
+
+    insert_tx(&mut wallet, tx.clone());
+
+    let balance = wallet.balance();
+
+    assert!(balance.trusted_pending > Amount::ZERO);
+    assert_eq!(balance.untrusted_pending, Amount::ZERO);
+}
+
+#[test]
+fn test_untrusted_pending_balance_from_external_inputs() {
+    let (descriptor, change_descriptor) = get_test_wpkh_and_change_desc();
+    let mut wallet = Wallet::create(descriptor, change_descriptor)
+        .network(Network::Regtest)
+        .create_wallet_no_persist()
+        .expect("wallet");
+
+    let txid = Txid::from_raw_hash(Hash::all_zeros());
+
+    let tx = Transaction {
+        input: vec![TxIn {
+            previous_output: OutPoint { txid, vout: 0 },
+            ..Default::default()
+        }],
+        output: vec![TxOut {
+            value: Amount::from_sat(500),
+            script_pubkey: wallet
+                .next_unused_address(KeychainKind::External)
+                .address
+                .script_pubkey(),
+        }],
+        version: transaction::Version::ONE,
+        lock_time: absolute::LockTime::ZERO,
+    };
+
+    insert_tx(&mut wallet, tx.clone());
+
+    let balance = wallet.balance();
+
+    assert!(balance.untrusted_pending > Amount::ZERO);
+    assert_eq!(balance.trusted_pending, Amount::ZERO);
+}
+
+#[test]
+fn test_trusted_pending_transitive_chain() {
+    let (mut wallet, txid) = get_funded_wallet_wpkh();
+
+    let tx_a = Transaction {
+        input: vec![TxIn {
+            previous_output: OutPoint { txid, vout: 0 },
+            ..Default::default()
+        }],
+        output: vec![TxOut {
+            value: Amount::from_sat(500),
+            script_pubkey: wallet
+                .next_unused_address(KeychainKind::External)
+                .address
+                .script_pubkey(),
+        }],
+        version: transaction::Version::ONE,
+        lock_time: absolute::LockTime::ZERO,
+    };
+
+    let tx_a_txid = tx_a.compute_txid();
+    insert_tx(&mut wallet, tx_a);
+
+    let tx_b = Transaction {
+        input: vec![TxIn {
+            previous_output: OutPoint {
+                txid: tx_a_txid,
+                vout: 0,
+            },
+            ..Default::default()
+        }],
+        output: vec![TxOut {
+            value: Amount::from_sat(500),
+            script_pubkey: wallet
+                .next_unused_address(KeychainKind::External)
+                .address
+                .script_pubkey(),
+        }],
+        version: transaction::Version::ONE,
+        lock_time: absolute::LockTime::ZERO,
+    };
+    insert_tx(&mut wallet, tx_b);
+
+    let balance = wallet.balance();
+
+    assert!(balance.trusted_pending > Amount::ZERO);
+    assert_eq!(balance.untrusted_pending, Amount::ZERO);
+}
