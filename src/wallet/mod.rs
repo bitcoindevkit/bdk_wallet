@@ -1115,12 +1115,48 @@ impl Wallet {
     /// Return the balance, separated into available, trusted-pending, untrusted-pending, and
     /// immature values.
     pub fn balance(&self) -> Balance {
-        self.tx_graph.graph().balance(
+        let graph = self.tx_graph.graph();
+        let index = &self.tx_graph.index;
+
+        let owned_outpoints: HashSet<OutPoint> =
+            index.outpoints().iter().map(|(_, op)| *op).collect();
+
+        let mut trusted_txids: HashSet<Txid> = HashSet::new();
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for tx_node in graph.full_txs() {
+                let txid = tx_node.txid;
+                if trusted_txids.contains(&txid) {
+                    continue;
+                }
+                if tx_node.tx.is_coinbase() {
+                    continue;
+                }
+                let all_inputs_owned = tx_node.tx.input.iter().all(|txin| {
+                    owned_outpoints.contains(&txin.previous_output)
+                        || trusted_txids.contains(&txin.previous_output.txid)
+                });
+
+                if all_inputs_owned {
+                    trusted_txids.insert(txid);
+                    changed = true;
+                }
+            }
+        }
+
+        let outpoints_with_txid = index
+            .outpoints()
+            .iter()
+            .cloned()
+            .map(|((k, i), op)| ((k, i, op.txid), op));
+
+        graph.balance(
             &self.chain,
             self.chain.tip().block_id(),
             CanonicalizationParams::default(),
-            self.tx_graph.index.outpoints().iter().cloned(),
-            |&(k, _), _| k == KeychainKind::Internal,
+            outpoints_with_txid,
+            |&(k, _, txid), _| k == KeychainKind::Internal || trusted_txids.contains(&txid),
         )
     }
 
