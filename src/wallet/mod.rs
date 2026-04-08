@@ -3199,9 +3199,9 @@ impl Wallet {
     /// Creates a Replace-By-Fee transaction (RBF) and returns the updated [`Psbt`] and
     /// [`Finalizer`].
     ///
-    /// This is a convenience for getting a new [`ReplaceParams`], and updating the recipients
+    /// This is a convenience for getting a new [`PsbtParams`], and updating the recipients
     /// and feerate before calling [`Wallet::replace_by_fee_with_rng`]. If further configuration is
-    /// desired, consider using [`PsbtParams::replace`] instead.
+    /// desired, consider using [`PsbtParams::replace_txs`] instead.
     ///
     /// # Example
     ///
@@ -3223,8 +3223,6 @@ impl Wallet {
     /// )?;
     /// # Ok::<_, anyhow::Error>(())
     /// ```
-    ///
-    /// [`replace_by_fee_with_aux_rand`]: Wallet::replace_by_fee_with_aux_rand
     #[cfg(feature = "std")]
     #[cfg_attr(docsrs, doc(cfg(feature = "std")))]
     pub fn replace_by_fee_and_recipients(
@@ -3270,7 +3268,7 @@ impl Wallet {
     ///
     /// ## Parameters:
     ///
-    /// - `params`: [`ReplaceParams`]
+    /// - `params`: [`PsbtParams`]
     /// - `rng`: Source of entropy, may be used during coin selection and to sort inputs and outputs
     ///   by the [`TxOrdering`](crate::wallet::tx_builder::TxOrdering).
     pub fn replace_by_fee_with_rng(

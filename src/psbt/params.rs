@@ -147,7 +147,7 @@ impl PsbtParams<CreateTx> {
     /// inputs to spend.
     ///
     /// This merges all of the spends into a single transaction while retaining the parameters
-    /// of `self`. Note however that any previously added UTXOs are removed. Call
+    /// of `self`. Note that any previously added UTXOs are removed. Call
     /// [`replace_by_fee_with_rng`](crate::Wallet::replace_by_fee_with_rng) to finish
     /// building the PSBT.
     ///
