@@ -763,13 +763,18 @@ pub struct SignOptions {
     /// Whether the signer should trust the `witness_utxo`, if the `non_witness_utxo` hasn't been
     /// provided
     ///
-    /// Defaults to `false` to mitigate the "SegWit bug" which could trick the wallet into
-    /// paying a fee larger than expected.
+    /// **Security Guard**: This is a pre-flight validation that protects against the "SegWit bug"
+    /// which could trick the wallet into paying a fee larger than expected.
+    ///
+    /// Defaults to `false` to mitigate this attack vector.
     ///
     /// Some wallets, especially if relatively old, might not provide the `non_witness_utxo` for
     /// SegWit transactions in the PSBT they generate: in those cases setting this to `true`
     /// should correctly produce a signature, at the expense of an increased trust in the creator
     /// of the PSBT.
+    ///
+    /// **Recommendation**: Keep enabled for security-critical applications. Only disable if you
+    /// fully trust the PSBT creator.
     ///
     /// For more details see: <https://blog.trezor.io/details-of-firmware-updates-for-trezor-one-version-1-9-1-and-trezor-model-t-version-2-3-1-1eba8f60f2dd>
     pub trust_witness_utxo: bool,
@@ -777,37 +782,77 @@ pub struct SignOptions {
     /// Whether the wallet should assume a specific height has been reached when trying to finalize
     /// a transaction
     ///
+    /// **DEPRECATED**: This option will be moved to `finalize_psbt()` in a future version.
+    /// Signing and finalization should be separate concerns.
+    ///
     /// The wallet will only "use" a timelock to satisfy the spending policy of an input if the
     /// timelock height has already been reached. This option allows overriding the "current
     /// height" to let the wallet use timelocks in the future to spend a coin.
+    ///
+    /// **Migration**: Use `finalize_psbt()` with its own options instead of setting this here.
     pub assume_height: Option<u32>,
 
     /// Whether the signer should use the `sighash_type` set in the PSBT when signing, no matter
     /// what its value is
     ///
+    /// **Security Guard**: This is a pre-flight validation that prevents the wallet from being
+    /// tricked into signing with unexpected sighash types.
+    ///
     /// Defaults to `false` which will only allow signing using `SIGHASH_ALL`.
+    ///
+    /// Setting this to `true` allows signing with any sighash type specified in the PSBT,
+    /// which should only be done if you fully understand the implications.
+    ///
+    /// **Recommendation**: Keep as `false` unless you have a specific reason to sign with
+    /// non-standard sighashes.
     pub allow_all_sighashes: bool,
 
     /// Whether to try finalizing the PSBT after the inputs are signed.
     ///
+    /// **DEPRECATED**: This option is redundant. Use the separate `finalize_psbt()` method instead.
+    /// Signing and finalization are now separate concerns.
+    ///
     /// Defaults to `true` which will try finalizing PSBT after inputs are signed.
+    ///
+    /// **Migration**: Remove this option from SignOptions, then call `finalize_psbt()` separately
+    /// when you want to finalize the transaction.
     pub try_finalize: bool,
 
     /// Specifies which Taproot script-spend leaves we should sign for. This option is
     /// ignored if we're signing a non-taproot PSBT.
     ///
+    /// **Status**: Currently infeasible due to architectural limitations with the `GetKey` abstraction.
+    /// Filtering which leaves to sign requires controlling the signing loop, which the current
+    /// generic GetKey interface doesn't support.
+    ///
     /// Defaults to All, i.e., the wallet will sign all the leaves it has a key for.
+    ///
+    /// **Note**: The `Include`, `Exclude`, and `None` variants may not work as expected in the
+    /// current implementation. This may be revisited in future versions with architecture changes.
     pub tap_leaves_options: TapLeavesOptions,
 
     /// Whether we should try to sign a taproot transaction with the taproot internal key
     /// or not. This option is ignored if we're signing a non-taproot PSBT.
     ///
+    /// **Status**: Currently infeasible due to architectural limitations with the `GetKey` abstraction.
+    /// The bitcoin `Psbt::sign` path doesn't allow filtering which taproot keys to use.
+    ///
     /// Defaults to `true`, i.e., we always try to sign with the taproot internal key.
+    ///
+    /// **Note**: This may not work as expected in the current implementation. This may be revisited
+    /// in future versions with architecture changes.
     pub sign_with_tap_internal_key: bool,
 
-    /// Whether we should grind ECDSA signature to ensure signing with low r
-    /// or not.
+    /// Whether we should grind ECDSA signature to ensure signing with low r or not.
+    ///
+    /// **Status**: Currently infeasible due to architectural limitations with the `GetKey` abstraction.
+    /// Controlling how ECDSA signatures are computed (sign_ecdsa_low_r vs sign_ecdsa) would require
+    /// injecting custom signing logic, which the generic GetKey interface doesn't support.
+    ///
     /// Defaults to `true`, i.e., we always grind ECDSA signature to sign with low r.
+    ///
+    /// **Note**: This may not work as expected in the current implementation. This may be revisited
+    /// in future versions with architecture changes.
     pub allow_grinding: bool,
 }
 
