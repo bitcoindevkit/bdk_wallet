@@ -124,7 +124,10 @@ impl Utxo {
                 ..
             } => {
                 if let Some(prev_tx) = &psbt_input.non_witness_utxo {
-                    return &prev_tx.output[outpoint.vout as usize];
+                    return prev_tx
+                        .output
+                        .get(outpoint.vout as usize)
+                        .expect("outpoint vout must be in bounds");
                 }
 
                 if let Some(txout) = &psbt_input.witness_utxo {
@@ -172,3 +175,94 @@ impl fmt::Display for IndexOutOfBoundsError {
 }
 
 impl core::error::Error for IndexOutOfBoundsError {}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use alloc::string::String;
+
+    use bitcoin::absolute::LockTime;
+    use bitcoin::transaction::{OutPoint, Sequence, TxOut, Version};
+    use bitcoin::{psbt, Amount, ScriptBuf, Transaction};
+
+    #[test]
+    fn test_foreign_utxo_txout_with_valid_vout() {
+        let prev_tx = Transaction {
+            version: Version::TWO,
+            lock_time: LockTime::ZERO,
+            input: vec![],
+            output: vec![
+                TxOut {
+                    value: Amount::from_sat(1_000),
+                    script_pubkey: ScriptBuf::new(),
+                },
+                TxOut {
+                    value: Amount::from_sat(2_000),
+                    script_pubkey: ScriptBuf::new(),
+                },
+            ],
+        };
+
+        let outpoint = OutPoint {
+            txid: prev_tx.compute_txid(),
+            vout: 1,
+        };
+
+        let psbt_input = psbt::Input {
+            non_witness_utxo: Some(prev_tx),
+            ..Default::default()
+        };
+
+        let utxo = Utxo::Foreign {
+            outpoint,
+            sequence: Sequence::ENABLE_RBF_NO_LOCKTIME,
+            psbt_input: Box::new(psbt_input),
+        };
+
+        let txout = utxo.txout();
+        assert_eq!(txout.value, Amount::from_sat(2_000));
+    }
+
+    #[test]
+    fn test_foreign_utxo_txout_with_invalid_vout_panics_with_message() {
+        let prev_tx = Transaction {
+            version: Version::TWO,
+            lock_time: LockTime::ZERO,
+            input: vec![],
+            output: vec![TxOut {
+                value: Amount::from_sat(1_000),
+                script_pubkey: ScriptBuf::new(),
+            }],
+        };
+
+        let outpoint = OutPoint {
+            txid: prev_tx.compute_txid(),
+            vout: 5, // out of bounds: only 1 output
+        };
+
+        let psbt_input = psbt::Input {
+            non_witness_utxo: Some(prev_tx),
+            ..Default::default()
+        };
+
+        let utxo = Utxo::Foreign {
+            outpoint,
+            sequence: Sequence::ENABLE_RBF_NO_LOCKTIME,
+            psbt_input: Box::new(psbt_input),
+        };
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            utxo.txout();
+        }));
+        let err = result.expect_err("txout() must panic for out-of-bounds vout");
+        let msg = err
+            .downcast_ref::<&str>()
+            .copied()
+            .or_else(|| err.downcast_ref::<String>().map(|s| s.as_str()))
+            .expect("panic payload must be a string");
+        assert!(
+            msg.contains("outpoint vout must be in bounds"),
+            "expected descriptive panic message, got: {msg}"
+        );
+    }
+}
