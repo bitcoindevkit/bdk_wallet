@@ -26,9 +26,8 @@ pub enum Error {
     MultiPath,
     /// Error thrown while working with [`keys`](crate::keys)
     Key(crate::keys::KeyError),
-    /// Error while extracting and manipulating policies
-    Policy(crate::descriptor::policy::PolicyError),
-
+    // /// Error while extracting and manipulating policies
+    // Policy(crate::descriptor::policy::PolicyError),
     /// Invalid byte found in the descriptor checksum
     InvalidDescriptorCharacter(u8),
 
@@ -72,7 +71,7 @@ impl fmt::Display for Error {
                 "The descriptor contains multipath keys with invalid number of paths (must have exactly 2 paths for receive and change)"
             ),
             Self::Key(err) => write!(f, "Key error: {err}"),
-            Self::Policy(err) => write!(f, "Policy error: {err}"),
+            // Self::Policy(err) => write!(f, "Policy error: {err}"),
             Self::InvalidDescriptorCharacter(char) => {
                 write!(f, "Invalid descriptor character: {char}")
             }
@@ -120,11 +119,11 @@ impl From<bitcoin::hex::HexToBytesError> for Error {
     }
 }
 
-impl From<crate::descriptor::policy::PolicyError> for Error {
-    fn from(err: crate::descriptor::policy::PolicyError) -> Self {
-        Error::Policy(err)
-    }
-}
+// impl From<crate::descriptor::policy::PolicyError> for Error {
+//     fn from(err: crate::descriptor::policy::PolicyError) -> Self {
+//         Error::Policy(err)
+//     }
+// }
 
 impl From<miniscript::RelLockTimeError> for Error {
     fn from(err: miniscript::RelLockTimeError) -> Self {
