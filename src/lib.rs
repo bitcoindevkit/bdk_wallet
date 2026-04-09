@@ -28,6 +28,7 @@ pub extern crate serde;
 pub extern crate serde_json;
 
 pub mod descriptor;
+pub mod keyring;
 pub mod keys;
 pub mod psbt;
 #[cfg(feature = "test-utils")]
@@ -46,8 +47,8 @@ pub use bdk_chain::rusqlite;
 pub use bdk_chain::rusqlite_impl;
 pub use descriptor::template;
 pub use descriptor::HdKeyPaths;
-pub use signer;
-pub use signer::SignOptions;
+// pub use signer;
+// pub use signer::SignOptions;
 pub use tx_builder::*;
 pub use types::*;
 pub use wallet::*;
