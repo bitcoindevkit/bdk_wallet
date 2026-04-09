@@ -8,7 +8,10 @@ use bdk_wallet::chain::collections::HashSet;
 use bdk_wallet::psbt::PsbtUtils;
 use bdk_wallet::rusqlite::Connection;
 use bdk_wallet::Wallet;
-use bdk_wallet::{KeychainKind, SignOptions};
+use bdk_wallet::{
+    KeychainKind, 
+    // SignOptions
+};
 use std::io::Write;
 use std::thread::sleep;
 use std::time::Duration;

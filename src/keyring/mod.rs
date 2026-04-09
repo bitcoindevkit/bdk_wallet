@@ -12,7 +12,6 @@
 //! The [`KeyRing`] is a utility type used to streamline the building of wallets that handle any
 //! number of descriptors. It ensures descriptors are usable together, consistent with a given
 //! network, and will work with a BDK [`Wallet`](crate::wallet::Wallet).
-#![allow(dead_code)]
 
 /// Contains [`Changeset`](crate::keyring::changeset::ChangeSet) corresponding to [`KeyRing`].
 pub mod changeset;

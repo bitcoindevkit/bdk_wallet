@@ -8,7 +8,7 @@ use bdk_chain::{BlockId, CanonicalizationParams, ConfirmationBlockTime};
 use bdk_wallet::descriptor::{calc_checksum, DescriptorError};
 // use bdk_wallet::error::CreateTxError;
 use bdk_wallet::psbt::PsbtUtils;
-use bdk_wallet::signer::{SignOptions, SignerError};
+// use bdk_wallet::signer::{SignOptions, SignerError};
 use bdk_wallet::test_utils::*;
 use bdk_wallet::KeychainKind;
 use bdk_wallet::{

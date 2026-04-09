@@ -4,7 +4,9 @@ use bdk_wallet::rusqlite::Connection;
 use bdk_wallet::{
     bitcoin::{Amount, FeeRate, Network},
     psbt::PsbtUtils,
-    KeychainKind, SignOptions, Wallet,
+    KeychainKind, 
+    // SignOptions, 
+    Wallet,
 };
 use std::thread::sleep;
 use std::time::Duration;

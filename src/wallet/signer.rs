@@ -9,10 +9,10 @@
 // You may not use this file except in accordance with one or both of these
 // licenses.
 
-//! Generalized signers
-//!
-//! This module provides the ability to add customized signers to a [`Wallet`](super::Wallet)
-//! through the [`Wallet::add_signer`](super::Wallet::add_signer) function.
+// //! Generalized signers
+// //!
+// //! This module provides the ability to add customized signers to a [`Wallet`](super::Wallet)
+// //! through the [`Wallet::add_signer`](super::Wallet::add_signer) function.
 // //! ```
 // //! # use alloc::sync::Arc;
 // //! # use core::str::FromStr;

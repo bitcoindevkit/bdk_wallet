@@ -4,7 +4,9 @@ use bdk_wallet::{
     bitcoin::{Amount, FeeRate, Network},
     psbt::PsbtUtils,
     rusqlite::Connection,
-    KeychainKind, SignOptions, Wallet,
+    KeychainKind, 
+    // SignOptions, 
+    Wallet,
 };
 use std::{collections::BTreeSet, io::Write};
 use tokio::time::{sleep, Duration};
