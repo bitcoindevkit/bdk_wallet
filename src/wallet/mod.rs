@@ -1802,6 +1802,17 @@ impl Wallet {
         }
     }
 
+    pub fn sign_psbt<K>(
+        &self,
+        psbt: &mut Psbt,
+        key: &K,
+    ) -> Result<psbt::SigningKeysMap, (psbt::SigningKeysMap, psbt::SigningErrors)>
+    where
+        K: psbt::GetKey,
+    {
+        psbt.sign(key, &self.secp)
+    }
+
     /// Return the spending policies for the wallet's descriptor.
     pub fn policies(&self, keychain: KeychainKind) -> Result<Option<Policy>, DescriptorError> {
         let signers = match keychain {
