@@ -1,3 +1,5 @@
+use bdk_wallet::bitcoin::bip32::Xpriv;
+use bdk_wallet::bitcoin::psbt::SigningKeys;
 use bdk_wallet::bitcoin::{Amount, FeeRate, Psbt, TxIn};
 use bdk_wallet::test_utils::*;
 use bdk_wallet::{psbt, KeychainKind, SignOptions};
@@ -220,4 +222,63 @@ fn test_psbt_multiple_internalkey_signers() {
     // Must verify if we used the correct key to sign
     let verify_res = secp.verify_schnorr(&signature, &message, &xonlykey);
     assert!(verify_res.is_ok(), "The wrong internal key was used");
+}
+
+// wpkh PSBT with bip32_derivation populated, derived from
+// tprv8ZgxMBicQKsPdy6LMhUtFHAgpocR8GC6QmwMSFpZs7h6Eziw3SpThFfczTDh5rW2krkqffa11UpX3XkeTTB2FvzZKWXqPY54Y6Rq4AQ5R8L
+const WPKH_PSBT_WITH_DERIVATION: &str = "cHNidP8BAHECAAAAAbOlV/kRKdNVk6Wn2cay5JUvpFw4tEsKWylqu+HfPKDyAAAAAAD9////ArObAAAAAAAAFgAU2+Ijq+8PDcPUGgHQqOPg9+6n9h8QJwAAAAAAABYAFKENkldInmhd2gMGYjkNwXeFL68T0AcAAAABAHEBAAAAATCzgdcz18YZK+8oNpJzqjM8ErFYW3hJLi+bO4bjmQrRAAAAAAD/////AlDDAAAAAAAAFgAUoQ2SV0ieaF3aAwZiOQ3Bd4UvrxOoYQAAAAAAABYAFIgWLNSQrRaGsRyWtCHaqeauCPYsAAAAAAEBH1DDAAAAAAAAFgAUoQ2SV0ieaF3aAwZiOQ3Bd4UvrxMiBgLOtp4iMz+DVWxdHvunWgM0a/PVLPvTn8XSTe0DTvfZ9Bjic/5CVAAAgAEAAIAAAACAAAAAAAAAAAAAIgIDxWYngmqPgL3saGZ4NTgcy5W/XINU8lkqnqjKC+oJuRwY4nP+QlQAAIABAACAAAAAgAEAAAAAAAAAACICAs62niIzP4NVbF0e+6daAzRr89Us+9OfxdJN7QNO99n0GOJz/kJUAACAAQAAgAAAAIAAAAAAAAAAAAA=";
+
+#[test]
+fn test_sign_psbt_with_xpriv() {
+    let mut psbt = Psbt::from_str(WPKH_PSBT_WITH_DERIVATION).unwrap();
+    let (desc, change_desc) = get_test_wpkh_and_change_desc();
+    let (wallet, _) = get_funded_wallet(desc, change_desc);
+
+    let xpriv = Xpriv::from_str(
+        "tprv8ZgxMBicQKsPdy6LMhUtFHAgpocR8GC6QmwMSFpZs7h6Eziw3SpThFfczTDh5rW2krkqffa11UpX3XkeTTB2FvzZKWXqPY54Y6Rq4AQ5R8L",
+    )
+    .unwrap();
+
+    let signing_keys = wallet
+        .sign_psbt(&mut psbt, &xpriv)
+        .expect("sign_psbt should succeed with the correct xpriv");
+
+    assert!(
+        !signing_keys.is_empty(),
+        "expected at least one input to be signed"
+    );
+}
+
+#[test]
+fn test_sign_psbt_with_wrong_key_signs_nothing() {
+    let mut psbt = Psbt::from_str(WPKH_PSBT_WITH_DERIVATION).unwrap();
+    let (desc, change_desc) = get_test_wpkh_and_change_desc();
+    let (wallet, _) = get_funded_wallet(desc, change_desc);
+
+    let wrong_xpriv = Xpriv::from_str(
+        "tprv8ZgxMBicQKsPd3EupYiPRhaMooHKUHJxNsTfYuScep13go8QFfHdtkG9nRkFGb7busX4isf6X9dURGCoKgitaApQ6MupRhZMcELAxTBRJgS",
+    )
+    .unwrap();
+
+    let signing_keys = wallet
+        .sign_psbt(&mut psbt, &wrong_xpriv)
+        .expect("sign_psbt returns Ok even when no keys matched");
+
+    let keys_used: usize = signing_keys
+        .values()
+        .map(|keys| match keys {
+            SigningKeys::Ecdsa(v) => v.len(),
+            SigningKeys::Schnorr(v) => v.len(),
+        })
+        .sum();
+    assert_eq!(
+        keys_used, 0,
+        "expected zero keys used when signing with an unrelated xpriv"
+    );
+    for input in &psbt.inputs {
+        assert!(
+            input.partial_sigs.is_empty(),
+            "expected no partial signatures when signing with an unrelated key"
+        );
+    }
 }
