@@ -1802,6 +1802,27 @@ impl Wallet {
         }
     }
 
+    /// Sign a PSBT using an external key provider via [`bitcoin::Psbt::sign`].
+    ///
+    /// This is a thin wrapper around [`bitcoin::Psbt::sign`] that supplies the wallet's
+    /// internal [`secp256k1`] context. It lets callers sign with any type that implements
+    /// [`psbt::GetKey`], such as [`bitcoin::bip32::Xpriv`], without having to manage their
+    /// own secp256k1 context.
+    ///
+    /// # BIP32 derivation metadata
+    ///
+    /// [`bitcoin::Psbt::sign`] uses the `bip32_derivation` fields (for legacy and segwit inputs)
+    /// or the `tap_key_origins` fields (for taproot inputs) in each PSBT input to locate
+    /// the correct child keys. PSBTs received from external coordinator tools or
+    /// hardware wallet flows typically carry this metadata already.
+    ///
+    /// # Returns
+    ///
+    /// On success, a [`psbt::SigningKeysMap`] mapping each signed input index to the keys
+    /// that were used. On failure, a tuple of the partial success map and a
+    /// [`psbt::SigningErrors`] map of per-input errors.
+    ///
+    /// [`secp256k1`]: bitcoin::secp256k1
     pub fn sign_psbt<K>(
         &self,
         psbt: &mut Psbt,
