@@ -236,6 +236,131 @@ fn test_create_tx_custom_version() {
 }
 
 #[test]
+fn test_create_tx_non_v3_excludes_unconfirmed_v3_utxos() {
+    let (descriptor, change_descriptor) = get_test_wpkh_and_change_desc();
+    let mut wallet = Wallet::create(descriptor, change_descriptor)
+        .network(Network::Regtest)
+        .create_wallet_no_persist()
+        .expect("wallet");
+
+    insert_checkpoint(
+        &mut wallet,
+        BlockId {
+            height: 1,
+            hash: BlockHash::all_zeros(),
+        },
+    );
+
+    let confirmed_tx = Transaction {
+        version: transaction::Version::ONE,
+        lock_time: absolute::LockTime::ZERO,
+        input: vec![],
+        output: vec![TxOut {
+            script_pubkey: wallet
+                .next_unused_address(KeychainKind::External)
+                .script_pubkey(),
+            value: Amount::from_sat(10_000),
+        }],
+    };
+    let confirmed_txid = confirmed_tx.compute_txid();
+    insert_tx(&mut wallet, confirmed_tx);
+    let block_id = wallet.latest_checkpoint().block_id();
+    insert_anchor(
+        &mut wallet,
+        confirmed_txid,
+        ConfirmationBlockTime {
+            block_id,
+            confirmation_time: 1,
+        },
+    );
+
+    let truc_tx = Transaction {
+        version: transaction::Version(3),
+        lock_time: absolute::LockTime::ZERO,
+        input: vec![],
+        output: vec![TxOut {
+            script_pubkey: wallet
+                .next_unused_address(KeychainKind::External)
+                .script_pubkey(),
+            value: Amount::from_sat(30_000),
+        }],
+    };
+    let truc_txid = truc_tx.compute_txid();
+    insert_tx(&mut wallet, truc_tx);
+
+    let recipient = wallet.next_unused_address(KeychainKind::External);
+
+    let mut builder = wallet.build_tx();
+    builder
+        .fee_rate(FeeRate::ZERO)
+        .add_recipient(recipient.script_pubkey(), Amount::from_sat(20_000));
+    assert_matches!(
+        builder.finish(),
+        Err(CreateTxError::CoinSelection(
+            coin_selection::InsufficientFunds { .. }
+        ))
+    );
+
+    let mut builder = wallet.build_tx();
+    builder
+        .fee_rate(FeeRate::ZERO)
+        .version(3)
+        .add_recipient(recipient.script_pubkey(), Amount::from_sat(20_000));
+    let psbt = builder
+        .finish()
+        .expect("v3 transaction should be buildable");
+
+    assert_eq!(psbt.unsigned_tx.version, transaction::Version(3));
+    assert!(
+        psbt.unsigned_tx
+            .input
+            .iter()
+            .any(|input| input.previous_output.txid == truc_txid),
+        "version=3 transaction should be able to spend the unconfirmed v3 output"
+    );
+}
+
+#[test]
+fn test_create_tx_non_v3_allows_unconfirmed_non_v3_utxos() {
+    let (descriptor, change_descriptor) = get_test_wpkh_and_change_desc();
+    let mut wallet = Wallet::create(descriptor, change_descriptor)
+        .network(Network::Regtest)
+        .create_wallet_no_persist()
+        .expect("wallet");
+
+    let unconfirmed_tx = Transaction {
+        version: transaction::Version::ONE,
+        lock_time: absolute::LockTime::ZERO,
+        input: vec![],
+        output: vec![TxOut {
+            script_pubkey: wallet
+                .next_unused_address(KeychainKind::External)
+                .script_pubkey(),
+            value: Amount::from_sat(30_000),
+        }],
+    };
+    let unconfirmed_txid = unconfirmed_tx.compute_txid();
+    insert_tx(&mut wallet, unconfirmed_tx);
+
+    let recipient = wallet.next_unused_address(KeychainKind::External);
+    let mut builder = wallet.build_tx();
+    builder
+        .fee_rate(FeeRate::ZERO)
+        .add_recipient(recipient.script_pubkey(), Amount::from_sat(20_000));
+    let psbt = builder
+        .finish()
+        .expect("non-v3 unconfirmed outputs should remain spendable");
+
+    assert!(
+        psbt.unsigned_tx
+            .input
+            .iter()
+            .any(|input| input.previous_output.txid == unconfirmed_txid),
+        "expected the unconfirmed non-v3 output to be available for selection"
+    );
+}
+
+#[test]
 fn test_create_tx_default_locktime_is_last_sync_height() {
     let (mut wallet, _) = get_funded_wallet_wpkh();
 
