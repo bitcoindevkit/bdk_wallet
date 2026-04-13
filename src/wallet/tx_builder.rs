@@ -322,6 +322,10 @@ impl<'a, Cs> TxBuilder<'a, Cs> {
     ///
     /// These have priority over the "unspendable" UTXOs, meaning that if a UTXO is present both in
     /// the "UTXOs" and the "unspendable" list, it will be spent.
+    ///
+    /// Manually selected UTXOs bypass optional-UTXO filtering (for example TRUC version
+    /// compatibility checks). Callers must ensure any manually selected unconfirmed UTXO is valid
+    /// for the transaction version being built.
     pub fn add_utxo(&mut self, outpoint: OutPoint) -> Result<&mut Self, AddUtxoError> {
         self.add_utxos(&[outpoint])
     }
@@ -338,6 +342,10 @@ impl<'a, Cs> TxBuilder<'a, Cs> {
     /// UTXOs through the [`TxBuilder::add_utxo`] method.
     /// A manually added local UTXO will always have greater precedence than a foreign UTXO. No
     /// matter if it was added before or after the foreign UTXO.
+    ///
+    /// Manually selected UTXOs bypass optional-UTXO filtering (for example TRUC version
+    /// compatibility checks). Callers must ensure any manually selected unconfirmed UTXO is valid
+    /// for the transaction version being built.
     ///
     /// At a minimum to add a foreign UTXO we need:
     ///
