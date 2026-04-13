@@ -5,10 +5,10 @@ use bitcoin::{BlockHash, Network, NetworkKind};
 use miniscript::descriptor::KeyMap;
 
 use crate::{
-    descriptor::{DescriptorError, ExtendedDescriptor, IntoWalletDescriptor},
-    utils::SecpCtx,
     AsyncWalletPersister, CreateWithPersistError, KeychainKind, LoadWithPersistError, Wallet,
     WalletPersister,
+    descriptor::{DescriptorError, ExtendedDescriptor, IntoWalletDescriptor},
+    utils::SecpCtx,
 };
 
 use super::{ChangeSet, LoadError, PersistedWallet};

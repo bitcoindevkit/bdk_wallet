@@ -101,14 +101,14 @@
 //! # Ok::<(), anyhow::Error>(())
 //! ```
 
-use crate::wallet::utils::IsDust;
 use crate::Utxo;
 use crate::WeightedUtxo;
+use crate::wallet::utils::IsDust;
 use bitcoin::{Amount, FeeRate, SignedAmount};
 
 use alloc::vec::Vec;
-use bitcoin::consensus::encode::serialize;
 use bitcoin::TxIn;
+use bitcoin::consensus::encode::serialize;
 use bitcoin::{Script, Weight};
 
 use core::convert::TryInto;
@@ -727,7 +727,7 @@ fn calculate_cs_result(
 mod test {
     use assert_matches::assert_matches;
     use bitcoin::hashes::Hash;
-    use bitcoin::{psbt, OutPoint, Sequence};
+    use bitcoin::{OutPoint, Sequence, psbt};
     use chain::{ChainPosition, ConfirmationBlockTime};
     use core::str::FromStr;
     use rand::rngs::StdRng;
@@ -739,7 +739,7 @@ mod test {
     use crate::types::*;
 
     use rand::prelude::SliceRandom;
-    use rand::{thread_rng, Rng, RngCore, SeedableRng};
+    use rand::{Rng, RngCore, SeedableRng, thread_rng};
 
     // signature len (1WU) + signature and sighash (72WU)
     // + pubkey len (1WU) + pubkey (33WU)
@@ -1120,10 +1120,12 @@ mod test {
         assert_eq!(result.selected.len(), 3);
         assert_eq!(result.selected_amount(), Amount::from_sat(500_000));
         assert_eq!(result.fee_amount, Amount::from_sat(204));
-        assert!(result
-            .selected
-            .iter()
-            .all(|utxo| matches!(utxo, Utxo::Local(..))));
+        assert!(
+            result
+                .selected
+                .iter()
+                .all(|utxo| matches!(utxo, Utxo::Local(..)))
+        );
     }
 
     #[test]

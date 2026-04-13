@@ -12,7 +12,7 @@
 use alloc::sync::Arc;
 use bitcoin::secp256k1::{All, Secp256k1};
 use bitcoin::{
-    absolute, relative, Amount, FeeRate, Script, Sequence, SignedAmount, Transaction, Txid,
+    Amount, FeeRate, Script, Sequence, SignedAmount, Transaction, Txid, absolute, relative,
 };
 use chain::{ChainPosition, ConfirmationBlockTime};
 use miniscript::{MiniscriptKey, Satisfier, ToPublicKey};
@@ -170,11 +170,11 @@ mod test {
     // otherwise it's time-based
     pub(crate) const SEQUENCE_LOCKTIME_TYPE_FLAG: u32 = 1 << 22;
 
-    use super::{check_nsequence_rbf, shuffle_slice, IsDust};
+    use super::{IsDust, check_nsequence_rbf, shuffle_slice};
     use crate::bitcoin::{Address, Network, Sequence};
     use alloc::vec::Vec;
     use core::str::FromStr;
-    use rand::{rngs::StdRng, thread_rng, SeedableRng};
+    use rand::{SeedableRng, rngs::StdRng, thread_rng};
 
     #[test]
     fn test_is_dust() {

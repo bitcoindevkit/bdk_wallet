@@ -1,16 +1,16 @@
 use bdk_bitcoind_rpc::{
-    bitcoincore_rpc::{Auth, Client, RpcApi},
     Emitter, MempoolEvent,
+    bitcoincore_rpc::{Auth, Client, RpcApi},
 };
 use bdk_wallet::rusqlite::Connection;
 use bdk_wallet::{
-    bitcoin::{Block, Network},
     KeychainKind, Wallet,
+    bitcoin::{Block, Network},
 };
 use clap::{self, Parser};
 use std::{
     path::PathBuf,
-    sync::{mpsc::sync_channel, Arc},
+    sync::{Arc, mpsc::sync_channel},
     thread::spawn,
     time::Instant,
 };

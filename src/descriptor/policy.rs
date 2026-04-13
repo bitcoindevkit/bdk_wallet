@@ -42,22 +42,22 @@ use core::cmp::max;
 use core::fmt;
 
 use bitcoin::{
-    absolute,
+    PublicKey, Sequence, absolute,
     bip32::Fingerprint,
     hashes::{hash160, ripemd160, sha256},
     key::XOnlyPublicKey,
     psbt::{self, Psbt},
-    relative, PublicKey, Sequence,
+    relative,
 };
 use miniscript::descriptor::{
     DescriptorPublicKey, ShInner, SinglePub, SinglePubKey, SortedMultiVec, WshInner,
 };
 use miniscript::miniscript::limits::{MAX_PUBKEYS_IN_CHECKSIGADD, MAX_PUBKEYS_PER_MULTISIG};
 use miniscript::{
-    hash256, psbt::PsbtInputSatisfier, Descriptor, Miniscript, Satisfier, ScriptContext, SigType,
-    Terminal, Threshold, ToPublicKey,
+    Descriptor, Miniscript, Satisfier, ScriptContext, SigType, Terminal, Threshold, ToPublicKey,
+    hash256, psbt::PsbtInputSatisfier,
 };
-use serde::{ser::SerializeMap, Serialize, Serializer};
+use serde::{Serialize, Serializer, ser::SerializeMap};
 
 use crate::collections::{BTreeMap, HashSet, VecDeque};
 use crate::descriptor::ExtractPolicy;
@@ -66,9 +66,9 @@ use crate::types::IndexOutOfBoundsError;
 use crate::wallet::signer::{SignerId, SignersContainer};
 use crate::wallet::utils::{After, Older, SecpCtx};
 
+use super::XKeyUtils;
 use super::checksum::calc_checksum;
 use super::error::Error;
-use super::XKeyUtils;
 
 /// A unique identifier for a key
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
@@ -319,8 +319,8 @@ impl Satisfaction {
             Satisfaction::PartialComplete { .. } => Err(PolicyError::AddOnPartialComplete),
             Satisfaction::Partial {
                 n,
-                ref mut conditions,
-                ref mut items,
+                conditions,
+                items,
                 ..
             } => {
                 if inner_index >= *n || items.contains(&inner_index) {
@@ -1133,17 +1133,15 @@ impl ExtractPolicy for Descriptor<DescriptorPublicKey> {
                     secp,
                 ))),
                 ShInner::Ms(ms) => Ok(ms.extract_policy(signers, build_sat, secp)?),
-                ShInner::SortedMulti(ref keys) => make_sortedmulti(keys, signers, build_sat, secp),
+                ShInner::SortedMulti(keys) => make_sortedmulti(keys, signers, build_sat, secp),
                 ShInner::Wsh(wsh) => match wsh.as_inner() {
                     WshInner::Ms(ms) => Ok(ms.extract_policy(signers, build_sat, secp)?),
-                    WshInner::SortedMulti(ref keys) => {
-                        make_sortedmulti(keys, signers, build_sat, secp)
-                    }
+                    WshInner::SortedMulti(keys) => make_sortedmulti(keys, signers, build_sat, secp),
                 },
             },
             Descriptor::Wsh(wsh) => match wsh.as_inner() {
                 WshInner::Ms(ms) => Ok(ms.extract_policy(signers, build_sat, secp)?),
-                WshInner::SortedMulti(ref keys) => make_sortedmulti(keys, signers, build_sat, secp),
+                WshInner::SortedMulti(keys) => make_sortedmulti(keys, signers, build_sat, secp),
             },
             Descriptor::Bare(ms) => Ok(ms.as_inner().extract_policy(signers, build_sat, secp)?),
             Descriptor::Tr(tr) => {
@@ -1181,20 +1179,20 @@ mod test {
     use assert_matches::assert_matches;
     use core::str::FromStr;
 
-    use bitcoin::{bip32, secp256k1::Secp256k1, Network, NetworkKind};
+    use bitcoin::{Network, NetworkKind, bip32, secp256k1::Secp256k1};
 
     use crate::keys::{DescriptorKey, IntoDescriptorKey};
     use crate::wallet::signer::SignersContainer;
     use crate::{
         descriptor,
         descriptor::{
-            policy::SatisfiableItem::{EcdsaSignature, Multisig, Thresh},
             ExtractPolicy, IntoWalletDescriptor,
+            policy::SatisfiableItem::{EcdsaSignature, Multisig, Thresh},
         },
     };
 
-    const TPRV0_STR:&str = "tprv8ZgxMBicQKsPdZXrcHNLf5JAJWFAoJ2TrstMRdSKtEggz6PddbuSkvHKM9oKJyFgZV1B7rw8oChspxyYbtmEXYyg1AjfWbL3ho3XHDpHRZf";
-    const TPRV1_STR:&str = "tprv8ZgxMBicQKsPdpkqS7Eair4YxjcuuvDPNYmKX3sCniCf16tHEVrjjiSXEkFRnUH77yXc6ZcwHHcLNfjdi5qUvw3VDfgYiH5mNsj5izuiu2N";
+    const TPRV0_STR: &str = "tprv8ZgxMBicQKsPdZXrcHNLf5JAJWFAoJ2TrstMRdSKtEggz6PddbuSkvHKM9oKJyFgZV1B7rw8oChspxyYbtmEXYyg1AjfWbL3ho3XHDpHRZf";
+    const TPRV1_STR: &str = "tprv8ZgxMBicQKsPdpkqS7Eair4YxjcuuvDPNYmKX3sCniCf16tHEVrjjiSXEkFRnUH77yXc6ZcwHHcLNfjdi5qUvw3VDfgYiH5mNsj5izuiu2N";
 
     const PATH: &str = "m/44'/1'/0'/0";
 
@@ -1597,16 +1595,16 @@ mod test {
         );
     }
 
-    const ALICE_TPRV_STR:&str = "tprv8ZgxMBicQKsPf6T5X327efHnvJDr45Xnb8W4JifNWtEoqXu9MRYS4v1oYe6DFcMVETxy5w3bqpubYRqvcVTqovG1LifFcVUuJcbwJwrhYzP";
-    const BOB_TPRV_STR:&str = "tprv8ZgxMBicQKsPeinZ155cJAn117KYhbaN6MV3WeG6sWhxWzcvX1eg1awd4C9GpUN1ncLEM2rzEvunAg3GizdZD4QPPCkisTz99tXXB4wZArp";
-    const CAROL_TPRV_STR:&str = "tprv8ZgxMBicQKsPdC3CicFifuLCEyVVdXVUNYorxUWj3iGZ6nimnLAYAY9SYB7ib8rKzRxrCKFcEytCt6szwd2GHnGPRCBLAEAoSVDefSNk4Bt";
+    const ALICE_TPRV_STR: &str = "tprv8ZgxMBicQKsPf6T5X327efHnvJDr45Xnb8W4JifNWtEoqXu9MRYS4v1oYe6DFcMVETxy5w3bqpubYRqvcVTqovG1LifFcVUuJcbwJwrhYzP";
+    const BOB_TPRV_STR: &str = "tprv8ZgxMBicQKsPeinZ155cJAn117KYhbaN6MV3WeG6sWhxWzcvX1eg1awd4C9GpUN1ncLEM2rzEvunAg3GizdZD4QPPCkisTz99tXXB4wZArp";
+    const CAROL_TPRV_STR: &str = "tprv8ZgxMBicQKsPdC3CicFifuLCEyVVdXVUNYorxUWj3iGZ6nimnLAYAY9SYB7ib8rKzRxrCKFcEytCt6szwd2GHnGPRCBLAEAoSVDefSNk4Bt";
     const ALICE_BOB_PATH: &str = "m/0'";
 
     #[test]
     fn test_extract_satisfaction() {
         const ALICE_SIGNED_PSBT: &str = "cHNidP8BAFMBAAAAAZb0njwT2wRS3AumaaP3yb7T4MxOePpSWih4Nq+jWChMAQAAAAD/////Af4lAAAAAAAAF6kUXv2Fn+YemPP4PUpNR1ZbU16/eRCHAAAAAAABASuJJgAAAAAAACIAIERw5kTLo9DUH9QDJSClHQwPpC7VGJ+ZMDpa8U+2fzcYIgIDeAtjYQk/Vfu4db2+68hyMKjc38+kWl5sP5QH8L42ZstHMEQCIBj0jLjUeVYXNQ6cqB+gbtvuKMjV54wSgWlm1cfcgpHVAiBa3DtC9l/1Mt4IDCvR7mmwQd3eAP/m5++81euhJNSrgQEBBUdSIQN4C2NhCT9V+7h1vb7ryHIwqNzfz6RaXmw/lAfwvjZmyyEC+GE/y+LptI8xmiR6sOe998IGzybox0Qfz4+BQl1nmYhSriIGAvhhP8vi6bSPMZokerDnvffCBs8m6MdEH8+PgUJdZ5mIDBwu7j4AAACAAAAAACIGA3gLY2EJP1X7uHW9vuvIcjCo3N/PpFpebD+UB/C+NmbLDMkRfC4AAACAAAAAAAAA";
-        const BOB_SIGNED_PSBT: &str =   "cHNidP8BAFMBAAAAAZb0njwT2wRS3AumaaP3yb7T4MxOePpSWih4Nq+jWChMAQAAAAD/////Af4lAAAAAAAAF6kUXv2Fn+YemPP4PUpNR1ZbU16/eRCHAAAAAAABASuJJgAAAAAAACIAIERw5kTLo9DUH9QDJSClHQwPpC7VGJ+ZMDpa8U+2fzcYIgIC+GE/y+LptI8xmiR6sOe998IGzybox0Qfz4+BQl1nmYhIMEUCIQD5zDtM5MwklurwJ5aW76RsO36Iqyu+6uMdVlhL6ws2GQIgesAiz4dbKS7UmhDsC/c1ezu0o6hp00UUtsCMfUZ4anYBAQVHUiEDeAtjYQk/Vfu4db2+68hyMKjc38+kWl5sP5QH8L42ZsshAvhhP8vi6bSPMZokerDnvffCBs8m6MdEH8+PgUJdZ5mIUq4iBgL4YT/L4um0jzGaJHqw5733wgbPJujHRB/Pj4FCXWeZiAwcLu4+AAAAgAAAAAAiBgN4C2NhCT9V+7h1vb7ryHIwqNzfz6RaXmw/lAfwvjZmywzJEXwuAAAAgAAAAAAAAA==";
-        const ALICE_BOB_SIGNED_PSBT: &str =   "cHNidP8BAFMBAAAAAZb0njwT2wRS3AumaaP3yb7T4MxOePpSWih4Nq+jWChMAQAAAAD/////Af4lAAAAAAAAF6kUXv2Fn+YemPP4PUpNR1ZbU16/eRCHAAAAAAABASuJJgAAAAAAACIAIERw5kTLo9DUH9QDJSClHQwPpC7VGJ+ZMDpa8U+2fzcYIgIC+GE/y+LptI8xmiR6sOe998IGzybox0Qfz4+BQl1nmYhIMEUCIQD5zDtM5MwklurwJ5aW76RsO36Iqyu+6uMdVlhL6ws2GQIgesAiz4dbKS7UmhDsC/c1ezu0o6hp00UUtsCMfUZ4anYBIgIDeAtjYQk/Vfu4db2+68hyMKjc38+kWl5sP5QH8L42ZstHMEQCIBj0jLjUeVYXNQ6cqB+gbtvuKMjV54wSgWlm1cfcgpHVAiBa3DtC9l/1Mt4IDCvR7mmwQd3eAP/m5++81euhJNSrgQEBBUdSIQN4C2NhCT9V+7h1vb7ryHIwqNzfz6RaXmw/lAfwvjZmyyEC+GE/y+LptI8xmiR6sOe998IGzybox0Qfz4+BQl1nmYhSriIGAvhhP8vi6bSPMZokerDnvffCBs8m6MdEH8+PgUJdZ5mIDBwu7j4AAACAAAAAACIGA3gLY2EJP1X7uHW9vuvIcjCo3N/PpFpebD+UB/C+NmbLDMkRfC4AAACAAAAAAAEHAAEI2wQARzBEAiAY9Iy41HlWFzUOnKgfoG7b7ijI1eeMEoFpZtXH3IKR1QIgWtw7QvZf9TLeCAwr0e5psEHd3gD/5ufvvNXroSTUq4EBSDBFAiEA+cw7TOTMJJbq8CeWlu+kbDt+iKsrvurjHVZYS+sLNhkCIHrAIs+HWyku1JoQ7Av3NXs7tKOoadNFFLbAjH1GeGp2AUdSIQN4C2NhCT9V+7h1vb7ryHIwqNzfz6RaXmw/lAfwvjZmyyEC+GE/y+LptI8xmiR6sOe998IGzybox0Qfz4+BQl1nmYhSrgAA";
+        const BOB_SIGNED_PSBT: &str = "cHNidP8BAFMBAAAAAZb0njwT2wRS3AumaaP3yb7T4MxOePpSWih4Nq+jWChMAQAAAAD/////Af4lAAAAAAAAF6kUXv2Fn+YemPP4PUpNR1ZbU16/eRCHAAAAAAABASuJJgAAAAAAACIAIERw5kTLo9DUH9QDJSClHQwPpC7VGJ+ZMDpa8U+2fzcYIgIC+GE/y+LptI8xmiR6sOe998IGzybox0Qfz4+BQl1nmYhIMEUCIQD5zDtM5MwklurwJ5aW76RsO36Iqyu+6uMdVlhL6ws2GQIgesAiz4dbKS7UmhDsC/c1ezu0o6hp00UUtsCMfUZ4anYBAQVHUiEDeAtjYQk/Vfu4db2+68hyMKjc38+kWl5sP5QH8L42ZsshAvhhP8vi6bSPMZokerDnvffCBs8m6MdEH8+PgUJdZ5mIUq4iBgL4YT/L4um0jzGaJHqw5733wgbPJujHRB/Pj4FCXWeZiAwcLu4+AAAAgAAAAAAiBgN4C2NhCT9V+7h1vb7ryHIwqNzfz6RaXmw/lAfwvjZmywzJEXwuAAAAgAAAAAAAAA==";
+        const ALICE_BOB_SIGNED_PSBT: &str = "cHNidP8BAFMBAAAAAZb0njwT2wRS3AumaaP3yb7T4MxOePpSWih4Nq+jWChMAQAAAAD/////Af4lAAAAAAAAF6kUXv2Fn+YemPP4PUpNR1ZbU16/eRCHAAAAAAABASuJJgAAAAAAACIAIERw5kTLo9DUH9QDJSClHQwPpC7VGJ+ZMDpa8U+2fzcYIgIC+GE/y+LptI8xmiR6sOe998IGzybox0Qfz4+BQl1nmYhIMEUCIQD5zDtM5MwklurwJ5aW76RsO36Iqyu+6uMdVlhL6ws2GQIgesAiz4dbKS7UmhDsC/c1ezu0o6hp00UUtsCMfUZ4anYBIgIDeAtjYQk/Vfu4db2+68hyMKjc38+kWl5sP5QH8L42ZstHMEQCIBj0jLjUeVYXNQ6cqB+gbtvuKMjV54wSgWlm1cfcgpHVAiBa3DtC9l/1Mt4IDCvR7mmwQd3eAP/m5++81euhJNSrgQEBBUdSIQN4C2NhCT9V+7h1vb7ryHIwqNzfz6RaXmw/lAfwvjZmyyEC+GE/y+LptI8xmiR6sOe998IGzybox0Qfz4+BQl1nmYhSriIGAvhhP8vi6bSPMZokerDnvffCBs8m6MdEH8+PgUJdZ5mIDBwu7j4AAACAAAAAACIGA3gLY2EJP1X7uHW9vuvIcjCo3N/PpFpebD+UB/C+NmbLDMkRfC4AAACAAAAAAAEHAAEI2wQARzBEAiAY9Iy41HlWFzUOnKgfoG7b7ijI1eeMEoFpZtXH3IKR1QIgWtw7QvZf9TLeCAwr0e5psEHd3gD/5ufvvNXroSTUq4EBSDBFAiEA+cw7TOTMJJbq8CeWlu+kbDt+iKsrvurjHVZYS+sLNhkCIHrAIs+HWyku1JoQ7Av3NXs7tKOoadNFFLbAjH1GeGp2AUdSIQN4C2NhCT9V+7h1vb7ryHIwqNzfz6RaXmw/lAfwvjZmyyEC+GE/y+LptI8xmiR6sOe998IGzybox0Qfz4+BQl1nmYhSrgAA";
 
         let secp = Secp256k1::new();
 

@@ -93,9 +93,9 @@ use bitcoin::bip32::{ChildNumber, DerivationPath, Fingerprint, Xpriv};
 use bitcoin::hashes::hash160;
 use bitcoin::secp256k1::Message;
 use bitcoin::sighash::{EcdsaSighashType, TapSighash, TapSighashType};
+use bitcoin::{PrivateKey, Psbt, PublicKey};
 use bitcoin::{ecdsa, psbt, sighash, taproot};
 use bitcoin::{key::TapTweak, key::XOnlyPublicKey, secp256k1};
-use bitcoin::{PrivateKey, Psbt, PublicKey};
 
 use miniscript::descriptor::{
     Descriptor, DescriptorMultiXKey, DescriptorPublicKey, DescriptorSecretKey, DescriptorXKey,
@@ -178,7 +178,10 @@ impl fmt::Display for SignerError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::MissingKey => write!(f, "Missing private key"),
-            Self::InvalidKey => write!(f, "The private key in use has the right fingerprint but derives differently than expected"),
+            Self::InvalidKey => write!(
+                f,
+                "The private key in use has the right fingerprint but derives differently than expected"
+            ),
             Self::UserCanceled => write!(f, "The user canceled the operation"),
             Self::InputIndexOutOfRange(err) => write!(f, "{err}"),
             Self::MissingNonWitnessUtxo => write!(f, "Missing non-witness UTXO"),
@@ -188,7 +191,10 @@ impl fmt::Display for SignerError {
             Self::MissingHdKeypath => write!(f, "Missing fingerprint and derivation path"),
             Self::NonStandardSighash => write!(f, "The psbt contains a non standard sighash"),
             Self::InvalidSighash => write!(f, "Invalid SIGHASH for the signing context in use"),
-            Self::SighashTaproot(err) => write!(f, "Error while computing the hash to sign a Taproot input: {err}"),
+            Self::SighashTaproot(err) => write!(
+                f,
+                "Error while computing the hash to sign a Taproot input: {err}"
+            ),
             Self::Psbt(err) => write!(f, "Error computing the sighash: {err}"),
             Self::MiniscriptPsbt(err) => write!(f, "Miniscript PSBT error: {err}"),
             Self::External(err) => write!(f, "{err}"),
@@ -927,9 +933,8 @@ mod signers_container_tests {
 
     use assert_matches::assert_matches;
     use bitcoin::{
-        bip32,
+        NetworkKind, bip32,
         secp256k1::{All, Secp256k1},
-        NetworkKind,
     };
     use core::str::FromStr;
     use miniscript::ScriptContext;
@@ -1032,8 +1037,8 @@ mod signers_container_tests {
         }
     }
 
-    const TPRV0_STR:&str = "tprv8ZgxMBicQKsPdZXrcHNLf5JAJWFAoJ2TrstMRdSKtEggz6PddbuSkvHKM9oKJyFgZV1B7rw8oChspxyYbtmEXYyg1AjfWbL3ho3XHDpHRZf";
-    const TPRV1_STR:&str = "tprv8ZgxMBicQKsPdpkqS7Eair4YxjcuuvDPNYmKX3sCniCf16tHEVrjjiSXEkFRnUH77yXc6ZcwHHcLNfjdi5qUvw3VDfgYiH5mNsj5izuiu2N";
+    const TPRV0_STR: &str = "tprv8ZgxMBicQKsPdZXrcHNLf5JAJWFAoJ2TrstMRdSKtEggz6PddbuSkvHKM9oKJyFgZV1B7rw8oChspxyYbtmEXYyg1AjfWbL3ho3XHDpHRZf";
+    const TPRV1_STR: &str = "tprv8ZgxMBicQKsPdpkqS7Eair4YxjcuuvDPNYmKX3sCniCf16tHEVrjjiSXEkFRnUH77yXc6ZcwHHcLNfjdi5qUvw3VDfgYiH5mNsj5izuiu2N";
 
     const PATH: &str = "m/44'/1'/0'/0";
 

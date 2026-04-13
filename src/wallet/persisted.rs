@@ -11,8 +11,8 @@ use chain::Merge;
 
 use crate::error::LoadError;
 use crate::{
-    descriptor::{calc_checksum, DescriptorError},
     ChangeSet, CreateParams, LoadParams, Wallet,
+    descriptor::{DescriptorError, calc_checksum},
 };
 
 /// Trait that persists [`PersistedWallet`].

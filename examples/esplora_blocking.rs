@@ -1,9 +1,9 @@
-use bdk_esplora::{esplora_client, EsploraExt};
+use bdk_esplora::{EsploraExt, esplora_client};
 use bdk_wallet::rusqlite::Connection;
 use bdk_wallet::{
+    KeychainKind, SignOptions, Wallet,
     bitcoin::{Amount, FeeRate, Network},
     psbt::PsbtUtils,
-    KeychainKind, SignOptions, Wallet,
 };
 use std::thread::sleep;
 use std::time::Duration;
