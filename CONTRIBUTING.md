@@ -98,12 +98,9 @@ All new features require testing. Tests should be unique and self-describing. If
 Security
 --------
 
-Security is a high priority of BDK; disclosure of security vulnerabilities helps
-prevent user loss of funds.
+Given the critical nature of BDK as a wallet library, we take security very seriously.
 
-Note that BDK is currently considered "pre-production" during this time, there
-is no special handling of security issues. Please simply open an issue on
-Github.
+For information on how to report security vulnerabilities, please refer to the [Security Policy](SECURITY.md).
 
 Testing
 -------
