@@ -1115,12 +1115,54 @@ impl Wallet {
     /// Return the balance, separated into available, trusted-pending, untrusted-pending, and
     /// immature values.
     pub fn balance(&self) -> Balance {
-        self.tx_graph.graph().balance(
+        let graph = self.tx_graph.graph();
+        let index = &self.tx_graph.index;
+
+        let owned_outpoints: HashSet<OutPoint> =
+            index.outpoints().iter().map(|(_, op)| *op).collect();
+
+        let mut untrusted_outpoints: HashSet<OutPoint> = HashSet::new();
+
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for tx_node in graph.full_txs() {
+                if tx_node.tx.is_coinbase() {
+                    continue;
+                }
+                let is_untrusted = tx_node.tx.input.iter().any(|txin| {
+                    !owned_outpoints.contains(&txin.previous_output)
+                        || untrusted_outpoints.contains(&txin.previous_output)
+                });
+                if is_untrusted {
+                    for (vout, _) in tx_node.tx.output.iter().enumerate() {
+                        let op = OutPoint {
+                            txid: tx_node.txid,
+                            vout: vout as u32,
+                        };
+                        if owned_outpoints.contains(&op) && untrusted_outpoints.insert(op) {
+                            changed = true;
+                        }
+                    }
+                }
+            }
+        }
+
+        let trusted_outpoints: HashSet<&OutPoint> =
+            owned_outpoints.difference(&untrusted_outpoints).collect();
+
+        let keyed_outpoints = index
+            .outpoints()
+            .iter()
+            .cloned()
+            .map(|((k, i), op)| ((k, i, op), op));
+
+        graph.balance(
             &self.chain,
             self.chain.tip().block_id(),
             CanonicalizationParams::default(),
-            self.tx_graph.index.outpoints().iter().cloned(),
-            |&(k, _), _| k == KeychainKind::Internal,
+            keyed_outpoints,
+            |&(_, _, op), _| trusted_outpoints.contains(&op),
         )
     }
 
