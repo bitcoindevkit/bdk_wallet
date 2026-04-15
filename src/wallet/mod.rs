@@ -886,6 +886,31 @@ impl Wallet {
             .next()
     }
 
+    /// Inserts a full [`Transaction`] into the wallet's transaction graph.
+    ///
+    /// This is used for providing a previous transaction when wallet operations require the full
+    /// transaction data rather than only a [`TxOut`], such as reconstructing a `non_witness_utxo`
+    /// for foreign inputs.
+    ///
+    /// Transactions inserted with this method may affect wallet queries such as [`get_tx`],
+    /// [`list_unspent`], or [`list_output`] if they are relevant to this wallet.
+    ///
+    /// **WARNINGS:** This should only be used to add transactions that you trust. If the
+    /// transaction contains outputs owned by this wallet, those outputs will be indexed as wallet
+    /// outputs.
+    ///
+    /// You must persist the changes resulting from one or more calls to this method if you need
+    /// the inserted transaction data to be reloaded after closing the wallet.
+    /// See [`Wallet::reveal_next_address`].
+    ///
+    /// [`get_tx`]: Self::get_tx
+    /// [`list_unspent`]: Self::list_unspent
+    /// [`list_output`]: Self::list_output
+    pub fn insert_tx<T: Into<Arc<Transaction>>>(&mut self, tx: T) {
+        let additions = self.tx_graph.insert_tx(tx);
+        self.stage.merge(additions.into());
+    }
+
     /// Inserts a [`TxOut`] at [`OutPoint`] into the wallet's transaction graph.
     ///
     /// This is used for providing a previous output's value so that we can use [`calculate_fee`]
