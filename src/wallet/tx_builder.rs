@@ -138,7 +138,7 @@ pub(crate) struct TxParams {
     pub(crate) only_witness_utxo: bool,
     pub(crate) add_global_xpubs: bool,
     pub(crate) bumping_fee: Option<PreviousFee>,
-    pub(crate) current_height: Option<absolute::LockTime>,
+    pub(crate) current_height: Option<u32>,
     pub(crate) allow_dust: bool,
 }
 
@@ -650,8 +650,7 @@ impl<'a, Cs> TxBuilder<'a, Cs> {
     ///
     /// In both cases, if you don't provide a current height, we use the last sync height.
     pub fn current_height(&mut self, height: u32) -> &mut Self {
-        self.params.current_height =
-            Some(absolute::LockTime::from_height(height).expect("Invalid height"));
+        self.params.current_height = Some(height);
         self
     }
 

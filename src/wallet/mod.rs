@@ -1303,12 +1303,12 @@ impl Wallet {
         // We use a match here instead of a unwrap_or_else as it's way more readable :)
         let current_height = match params.current_height {
             // If they didn't tell us the current height, we assume it's the latest sync height.
-            None => {
-                let tip_height = self.chain.tip().height();
-                absolute::LockTime::from_height(tip_height).expect("invalid height")
-            }
+            None => self.chain.tip().height(),
             Some(h) => h,
         };
+
+        let current_height = absolute::LockTime::from_height(current_height)
+            .map_err(|_| CreateTxError::InvalidCurrentHeight(current_height))?;
 
         let lock_time = match params.locktime {
             // When no `nLockTime` is specified, we try to prevent fee sniping, if possible.
