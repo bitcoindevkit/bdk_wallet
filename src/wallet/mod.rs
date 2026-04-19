@@ -1467,16 +1467,37 @@ impl Wallet {
             }
         };
 
-        let coin_selection = coin_selection
-            .coin_select(
-                required_utxos,
-                optional_utxos,
-                fee_rate,
-                outgoing + fee_amount,
-                &drain_script,
-                rng,
-            )
-            .map_err(CreateTxError::CoinSelection)?;
+        // Retry coin selection to avoid dust/zero drain outputs (see issue #376). If the
+        // selection yields NoChange the loop promotes an optional UTXO to required and retries;
+        // it exits when optional_remaining is exhausted or a viable drain output is found.
+        let should_retry_for_dust_drain = params.recipients.is_empty()
+            && params.drain_to.is_some()
+            && (params.drain_wallet || !params.utxos.is_empty())
+            && !params.manually_selected_only;
+
+        let mut required_for_attempt = required_utxos;
+        let mut optional_remaining = optional_utxos;
+        let coin_selection = loop {
+            let result = coin_selection
+                .coin_select(
+                    required_for_attempt.clone(),
+                    optional_remaining.clone(),
+                    fee_rate,
+                    outgoing + fee_amount,
+                    &drain_script,
+                    rng,
+                )
+                .map_err(CreateTxError::CoinSelection)?;
+
+            if !should_retry_for_dust_drain || !matches!(&result.excess, Excess::NoChange { .. }) {
+                break result;
+            }
+
+            let Some(w) = optional_remaining.pop() else {
+                break result;
+            };
+            required_for_attempt.push(w);
+        };
 
         let excess = &coin_selection.excess;
         tx.input = coin_selection
