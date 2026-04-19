@@ -291,7 +291,16 @@ pub struct Bip44Public<K: DerivableKey<Legacy>>(pub K, pub bip32::Fingerprint, p
 impl<K: DerivableKey<Legacy>> DescriptorTemplate for Bip44Public<K> {
     fn build(self, network: Network) -> Result<DescriptorTemplateOut, DescriptorError> {
         P2Pkh(legacy::make_bipxx_public(
-            44, self.0, self.1, self.2, network,
+            44, self.0, self.1, self.2, network, None, None,
+        )?)
+        .build(network)
+    }
+}
+
+impl<K: DerivableKey<Legacy>> Bip44Public<K> {
+    pub fn build_account(self, network: Network, account_index: u32) ->  Result<DescriptorTemplateOut, DescriptorError> {
+        P2Pkh(legacy::make_bipxx_public(
+            44, self.0, self.1, self.2, network, None, Some(account_index),
         )?)
         .build(network)
     }
@@ -382,7 +391,16 @@ pub struct Bip49Public<K: DerivableKey<Segwitv0>>(pub K, pub bip32::Fingerprint,
 impl<K: DerivableKey<Segwitv0>> DescriptorTemplate for Bip49Public<K> {
     fn build(self, network: Network) -> Result<DescriptorTemplateOut, DescriptorError> {
         P2Wpkh_P2Sh(segwit_v0::make_bipxx_public(
-            49, self.0, self.1, self.2, network,
+            49, self.0, self.1, self.2, network, None, None,
+        )?)
+        .build(network)
+    }
+}
+
+impl<K: DerivableKey<Segwitv0>> Bip49Public<K> {
+    pub fn build_account(self, network: Network, account_index: u32) ->  Result<DescriptorTemplateOut, DescriptorError> {
+        P2Wpkh_P2Sh(segwit_v0::make_bipxx_public(
+            49, self.0, self.1, self.2, network, None, Some(account_index),
         )?)
         .build(network)
     }
@@ -473,7 +491,16 @@ pub struct Bip84Public<K: DerivableKey<Segwitv0>>(pub K, pub bip32::Fingerprint,
 impl<K: DerivableKey<Segwitv0>> DescriptorTemplate for Bip84Public<K> {
     fn build(self, network: Network) -> Result<DescriptorTemplateOut, DescriptorError> {
         P2Wpkh(segwit_v0::make_bipxx_public(
-            84, self.0, self.1, self.2, network,
+            84, self.0, self.1, self.2, network, None, None,
+        )?)
+        .build(network)
+    }
+}
+
+impl<K: DerivableKey<Segwitv0>> Bip84Public<K> {
+    pub fn build_account(self, network: Network, account_index: u32) ->  Result<DescriptorTemplateOut, DescriptorError> {
+        P2Wpkh(segwit_v0::make_bipxx_public(
+            84, self.0, self.1, self.2, network, None, Some(account_index),
         )?)
         .build(network)
     }
@@ -564,7 +591,16 @@ pub struct Bip86Public<K: DerivableKey<Tap>>(pub K, pub bip32::Fingerprint, pub 
 impl<K: DerivableKey<Tap>> DescriptorTemplate for Bip86Public<K> {
     fn build(self, network: Network) -> Result<DescriptorTemplateOut, DescriptorError> {
         P2TR(segwit_v1::make_bipxx_public(
-            86, self.0, self.1, self.2, network,
+            86, self.0, self.1, self.2, network, None, None,
+        )?)
+        .build(network)
+    }
+}
+
+impl<K: DerivableKey<Tap>> Bip86Public<K> {
+    pub fn build_account(self, network: Network, account_index: u32) -> Result<DescriptorTemplateOut, DescriptorError> {
+        P2TR(segwit_v1::make_bipxx_public(
+            86, self.0, self.1, self.2, network, None, Some(account_index),
         )?)
         .build(network)
     }
@@ -627,14 +663,12 @@ macro_rules! expand_make_bipxx {
         mod $mod_name {
             use super::*;
 
-            pub(super) fn make_bipxx_private<K: DerivableKey<$ctx>>(
+            fn make_bipxx_source_path(
                 bip: u32,
-                key: K,
-                keychain: KeychainKind,
                 network: Network,
                 script: Option<u32>,
                 account_index: Option<u32>,
-            ) -> Result<impl IntoDescriptorKey<$ctx>, DescriptorError> {
+            ) -> Result<alloc::vec::Vec<bip32::ChildNumber>, DescriptorError> {
                 let mut derivation_path = alloc::vec::Vec::with_capacity(4);
                 derivation_path.push(bip32::ChildNumber::from_hardened_idx(bip)?);
 
@@ -651,7 +685,20 @@ macro_rules! expand_make_bipxx {
 
                 if let Some(s) = script {
                     derivation_path.push(bip32::ChildNumber::from_hardened_idx(s)?);
-                }
+                };
+
+                Ok(derivation_path)
+            }
+
+            pub(super) fn make_bipxx_private<K: DerivableKey<$ctx>>(
+                bip: u32,
+                key: K,
+                keychain: KeychainKind,
+                network: Network,
+                script: Option<u32>,
+                account_index: Option<u32>,
+            ) -> Result<impl IntoDescriptorKey<$ctx>, DescriptorError> {
+                let mut derivation_path = make_bipxx_source_path(bip, network, script, account_index)?;
 
                 match keychain {
                     KeychainKind::External => {
@@ -672,20 +719,15 @@ macro_rules! expand_make_bipxx {
                 parent_fingerprint: bip32::Fingerprint,
                 keychain: KeychainKind,
                 network: Network,
+                script: Option<u32>,
+                account_index: Option<u32>,
             ) -> Result<impl IntoDescriptorKey<$ctx>, DescriptorError> {
                 let derivation_path: bip32::DerivationPath = match keychain {
                     KeychainKind::External => vec![bip32::ChildNumber::from_normal_idx(0)?].into(),
                     KeychainKind::Internal => vec![bip32::ChildNumber::from_normal_idx(1)?].into(),
                 };
 
-                let source_path = bip32::DerivationPath::from(vec![
-                    bip32::ChildNumber::from_hardened_idx(bip)?,
-                    match network {
-                        Network::Bitcoin => bip32::ChildNumber::from_hardened_idx(0)?,
-                        _ => bip32::ChildNumber::from_hardened_idx(1)?,
-                    },
-                    bip32::ChildNumber::from_hardened_idx(0)?,
-                ]);
+                let source_path = bip32::DerivationPath::from(make_bipxx_source_path(bip, network, script, account_index)?);
 
                 Ok((key, (parent_fingerprint, source_path), derivation_path))
             }
@@ -916,6 +958,37 @@ mod test {
         );
     }
 
+    #[test]
+    fn test_bip44_template_build_account() {
+        let prvkey = bitcoin::bip32::Xpriv::from_str("tprv8ZgxMBicQKsPcx5nBGsR63Pe8KnRUqmbJNENAfGftF3yuXoMMoVJJcYeUw5eVkm9WBPjWYt6HMWYJNesB5HaNVBaFc1M6dRjWSYnmewUMYy").unwrap();
+        let default_desc = Bip44(prvkey, KeychainKind::External).build(Network::Bitcoin).unwrap().0;
+        let account_zero_desc = Bip44(prvkey, KeychainKind::External)
+            .build_account(Network::Bitcoin, 0)
+            .unwrap()
+            .0;
+        let account_index_desc = Bip44(prvkey, KeychainKind::External)
+            .build_account(Network::Bitcoin, 3)
+            .unwrap()
+            .0;
+
+        assert_eq!(default_desc.to_string(), account_zero_desc.to_string());
+        assert_ne!(default_desc.to_string(), account_index_desc.to_string());
+
+        let default_address = default_desc
+            .at_derivation_index(0)
+            .unwrap()
+            .address(Network::Regtest)
+            .unwrap()
+            .to_string();
+        let account_index_address = account_index_desc
+            .at_derivation_index(0)
+            .unwrap()
+            .address(Network::Regtest)
+            .unwrap()
+            .to_string();
+        assert_ne!(default_address, account_index_address);
+    }
+
     // BIP44 public `pkh(key/{0,1}/*)`
     #[test]
     fn test_bip44_public_template() {
@@ -947,6 +1020,28 @@ mod test {
         );
     }
 
+    #[test]
+    fn test_bip44_public_template_build_account() {
+        let pubkey = bitcoin::bip32::Xpub::from_str("tpubDDDzQ31JkZB7VxUr9bjvBivDdqoFLrDPyLWtLapArAi51ftfmCb2DPxwLQzX65iNcXz1DGaVvyvo6JQ6rTU73r2gqdEo8uov9QKRb7nKCSU").unwrap();
+        let fingerprint = bitcoin::bip32::Fingerprint::from_str("c55b303f").unwrap();
+        let desc = Bip44Public(pubkey, fingerprint, KeychainKind::External)
+            .build_account(Network::Bitcoin, 12)
+            .unwrap();
+
+        assert!(desc.0.to_string().contains("[c55b303f/44'/0'/12']"));
+        check(
+            Ok(desc),
+            false,
+            false,
+            false,
+            Network::Regtest,
+            &[
+                "miNG7dJTzJqNbFS19svRdTCisC65dsubtR",
+                "n2UqaDbCjWSFJvpC84m3FjUk5UaeibCzYg",
+                "muCPpS6Ue7nkzeJMWDViw7Lkwr92Yc4K8g",
+            ],
+        );
+    }
     // BIP49 `sh(wpkh(key/49'/0'/0'/{0,1}/*))`
     #[test]
     fn test_bip49_template() {
@@ -975,6 +1070,37 @@ mod test {
                 "2NA8ek4CdQ6aMkveYF6AYuEYNrftB47QGTn",
             ],
         );
+    }
+
+    #[test]
+    fn test_bip49_template_build_account() {
+        let prvkey = bitcoin::bip32::Xpriv::from_str("tprv8ZgxMBicQKsPcx5nBGsR63Pe8KnRUqmbJNENAfGftF3yuXoMMoVJJcYeUw5eVkm9WBPjWYt6HMWYJNesB5HaNVBaFc1M6dRjWSYnmewUMYy").unwrap();
+        let default_desc = Bip49(prvkey, KeychainKind::External).build(Network::Bitcoin).unwrap().0;
+        let account_zero_desc = Bip49(prvkey, KeychainKind::External)
+            .build_account(Network::Bitcoin, 0)
+            .unwrap()
+            .0;
+        let account_index_desc = Bip49(prvkey, KeychainKind::External)
+            .build_account(Network::Bitcoin, 3)
+            .unwrap()
+            .0;
+
+        assert_eq!(default_desc.to_string(), account_zero_desc.to_string());
+        assert_ne!(default_desc.to_string(), account_index_desc.to_string());
+
+        let default_address = default_desc
+            .at_derivation_index(0)
+            .unwrap()
+            .address(Network::Regtest)
+            .unwrap()
+            .to_string();
+        let account_index_address = account_index_desc
+            .at_derivation_index(0)
+            .unwrap()
+            .address(Network::Regtest)
+            .unwrap()
+            .to_string();
+        assert_ne!(default_address, account_index_address);
     }
 
     // BIP49 public `sh(wpkh(key/{0,1}/*))`
@@ -1008,6 +1134,28 @@ mod test {
         );
     }
 
+    #[test]
+    fn test_bip49_public_template_build_account() {
+        let pubkey = bitcoin::bip32::Xpub::from_str("tpubDC49r947KGK52X5rBWS4BLs5m9SRY3pYHnvRrm7HcybZ3BfdEsGFyzCMzayi1u58eT82ZeyFZwH7DD6Q83E3fM9CpfMtmnTygnLfP59jL9L").unwrap();
+        let fingerprint = bitcoin::bip32::Fingerprint::from_str("c55b303f").unwrap();
+        let desc = Bip49Public(pubkey, fingerprint, KeychainKind::External)
+            .build_account(Network::Bitcoin, 7)
+            .unwrap();
+
+        assert!(desc.0.to_string().contains("[c55b303f/49'/0'/7']"));
+        check(
+            Ok(desc),
+            true,
+            false,
+            false,
+            Network::Regtest,
+            &[
+                "2N3K4xbVAHoiTQSwxkZjWDfKoNC27pLkYnt",
+                "2NCTQfJ1sZa3wQ3pPseYRHbaNEpC3AquEfX",
+                "2MveFxAuC8BYPzTybx7FxSzW8HSd8ATT4z7",
+            ],
+        );
+    }
     // BIP84 `wpkh(key/84'/0'/0'/{0,1}/*)`
     #[test]
     fn test_bip84_template() {
@@ -1036,6 +1184,37 @@ mod test {
                 "bcrt1qpks7n0gq74hsgsz3phn5vuazjjq0f5eqhsgyce",
             ],
         );
+    }
+
+    #[test]
+    fn test_bip84_template_build_account() {
+        let prvkey = bitcoin::bip32::Xpriv::from_str("tprv8ZgxMBicQKsPcx5nBGsR63Pe8KnRUqmbJNENAfGftF3yuXoMMoVJJcYeUw5eVkm9WBPjWYt6HMWYJNesB5HaNVBaFc1M6dRjWSYnmewUMYy").unwrap();
+        let default_desc = Bip84(prvkey, KeychainKind::External).build(Network::Bitcoin).unwrap().0;
+        let account_zero_desc = Bip84(prvkey, KeychainKind::External)
+            .build_account(Network::Bitcoin, 0)
+            .unwrap()
+            .0;
+        let account_index_desc = Bip84(prvkey, KeychainKind::External)
+            .build_account(Network::Bitcoin, 3)
+            .unwrap()
+            .0;
+
+        assert_eq!(default_desc.to_string(), account_zero_desc.to_string());
+        assert_ne!(default_desc.to_string(), account_index_desc.to_string());
+
+        let default_address = default_desc
+            .at_derivation_index(0)
+            .unwrap()
+            .address(Network::Regtest)
+            .unwrap()
+            .to_string();
+        let account_index_address = account_index_desc
+            .at_derivation_index(0)
+            .unwrap()
+            .address(Network::Regtest)
+            .unwrap()
+            .to_string();
+        assert_ne!(default_address, account_index_address);
     }
 
     // BIP84 public `wpkh(key/{0,1}/*)`
@@ -1069,6 +1248,28 @@ mod test {
         );
     }
 
+    #[test]
+    fn test_bip84_public_template_build_account() {
+        let pubkey = bitcoin::bip32::Xpub::from_str("tpubDC2Qwo2TFsaNC4ju8nrUJ9mqVT3eSgdmy1yPqhgkjwmke3PRXutNGRYAUo6RCHTcVQaDR3ohNU9we59brGHuEKPvH1ags2nevW5opEE9Z5Q").unwrap();
+        let fingerprint = bitcoin::bip32::Fingerprint::from_str("c55b303f").unwrap();
+        let desc = Bip84Public(pubkey, fingerprint, KeychainKind::External)
+            .build_account(Network::Bitcoin, 3)
+            .unwrap();
+
+        assert!(desc.0.to_string().contains("[c55b303f/84'/0'/3']"));
+        check(
+            Ok(desc),
+            true,
+            false,
+            false,
+            Network::Regtest,
+            &[
+                "bcrt1qedg9fdlf8cnnqfd5mks6uz5w4kgpk2prcdvd0h",
+                "bcrt1q3lncdlwq3lgcaaeyruynjnlccr0ve0kakh6ana",
+                "bcrt1qt9800y6xl3922jy3uyl0z33jh5wfpycyhcylr9",
+            ],
+        );
+    }
     // BIP86 `tr(key/86'/0'/0'/{0,1}/*)`
     // Used addresses in test vector in https://github.com/bitcoin/bips/blob/master/bip-0086.mediawiki
     #[test]
@@ -1098,6 +1299,37 @@ mod test {
                 "bc1pgcwgsu8naxp7xlp5p7ufzs7emtfza2las7r2e7krzjhe5qj5xz2q88kmk5",
             ],
         );
+    }
+
+    #[test]
+    fn test_bip86_template_build_account() {
+        let prvkey = bitcoin::bip32::Xpriv::from_str("xprv9s21ZrQH143K3GJpoapnV8SFfukcVBSfeCficPSGfubmSFDxo1kuHnLisriDvSnRRuL2Qrg5ggqHKNVpxR86QEC8w35uxmGoggxtQTPvfUu").unwrap();
+        let default_desc = Bip86(prvkey, KeychainKind::External).build(Network::Bitcoin).unwrap().0;
+        let account_zero_desc = Bip86(prvkey, KeychainKind::External)
+            .build_account(Network::Bitcoin, 0)
+            .unwrap()
+            .0;
+        let account_index_desc = Bip86(prvkey, KeychainKind::External)
+            .build_account(Network::Bitcoin, 3)
+            .unwrap()
+            .0;
+
+        assert_eq!(default_desc.to_string(), account_zero_desc.to_string());
+        assert_ne!(default_desc.to_string(), account_index_desc.to_string());
+
+        let default_address = default_desc
+            .at_derivation_index(0)
+            .unwrap()
+            .address(Network::Bitcoin)
+            .unwrap()
+            .to_string();
+        let account_index_address = account_index_desc
+            .at_derivation_index(0)
+            .unwrap()
+            .address(Network::Bitcoin)
+            .unwrap()
+            .to_string();
+        assert_ne!(default_address, account_index_address);
     }
 
     // BIP86 public `tr(key/{0,1}/*)`
@@ -1130,5 +1362,62 @@ mod test {
                 "bc1pgcwgsu8naxp7xlp5p7ufzs7emtfza2las7r2e7krzjhe5qj5xz2q88kmk5",
             ],
         );
+    }
+
+    #[test]
+    fn test_bip86_public_template_build_account() {
+        let pubkey = bitcoin::bip32::Xpub::from_str("xpub6BgBgsespWvERF3LHQu6CnqdvfEvtMcQjYrcRzx53QJjSxarj2afYWcLteoGVky7D3UKDP9QyrLprQ3VCECoY49yfdDEHGCtMMj92pReUsQ").unwrap();
+        let fingerprint = bitcoin::bip32::Fingerprint::from_str("73c5da0a").unwrap();
+        let desc = Bip86Public(pubkey, fingerprint, KeychainKind::External)
+            .build_account(Network::Bitcoin, 9)
+            .unwrap();
+
+        assert!(desc.0.to_string().contains("[73c5da0a/86'/0'/9']"));
+        check(
+            Ok(desc),
+            false,
+            true,
+            false,
+            Network::Bitcoin,
+            &[
+                "bc1p5cyxnuxmeuwuvkwfem96lqzszd02n6xdcjrs20cac6yqjjwudpxqkedrcr",
+                "bc1p4qhjn9zdvkux4e44uhx8tc55attvtyu358kutcqkudyccelu0was9fqzwh",
+                "bc1p0d0rhyynq0awa9m8cqrcr8f5nxqx3aw29w4ru5u9my3h0sfygnzs9khxz8",
+            ],
+        );
+    }
+
+    #[test]
+    fn test_bip48_member_template_build_account() {
+        let prvkey = bitcoin::bip32::Xpriv::from_str("tprv8ZgxMBicQKsPeZRHk4rTG6orPS2CRNFX3njhUXx5vj9qGog5ZMH4uGReDWN5kCkY3jmWEtWause41CDvBRXD1shKknAMKxT99o9qUTRVC6m").unwrap();
+        let default_desc = Bip48Member(prvkey, KeychainKind::External, 2)
+            .build(Network::Testnet)
+            .unwrap()
+            .0;
+        let account_zero_desc = Bip48Member(prvkey, KeychainKind::External, 2)
+            .build_account(Network::Testnet, 0)
+            .unwrap()
+            .0;
+        let account_index_desc = Bip48Member(prvkey, KeychainKind::External, 2)
+            .build_account(Network::Testnet, 5)
+            .unwrap()
+            .0;
+
+        assert_eq!(default_desc.to_string(), account_zero_desc.to_string());
+        assert_ne!(default_desc.to_string(), account_index_desc.to_string());
+
+        let default_address = default_desc
+            .at_derivation_index(0)
+            .unwrap()
+            .address(Network::Regtest)
+            .unwrap()
+            .to_string();
+        let account_index_address = account_index_desc
+            .at_derivation_index(0)
+            .unwrap()
+            .address(Network::Regtest)
+            .unwrap()
+            .to_string();
+        assert_ne!(default_address, account_index_address);
     }
 }
