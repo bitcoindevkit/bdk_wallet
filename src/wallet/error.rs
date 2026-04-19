@@ -215,6 +215,10 @@ pub enum CreateTxError {
     MissingNonWitnessUtxo(OutPoint),
     /// Miniscript PSBT error
     MiniscriptPsbt(MiniscriptPsbtError),
+    /// Provided height is not a valid block height for use as a locktime
+    ///
+    /// Block-based locktimes require a height below 500_000_000.
+    InvalidCurrentHeight(u32),
 }
 
 impl fmt::Display for CreateTxError {
@@ -280,6 +284,12 @@ impl fmt::Display for CreateTxError {
             }
             CreateTxError::MiniscriptPsbt(err) => {
                 write!(f, "Miniscript PSBT error: {err}")
+            }
+            CreateTxError::InvalidCurrentHeight(height) => {
+                write!(
+                    f,
+                    "Cannot use height {height} as a locktime (must be below 500_000_000)"
+                )
             }
         }
     }

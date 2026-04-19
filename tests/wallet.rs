@@ -309,6 +309,26 @@ fn test_create_tx_custom_locktime() {
 }
 
 #[test]
+fn test_create_tx_invalid_current_height_returns_error() {
+    // `absolute::LockTime::from_height` rejects heights >= 500_000_000 because the
+    // consensus encoding of nLockTime uses those values to mean "unix timestamp" rather
+    // than "block height". Passing such a value to `TxBuilder::current_height` used to
+    // panic; it should now surface as a typed error.
+    let (mut wallet, _) = get_funded_wallet_wpkh();
+    let addr = wallet.next_unused_address(KeychainKind::External);
+
+    let mut builder = wallet.build_tx();
+    builder
+        .add_recipient(addr.script_pubkey(), Amount::from_sat(25_000))
+        .current_height(500_000_000);
+
+    assert_matches!(
+        builder.finish(),
+        Err(CreateTxError::InvalidCurrentHeight(500_000_000))
+    );
+}
+
+#[test]
 fn test_create_tx_custom_locktime_compatible_with_cltv() {
     let (mut wallet, _) = get_funded_wallet_single(get_test_single_sig_cltv());
     let addr = wallet.next_unused_address(KeychainKind::External);
