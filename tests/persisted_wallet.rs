@@ -5,7 +5,7 @@ use anyhow::Context;
 use assert_matches::assert_matches;
 use bdk_chain::DescriptorId;
 use bdk_chain::{
-    keychain_txout::DEFAULT_LOOKAHEAD, ChainPosition, ConfirmationBlockTime, DescriptorExt,
+    ChainPosition, ConfirmationBlockTime, DescriptorExt, keychain_txout::DEFAULT_LOOKAHEAD,
 };
 use bdk_wallet::coin_selection::InsufficientFunds;
 use bdk_wallet::descriptor::IntoWalletDescriptor;
@@ -18,8 +18,8 @@ use bitcoin::constants::ChainHash;
 use bitcoin::hashes::Hash;
 use bitcoin::key::Secp256k1;
 use bitcoin::{
-    absolute, secp256k1, transaction, Amount, BlockHash, Network, NetworkKind, ScriptBuf,
-    Transaction, TxOut,
+    Amount, BlockHash, Network, NetworkKind, ScriptBuf, Transaction, TxOut, absolute, secp256k1,
+    transaction,
 };
 use miniscript::{Descriptor, DescriptorPublicKey};
 
@@ -266,8 +266,12 @@ fn wallet_load_checks() -> anyhow::Result<()> {
         );
         let mainnet_hash = BlockHash::from_byte_array(ChainHash::BITCOIN.to_bytes());
         assert_matches!(
-            Wallet::load().check_genesis_hash(mainnet_hash).load_wallet(&mut open_db(&file_path)?),
-            Err(LoadWithPersistError::InvalidChangeSet(LoadError::Mismatch(LoadMismatch::Genesis { .. }))),
+            Wallet::load()
+                .check_genesis_hash(mainnet_hash)
+                .load_wallet(&mut open_db(&file_path)?),
+            Err(LoadWithPersistError::InvalidChangeSet(LoadError::Mismatch(
+                LoadMismatch::Genesis { .. }
+            ))),
             "unexpected genesis hash check result: mainnet hash (check) is not testnet hash (loaded)",
         );
         assert_matches!(

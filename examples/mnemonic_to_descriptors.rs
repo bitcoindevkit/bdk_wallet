@@ -7,9 +7,9 @@
 // licenses.
 
 use anyhow::anyhow;
+use bdk_wallet::bitcoin::NetworkKind;
 use bdk_wallet::bitcoin::bip32::DerivationPath;
 use bdk_wallet::bitcoin::secp256k1::Secp256k1;
-use bdk_wallet::bitcoin::NetworkKind;
 use bdk_wallet::descriptor;
 use bdk_wallet::descriptor::IntoWalletDescriptor;
 use bdk_wallet::keys::bip39::{Language, Mnemonic, WordCount};

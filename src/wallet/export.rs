@@ -716,11 +716,11 @@ mod test {
     use core::str::FromStr;
 
     use bdk_chain::BlockId;
-    use bitcoin::{hashes::Hash, BlockHash, Network};
+    use bitcoin::{BlockHash, Network, hashes::Hash};
 
     use super::*;
-    use crate::test_utils::*;
     use crate::Wallet;
+    use crate::test_utils::*;
 
     fn get_test_wallet(descriptor: &str, change_descriptor: &str, network: Network) -> Wallet {
         let mut wallet = Wallet::create(descriptor.to_string(), change_descriptor.to_string())
@@ -820,7 +820,10 @@ mod test {
         let wallet = get_test_wallet(descriptor, change_descriptor, Network::Bitcoin);
         let export = FullyNodedExport::export_wallet(&wallet, "Test Label", true).unwrap();
 
-        assert_eq!(export.to_string(), "{\"descriptor\":\"wpkh(xprv9s21ZrQH143K4CTb63EaMxja1YiTnSEWKMbn23uoEnAzxjdUJRQkazCAtzxGm4LSoTSVTptoV9RbchnKPW9HxKtZumdyxyikZFDLhogJ5Uj/44\'/0\'/0\'/0/*)\",\"blockheight\":5000,\"label\":\"Test Label\"}");
+        assert_eq!(
+            export.to_string(),
+            "{\"descriptor\":\"wpkh(xprv9s21ZrQH143K4CTb63EaMxja1YiTnSEWKMbn23uoEnAzxjdUJRQkazCAtzxGm4LSoTSVTptoV9RbchnKPW9HxKtZumdyxyikZFDLhogJ5Uj/44\'/0\'/0\'/0/*)\",\"blockheight\":5000,\"label\":\"Test Label\"}"
+        );
     }
 
     #[test]

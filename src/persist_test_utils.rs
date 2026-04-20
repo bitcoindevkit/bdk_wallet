@@ -1,17 +1,18 @@
 //! Utilities for testing custom persistence backends for `bdk_wallet`
 
 use crate::{
+    ChangeSet, WalletPersister,
     bitcoin::{
-        absolute, key::Secp256k1, transaction, Address, Amount, Network, OutPoint, ScriptBuf,
-        Transaction, TxIn, TxOut, Txid,
+        Address, Amount, Network, OutPoint, ScriptBuf, Transaction, TxIn, TxOut, Txid, absolute,
+        key::Secp256k1, transaction,
     },
     chain::{
+        ConfirmationBlockTime, DescriptorExt, Merge, SpkIterator,
         keychain_txout::{self},
-        local_chain, tx_graph, ConfirmationBlockTime, DescriptorExt, Merge, SpkIterator,
+        local_chain, tx_graph,
     },
     locked_outpoints,
     miniscript::descriptor::{Descriptor, DescriptorPublicKey},
-    ChangeSet, WalletPersister,
 };
 
 macro_rules! block_id {
@@ -24,9 +25,7 @@ macro_rules! block_id {
 }
 
 macro_rules! hash {
-    ($index:literal) => {{
-        bitcoin::hashes::Hash::hash($index.as_bytes())
-    }};
+    ($index:literal) => {{ bitcoin::hashes::Hash::hash($index.as_bytes()) }};
 }
 
 use std::fmt::Debug;

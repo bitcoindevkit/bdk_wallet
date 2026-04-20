@@ -23,7 +23,8 @@ use core::fmt::{Debug, Display};
 use core::{cmp::Ordering, fmt, mem, ops::Deref};
 
 use bdk_chain::{
-    indexed_tx_graph,
+    BlockId, CanonicalizationParams, ChainPosition, ConfirmationBlockTime, DescriptorExt,
+    FullTxOut, Indexed, IndexedTxGraph, Indexer, Merge, indexed_tx_graph,
     indexer::keychain_txout::KeychainTxOutIndex,
     local_chain::{ApplyHeaderError, CannotConnectError, CheckPoint, CheckPointIter, LocalChain},
     spk_client::{
@@ -31,18 +32,16 @@ use bdk_chain::{
         SyncResponse,
     },
     tx_graph::{CalculateFeeError, CanonicalTx, TxGraph, TxUpdate},
-    BlockId, CanonicalizationParams, ChainPosition, ConfirmationBlockTime, DescriptorExt,
-    FullTxOut, Indexed, IndexedTxGraph, Indexer, Merge,
 };
 use bitcoin::{
-    absolute,
+    Address, Amount, Block, FeeRate, Network, NetworkKind, OutPoint, Psbt, ScriptBuf, Sequence,
+    SignedAmount, Transaction, TxOut, Txid, Weight, Witness, absolute,
     consensus::encode::serialize,
     constants::genesis_block,
     psbt,
     secp256k1::Secp256k1,
     sighash::{EcdsaSighashType, TapSighashType},
-    transaction, Address, Amount, Block, FeeRate, Network, NetworkKind, OutPoint, Psbt, ScriptBuf,
-    Sequence, SignedAmount, Transaction, TxOut, Txid, Weight, Witness,
+    transaction,
 };
 use miniscript::{
     descriptor::KeyMap,
@@ -66,9 +65,9 @@ pub(crate) mod utils;
 
 use crate::collections::{BTreeMap, HashMap, HashSet};
 use crate::descriptor::{
-    check_wallet_descriptor, error::Error as DescriptorError, policy::BuildSatisfaction,
     DerivedDescriptor, DescriptorMeta, ExtendedDescriptor, ExtractPolicy, IntoWalletDescriptor,
-    Policy, XKeyUtils,
+    Policy, XKeyUtils, check_wallet_descriptor, error::Error as DescriptorError,
+    policy::BuildSatisfaction,
 };
 use crate::psbt::PsbtUtils;
 use crate::types::*;
@@ -77,7 +76,7 @@ use crate::wallet::{
     error::{BuildFeeBumpError, CreateTxError, MiniscriptPsbtError},
     signer::{SignOptions, SignerError, SignerOrdering, SignersContainer, TransactionSigner},
     tx_builder::{FeePolicy, TxBuilder, TxParams},
-    utils::{check_nsequence_rbf, After, Older, SecpCtx},
+    utils::{After, Older, SecpCtx, check_nsequence_rbf},
 };
 
 // re-exports
@@ -520,7 +519,7 @@ impl Wallet {
                         keychain: KeychainKind::Internal,
                         loaded: Some(Box::new(desc)),
                         expected: None,
-                    }))
+                    }));
                 }
                 // Parameters must match.
                 Some(make_desc) => {
@@ -1294,7 +1293,7 @@ impl Wallet {
         let version = match params.version {
             Some(transaction::Version(0)) => return Err(CreateTxError::Version0),
             Some(transaction::Version::ONE) if requirements.csv.is_some() => {
-                return Err(CreateTxError::Version1Csv)
+                return Err(CreateTxError::Version1Csv);
             }
             Some(v) => v,
             None => transaction::Version::TWO,
@@ -1347,7 +1346,7 @@ impl Wallet {
                 return Err(CreateTxError::LockTime {
                     requested: x,
                     required: requirements.timelock.unwrap(),
-                })
+                });
             }
         };
 
@@ -1361,7 +1360,7 @@ impl Wallet {
             (None, Some(csv)) => csv,
             // Requested sequence is incompatible with requirements.
             (Some(sequence), Some(csv)) if !check_nsequence_rbf(sequence, csv) => {
-                return Err(CreateTxError::RbfSequenceCsv { sequence, csv })
+                return Err(CreateTxError::RbfSequenceCsv { sequence, csv });
             }
             // Use requested nSequence value.
             (Some(sequence), _) => sequence,
@@ -2985,16 +2984,18 @@ mod test {
         let received = wallet.filter_utxos(&params, wallet.latest_checkpoint().block_id().height);
         // Notice expected doesn't include the first output from two_output_tx as it should be
         // filtered out.
-        let expected = vec![wallet
-            .get_utxo(OutPoint { txid, vout: 1 })
-            .map(|utxo| WeightedUtxo {
-                satisfaction_weight: wallet
-                    .public_descriptor(utxo.keychain)
-                    .max_weight_to_satisfy()
-                    .unwrap(),
-                utxo: Utxo::Local(utxo),
-            })
-            .unwrap()];
+        let expected = vec![
+            wallet
+                .get_utxo(OutPoint { txid, vout: 1 })
+                .map(|utxo| WeightedUtxo {
+                    satisfaction_weight: wallet
+                        .public_descriptor(utxo.keychain)
+                        .max_weight_to_satisfy()
+                        .unwrap(),
+                    utxo: Utxo::Local(utxo),
+                })
+                .unwrap(),
+        ];
 
         assert_eq!(expected, received);
     }

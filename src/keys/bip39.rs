@@ -16,12 +16,12 @@
 
 use alloc::string::String;
 
-use bitcoin::{bip32, Network};
+use bitcoin::{Network, bip32};
 use miniscript::ScriptContext;
 
 use super::{
-    any_network_kind, DerivableKey, DescriptorKey, ExtendedKey, GeneratableKey, GeneratedKey,
-    KeyError,
+    DerivableKey, DescriptorKey, ExtendedKey, GeneratableKey, GeneratedKey, KeyError,
+    any_network_kind,
 };
 
 pub use bip39::{Error, Language, Mnemonic};
@@ -160,7 +160,7 @@ mod test {
     use bip39::{Language, Mnemonic};
     use bitcoin::bip32;
 
-    use crate::keys::{any_network_kind, GeneratableKey, GeneratedKey};
+    use crate::keys::{GeneratableKey, GeneratedKey, any_network_kind};
 
     #[test]
     fn test_keys_bip39_mnemonic() {
@@ -171,7 +171,10 @@ mod test {
 
         let key = (mnemonic, path);
         let (desc, keys, network_kinds) = crate::descriptor!(wpkh(key)).unwrap();
-        assert_eq!(desc.to_string(), "wpkh([be83839f/44'/0'/0']xpub6DCQ1YcqvZtSwGWMrwHELPehjWV3f2MGZ69yBADTxFEUAoLwb5Mp5GniQK6tTp3AgbngVz9zEFbBJUPVnkG7LFYt8QMTfbrNqs6FNEwAPKA/0/*)#0r8v4nkv");
+        assert_eq!(
+            desc.to_string(),
+            "wpkh([be83839f/44'/0'/0']xpub6DCQ1YcqvZtSwGWMrwHELPehjWV3f2MGZ69yBADTxFEUAoLwb5Mp5GniQK6tTp3AgbngVz9zEFbBJUPVnkG7LFYt8QMTfbrNqs6FNEwAPKA/0/*)#0r8v4nkv"
+        );
         assert_eq!(keys.len(), 1);
         assert_eq!(network_kinds, any_network_kind());
     }
@@ -185,7 +188,10 @@ mod test {
 
         let key = ((mnemonic, Some("passphrase".into())), path);
         let (desc, keys, network_kinds) = crate::descriptor!(wpkh(key)).unwrap();
-        assert_eq!(desc.to_string(), "wpkh([8f6cb80c/44'/0'/0']xpub6DWYS8bbihFevy29M4cbw4ZR3P5E12jB8R88gBDWCTCNpYiDHhYWNywrCF9VZQYagzPmsZpxXpytzSoxynyeFr4ZyzheVjnpLKuse4fiwZw/0/*)#h0j0tg5m");
+        assert_eq!(
+            desc.to_string(),
+            "wpkh([8f6cb80c/44'/0'/0']xpub6DWYS8bbihFevy29M4cbw4ZR3P5E12jB8R88gBDWCTCNpYiDHhYWNywrCF9VZQYagzPmsZpxXpytzSoxynyeFr4ZyzheVjnpLKuse4fiwZw/0/*)#h0j0tg5m"
+        );
         assert_eq!(keys.len(), 1);
         assert_eq!(network_kinds, any_network_kind());
     }
@@ -211,7 +217,10 @@ mod test {
             )
             .unwrap();
         assert_eq!(generated_mnemonic.valid_network_kinds, any_network_kind());
-        assert_eq!(generated_mnemonic.to_string(), "primary fetch primary fetch primary fetch primary fetch primary fetch primary fetch primary fetch primary fetch primary fetch primary fetch primary fetch primary foster");
+        assert_eq!(
+            generated_mnemonic.to_string(),
+            "primary fetch primary fetch primary fetch primary fetch primary fetch primary fetch primary fetch primary fetch primary fetch primary fetch primary fetch primary foster"
+        );
     }
 
     #[test]

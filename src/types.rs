@@ -15,7 +15,7 @@ use core::convert::AsRef;
 use core::fmt;
 
 use bitcoin::transaction::{OutPoint, Sequence, TxOut};
-use bitcoin::{psbt, Weight};
+use bitcoin::{Weight, psbt};
 
 use serde::{Deserialize, Serialize};
 

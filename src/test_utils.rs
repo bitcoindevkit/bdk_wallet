@@ -6,8 +6,8 @@ use core::str::FromStr;
 
 use bdk_chain::{BlockId, CheckPoint, ConfirmationBlockTime, TxUpdate};
 use bitcoin::{
-    absolute, hashes::Hash, transaction, Address, Amount, BlockHash, FeeRate, Network, OutPoint,
-    Transaction, TxIn, TxOut, Txid,
+    Address, Amount, BlockHash, FeeRate, Network, OutPoint, Transaction, TxIn, TxOut, Txid,
+    absolute, hashes::Hash, transaction,
 };
 
 use crate::{KeychainKind, Update, Wallet};
@@ -143,8 +143,10 @@ pub fn get_test_wpkh() -> &'static str {
 
 /// `wpkh` xpriv and change descriptor
 pub fn get_test_wpkh_and_change_desc() -> (&'static str, &'static str) {
-    ("wpkh(tprv8ZgxMBicQKsPdy6LMhUtFHAgpocR8GC6QmwMSFpZs7h6Eziw3SpThFfczTDh5rW2krkqffa11UpX3XkeTTB2FvzZKWXqPY54Y6Rq4AQ5R8L/84'/1'/0'/0/*)",
-    "wpkh(tprv8ZgxMBicQKsPdy6LMhUtFHAgpocR8GC6QmwMSFpZs7h6Eziw3SpThFfczTDh5rW2krkqffa11UpX3XkeTTB2FvzZKWXqPY54Y6Rq4AQ5R8L/84'/1'/0'/1/*)")
+    (
+        "wpkh(tprv8ZgxMBicQKsPdy6LMhUtFHAgpocR8GC6QmwMSFpZs7h6Eziw3SpThFfczTDh5rW2krkqffa11UpX3XkeTTB2FvzZKWXqPY54Y6Rq4AQ5R8L/84'/1'/0'/0/*)",
+        "wpkh(tprv8ZgxMBicQKsPdy6LMhUtFHAgpocR8GC6QmwMSFpZs7h6Eziw3SpThFfczTDh5rW2krkqffa11UpX3XkeTTB2FvzZKWXqPY54Y6Rq4AQ5R8L/84'/1'/0'/1/*)",
+    )
 }
 
 /// `wpkh` two-path descriptor
@@ -201,8 +203,10 @@ pub fn get_test_tr_single_sig_xprv() -> &'static str {
 
 /// taproot xpriv and change descriptor
 pub fn get_test_tr_single_sig_xprv_and_change_desc() -> (&'static str, &'static str) {
-    ("tr(tprv8ZgxMBicQKsPdDArR4xSAECuVxeX1jwwSXR4ApKbkYgZiziDc4LdBy2WvJeGDfUSE4UT4hHhbgEwbdq8ajjUHiKDegkwrNU6V55CxcxonVN/0/*)",
-    "tr(tprv8ZgxMBicQKsPdDArR4xSAECuVxeX1jwwSXR4ApKbkYgZiziDc4LdBy2WvJeGDfUSE4UT4hHhbgEwbdq8ajjUHiKDegkwrNU6V55CxcxonVN/1/*)")
+    (
+        "tr(tprv8ZgxMBicQKsPdDArR4xSAECuVxeX1jwwSXR4ApKbkYgZiziDc4LdBy2WvJeGDfUSE4UT4hHhbgEwbdq8ajjUHiKDegkwrNU6V55CxcxonVN/0/*)",
+        "tr(tprv8ZgxMBicQKsPdDArR4xSAECuVxeX1jwwSXR4ApKbkYgZiziDc4LdBy2WvJeGDfUSE4UT4hHhbgEwbdq8ajjUHiKDegkwrNU6V55CxcxonVN/1/*)",
+    )
 }
 
 /// taproot descriptor with taptree
