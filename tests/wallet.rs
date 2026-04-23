@@ -1991,7 +1991,7 @@ fn test_taproot_psbt_populate_tap_key_origins_repeated_key() {
     let (mut wallet, _) = get_funded_wallet(get_test_tr_repeated_key(), get_test_tr_single_sig());
     let addr = wallet.reveal_next_address(KeychainKind::External);
 
-    let path = vec![("rn4nre9c".to_string(), vec![0])]
+    let path = vec![("vj73w7cm".to_string(), vec![0])]
         .into_iter()
         .collect();
 
