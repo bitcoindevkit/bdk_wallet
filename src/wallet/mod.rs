@@ -1473,31 +1473,40 @@ impl Wallet {
         let should_retry_for_dust_drain = params.recipients.is_empty()
             && params.drain_to.is_some()
             && (params.drain_wallet || !params.utxos.is_empty())
+            && !optional_utxos.is_empty()
             && !params.manually_selected_only;
 
         let selection_result = if should_retry_for_dust_drain {
             let mut required_for_attempt = required_utxos;
             let mut optional_remaining = optional_utxos;
+            let mut last_successful_result = None;
             loop {
-                let result = coin_selection
-                    .coin_select(
-                        required_for_attempt.clone(),
-                        optional_remaining.clone(),
-                        fee_rate,
-                        outgoing + fee_amount,
-                        &drain_script,
-                        rng,
-                    )
-                    .map_err(CreateTxError::CoinSelection)?;
+                match coin_selection.coin_select(
+                    required_for_attempt.clone(),
+                    optional_remaining.clone(),
+                    fee_rate,
+                    outgoing + fee_amount,
+                    &drain_script,
+                    rng,
+                ) {
+                    Ok(result) => {
+                        if !matches!(&result.excess, Excess::NoChange { .. }) {
+                            break result;
+                        }
 
-                if !matches!(&result.excess, Excess::NoChange { .. }) {
-                    break result;
+                        let Some(w) = optional_remaining.pop() else {
+                            break result;
+                        };
+                        last_successful_result = Some(result);
+                        required_for_attempt.push(w);
+                    }
+                    Err(err) => {
+                        if let Some(result) = last_successful_result {
+                            break result;
+                        }
+                        return Err(CreateTxError::CoinSelection(err));
+                    }
                 }
-
-                let Some(w) = optional_remaining.pop() else {
-                    break result;
-                };
-                required_for_attempt.push(w);
             }
         } else {
             coin_selection
