@@ -1501,8 +1501,15 @@ impl Wallet {
                         required_for_attempt.push(w);
                     }
                     Err(err) => {
-                        if let Some(result) = last_successful_result {
-                            break result;
+                        if let Some(result) = last_successful_result.take() {
+                            // The last promoted optional UTXO made selection fail.
+                            // Drop it and keep trying remaining optionals.
+                            required_for_attempt.pop();
+                            if optional_remaining.is_empty() {
+                                break result;
+                            }
+                            last_successful_result = Some(result);
+                            continue;
                         }
                         return Err(CreateTxError::CoinSelection(err));
                     }
