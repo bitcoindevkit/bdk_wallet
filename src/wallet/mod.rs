@@ -1475,32 +1475,45 @@ impl Wallet {
             && (params.drain_wallet || !params.utxos.is_empty())
             && !params.manually_selected_only;
 
-        let mut required_for_attempt = required_utxos;
-        let mut optional_remaining = optional_utxos;
-        let coin_selection = loop {
-            let result = coin_selection
+        let selection_result = if should_retry_for_dust_drain {
+            let mut required_for_attempt = required_utxos;
+            let mut optional_remaining = optional_utxos;
+            loop {
+                let result = coin_selection
+                    .coin_select(
+                        required_for_attempt.clone(),
+                        optional_remaining.clone(),
+                        fee_rate,
+                        outgoing + fee_amount,
+                        &drain_script,
+                        rng,
+                    )
+                    .map_err(CreateTxError::CoinSelection)?;
+
+                if !matches!(&result.excess, Excess::NoChange { .. }) {
+                    break result;
+                }
+
+                let Some(w) = optional_remaining.pop() else {
+                    break result;
+                };
+                required_for_attempt.push(w);
+            }
+        } else {
+            coin_selection
                 .coin_select(
-                    required_for_attempt.clone(),
-                    optional_remaining.clone(),
+                    required_utxos,
+                    optional_utxos,
                     fee_rate,
                     outgoing + fee_amount,
                     &drain_script,
                     rng,
                 )
-                .map_err(CreateTxError::CoinSelection)?;
-
-            if !should_retry_for_dust_drain || !matches!(&result.excess, Excess::NoChange { .. }) {
-                break result;
-            }
-
-            let Some(w) = optional_remaining.pop() else {
-                break result;
-            };
-            required_for_attempt.push(w);
+                .map_err(CreateTxError::CoinSelection)?
         };
 
-        let excess = &coin_selection.excess;
-        tx.input = coin_selection
+        let excess = &selection_result.excess;
+        tx.input = selection_result
             .selected
             .iter()
             .map(|u| bitcoin::TxIn {
@@ -1555,7 +1568,7 @@ impl Wallet {
         // Sort inputs/outputs according to the chosen algorithm.
         params.ordering.sort_tx_with_aux_rand(&mut tx, rng);
 
-        let psbt = self.complete_transaction(tx, coin_selection.selected, params)?;
+        let psbt = self.complete_transaction(tx, selection_result.selected, params)?;
 
         // Recording changes to the change keychain.
         if let (Excess::Change { .. }, Some((keychain, index))) = (excess, drain_index) {
