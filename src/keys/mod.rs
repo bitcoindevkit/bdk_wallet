@@ -969,6 +969,11 @@ impl<Ctx: ScriptContext> IntoDescriptorKey<Ctx> for DescriptorSecretKey {
             DescriptorSecretKey::XPrv(DescriptorXKey { xkey, .. }) if xkey.network.is_mainnet() => {
                 mainnet_network_kind()
             }
+            DescriptorSecretKey::MultiXPrv(DescriptorMultiXKey { xkey, .. })
+                if xkey.network.is_mainnet() =>
+            {
+                mainnet_network_kind()
+            }
             _ => test_network_kind(),
         };
 
@@ -1109,5 +1114,44 @@ mod test {
         let xprv = xkey.into_xprv(NetworkKind::Test).unwrap();
 
         assert_eq!(xprv.network, NetworkKind::Test);
+    }
+
+    #[test]
+    fn test_multixprv_mainnet_gets_mainnet_network_kind() {
+        use core::str::FromStr;
+        use miniscript::descriptor::DerivPaths;
+
+        let mainnet_xprv = bip32::Xpriv::from_str(
+            "xprv9s21ZrQH143K3c3gF1DUWpWNr2SG2XrG8oYPpqYh7hoWsJy9NjabErnzriJPpnGHyKz5NgdXmq1KVbqS1r4NXdCoKitWg5e86zqXHa8kxyB",
+        )
+        .unwrap();
+        assert!(mainnet_xprv.network.is_mainnet());
+
+        let multi_xprv_key = DescriptorSecretKey::MultiXPrv(DescriptorMultiXKey {
+            origin: None,
+            xkey: mainnet_xprv,
+            derivation_paths: DerivPaths::new(
+                vec![bip32::DerivationPath::from_str("m/0").unwrap()],
+            )
+            .unwrap(),
+            wildcard: Wildcard::Unhardened,
+        });
+
+        let desc_key: DescriptorKey<miniscript::Segwitv0> =
+            multi_xprv_key.into_descriptor_key().unwrap();
+
+        // Verify the key gets mainnet_network_kind(). Previously, MultiXPrv fell
+        // through to the catch-all `_ => test_network_kind()` arm, which meant
+        // mainnet keys were incorrectly treated as testnet.
+        match desc_key {
+            DescriptorKey::Secret(_, network_kinds, _) => {
+                assert_eq!(
+                    network_kinds,
+                    mainnet_network_kind(),
+                    "MultiXPrv with mainnet xkey should get mainnet_network_kind, not test_network_kind"
+                );
+            }
+            _ => panic!("expected DescriptorKey::Secret"),
+        }
     }
 }

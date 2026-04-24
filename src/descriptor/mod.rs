@@ -243,6 +243,12 @@ impl IntoWalletDescriptor for DescriptorTemplateOut {
 
                         DescriptorPublicKey::XPub(xpub)
                     }
+                    DescriptorPublicKey::MultiXPub(ref multi_xpub) => {
+                        let mut multi_xpub = multi_xpub.clone();
+                        multi_xpub.xkey.network = self.network_kind;
+
+                        DescriptorPublicKey::MultiXPub(multi_xpub)
+                    }
                     other => other.clone(),
                 };
 
@@ -276,6 +282,13 @@ impl IntoWalletDescriptor for DescriptorTemplateOut {
                     (DescriptorPublicKey::XPub(xpub), DescriptorSecretKey::XPrv(xprv)) => {
                         xpub.xkey.network = network_kind;
                         xprv.xkey.network = network_kind;
+                    }
+                    (
+                        DescriptorPublicKey::MultiXPub(multi_xpub),
+                        DescriptorSecretKey::MultiXPrv(multi_xprv),
+                    ) => {
+                        multi_xpub.xkey.network = network_kind;
+                        multi_xprv.xkey.network = network_kind;
                     }
                     (_, DescriptorSecretKey::Single(key)) => {
                         key.key.network = network_kind;
