@@ -82,11 +82,10 @@ fn test_get_funded_wallet_balance() {
 fn test_get_funded_wallet_sent_and_received() {
     let (wallet, txid) = get_funded_wallet_wpkh();
 
-    let mut tx_amounts: Vec<(Txid, (Amount, Amount))> = wallet
+    let _tx_amounts: Vec<(Txid, (Amount, Amount))> = wallet
         .transactions()
         .map(|ct| (ct.tx_node.txid, wallet.sent_and_received(&ct.tx_node)))
         .collect();
-    tx_amounts.sort_by(|a1, a2| a1.0.cmp(&a2.0));
 
     let tx = wallet.get_tx(txid).expect("transaction").tx_node.tx;
     let (sent, received) = wallet.sent_and_received(&tx);
