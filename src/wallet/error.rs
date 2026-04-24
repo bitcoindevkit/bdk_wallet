@@ -215,6 +215,17 @@ pub enum CreateTxError {
     MissingNonWitnessUtxo(OutPoint),
     /// Miniscript PSBT error
     MiniscriptPsbt(MiniscriptPsbtError),
+    /// OP_RETURN data payload exceeds the 80-byte standardness limit
+    ///
+    /// Bitcoin Core enforces a maximum `scriptPubKey` size of 83 bytes for data carrier outputs
+    /// (`MAX_OP_RETURN_RELAY`), which constrains the data payload to at most 80 bytes.
+    /// See <https://github.com/bitcoin/bitcoin/blob/master/src/policy/policy.h>
+    OpReturnInvalidDataSize(usize),
+    /// Transaction already contains an OP_RETURN output
+    ///
+    /// Bitcoin standardness rules allow at most one OP_RETURN output per transaction.
+    /// See <https://github.com/bitcoin/bitcoin/blob/master/src/policy/policy.cpp>
+    MultipleOpReturnOutputs,
 }
 
 impl fmt::Display for CreateTxError {
@@ -280,6 +291,18 @@ impl fmt::Display for CreateTxError {
             }
             CreateTxError::MiniscriptPsbt(err) => {
                 write!(f, "Miniscript PSBT error: {err}")
+            }
+            CreateTxError::OpReturnInvalidDataSize(size) => {
+                write!(
+                    f,
+                    "OP_RETURN data payload is {size} bytes; maximum allowed by standardness rules is 80"
+                )
+            }
+            CreateTxError::MultipleOpReturnOutputs => {
+                write!(
+                    f,
+                    "Transaction already contains an OP_RETURN output; standardness rules allow at most one"
+                )
             }
         }
     }
