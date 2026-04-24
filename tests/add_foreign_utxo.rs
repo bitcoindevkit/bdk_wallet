@@ -290,3 +290,36 @@ fn test_taproot_foreign_utxo() {
         "foreign_utxo should be in there"
     );
 }
+
+#[test]
+fn test_add_foreign_utxo_rejects_wrong_non_witness_utxo_even_with_witness_utxo() {
+    let (mut wallet1, txid1) = get_funded_wallet_wpkh();
+    let (wallet2, _) =
+        get_funded_wallet_single("wpkh(cVbZ8ovhye9AoAHFsqobCf7LxbXDAECy9Kb8TZdfsDYMZGBUyCnm)");
+
+    let utxo2 = wallet2.list_unspent().next().unwrap();
+    let tx1 = wallet1.get_tx(txid1).unwrap().tx_node.tx.clone();
+
+    let satisfaction_weight = wallet2
+        .public_descriptor(KeychainKind::External)
+        .max_weight_to_satisfy()
+        .unwrap();
+
+    // Provide both witness_utxo and a non_witness_utxo with wrong txid.
+    // Previously this was accepted because non_witness_utxo was only validated
+    // when witness_utxo was None.
+    let mut builder = wallet1.build_tx();
+    let result = builder.add_foreign_utxo(
+        utxo2.outpoint,
+        psbt::Input {
+            witness_utxo: Some(utxo2.txout.clone()),
+            non_witness_utxo: Some(tx1.as_ref().clone()),
+            ..Default::default()
+        },
+        satisfaction_weight,
+    );
+    assert!(
+        matches!(result, Err(AddForeignUtxoError::InvalidTxid { .. })),
+        "should reject non_witness_utxo with wrong txid even when witness_utxo is present"
+    );
+}

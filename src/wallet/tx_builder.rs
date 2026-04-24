@@ -407,23 +407,19 @@ impl<'a, Cs> TxBuilder<'a, Cs> {
         satisfaction_weight: Weight,
         sequence: Sequence,
     ) -> Result<&mut Self, AddForeignUtxoError> {
-        if psbt_input.witness_utxo.is_none() {
-            match psbt_input.non_witness_utxo.as_ref() {
-                Some(tx) => {
-                    if tx.compute_txid() != outpoint.txid {
-                        return Err(AddForeignUtxoError::InvalidTxid {
-                            input_txid: tx.compute_txid(),
-                            foreign_utxo: outpoint,
-                        });
-                    }
-                    if tx.output.len() <= outpoint.vout as usize {
-                        return Err(AddForeignUtxoError::InvalidOutpoint(outpoint));
-                    }
-                }
-                None => {
-                    return Err(AddForeignUtxoError::MissingUtxo);
-                }
+        // Always validate non_witness_utxo if present
+        if let Some(tx) = psbt_input.non_witness_utxo.as_ref() {
+            if tx.compute_txid() != outpoint.txid {
+                return Err(AddForeignUtxoError::InvalidTxid {
+                    input_txid: tx.compute_txid(),
+                    foreign_utxo: outpoint,
+                });
             }
+            if tx.output.len() <= outpoint.vout as usize {
+                return Err(AddForeignUtxoError::InvalidOutpoint(outpoint));
+            }
+        } else if psbt_input.witness_utxo.is_none() {
+            return Err(AddForeignUtxoError::MissingUtxo);
         }
 
         let mut existing_index: Option<usize> = None;
