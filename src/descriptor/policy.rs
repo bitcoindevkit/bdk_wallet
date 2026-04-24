@@ -196,7 +196,7 @@ fn combinations(vec: &[usize], size: usize) -> Vec<Vec<usize>> {
             for (new_index, val) in vec.iter().skip(index + 1).enumerate() {
                 let mut cloned = vals.clone();
                 cloned.push(*val);
-                queue.push_front((new_index, cloned));
+                queue.push_front((index + 1 + new_index, cloned));
             }
         }
     }
@@ -1935,6 +1935,20 @@ mod test {
             Satisfaction::Complete {
                 condition: Default::default()
             }
+        );
+    }
+
+    #[test]
+    fn test_combinations_four_choose_three() {
+        let vec = vec![0, 1, 2, 3];
+        let mut result = combinations(&vec, 3);
+        for combo in &mut result {
+            combo.sort();
+        }
+        result.sort();
+        assert_eq!(
+            result,
+            vec![vec![0, 1, 2], vec![0, 1, 3], vec![0, 2, 3], vec![1, 2, 3]]
         );
     }
 }
