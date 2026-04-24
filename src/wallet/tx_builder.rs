@@ -832,7 +832,7 @@ type TxSort<T> = dyn (Fn(&T, &T) -> core::cmp::Ordering) + Send + Sync;
 
 /// Ordering of the transaction's inputs and outputs
 #[derive(Clone, Default)]
-pub enum TxOrdering {
+pub enum TxOrdering<In = TxIn, Out = TxOut> {
     /// Randomized (default)
     #[default]
     Shuffle,
@@ -847,13 +847,13 @@ pub enum TxOrdering {
     /// Provide custom comparison functions for sorting
     Custom {
         /// Transaction inputs sort function
-        input_sort: Arc<TxSort<TxIn>>,
+        input_sort: Arc<TxSort<In>>,
         /// Transaction outputs sort function
-        output_sort: Arc<TxSort<TxOut>>,
+        output_sort: Arc<TxSort<Out>>,
     },
 }
 
-impl core::fmt::Debug for TxOrdering {
+impl<I, O> core::fmt::Debug for TxOrdering<I, O> {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         match self {
             TxOrdering::Shuffle => write!(f, "Shuffle"),
@@ -888,6 +888,27 @@ impl TxOrdering {
             } => {
                 tx.input.sort_unstable_by(|a, b| input_sort(a, b));
                 tx.output.sort_unstable_by(|a, b| output_sort(a, b));
+            }
+        }
+    }
+}
+
+impl<I, O> TxOrdering<I, O> {
+    /// Sort the provided `input` and `output` slices by this [`TxOrdering`] and auxiliary
+    /// randomness.
+    pub fn sort_with_rng(&self, input: &mut [I], output: &mut [O], rng: &mut impl RngCore) {
+        match self {
+            TxOrdering::Untouched => {}
+            TxOrdering::Shuffle => {
+                shuffle_slice(input, rng);
+                shuffle_slice(output, rng);
+            }
+            TxOrdering::Custom {
+                input_sort,
+                output_sort,
+            } => {
+                input.sort_unstable_by(|a, b| input_sort(a, b));
+                output.sort_unstable_by(|a, b| output_sort(a, b));
             }
         }
     }
