@@ -1429,7 +1429,7 @@ impl Wallet {
         let (required_utxos, optional_utxos) = {
             // NOTE: manual selection overrides unspendable
             let mut required: Vec<WeightedUtxo> = params.utxos.clone();
-            let optional = self.filter_utxos(&params, current_height.to_consensus_u32());
+            let optional = self.filter_utxos(&params, current_height.to_consensus_u32(), version);
 
             // If `drain_wallet` is true, all UTxOs are required.
             if params.drain_wallet {
@@ -1978,18 +1978,24 @@ impl Wallet {
 
     /// Given the options returns the list of utxos that must be used to form the
     /// transaction and any further that may be used if needed.
-    fn filter_utxos(&self, params: &TxParams, current_height: u32) -> Vec<WeightedUtxo> {
+    fn filter_utxos(
+        &self,
+        params: &TxParams,
+        current_height: u32,
+        tx_version: transaction::Version,
+    ) -> Vec<WeightedUtxo> {
         if params.manually_selected_only {
             vec![]
         // Only process optional UTxOs if manually_selected_only is false.
         } else {
+            let tx_graph = self.tx_graph.graph();
+            let excludes_unconfirmed_v3 = tx_version != transaction::Version(3);
             let manually_selected_outpoints = params
                 .utxos
                 .iter()
                 .map(|wutxo| wutxo.utxo.outpoint())
                 .collect::<HashSet<OutPoint>>();
-            self.tx_graph
-                .graph()
+            tx_graph
                 // Get all unspent UTxOs from wallet.
                 // NOTE: the UTxOs returned by the following method already belong to wallet as the
                 // call chain uses get_tx_node infallibly.
@@ -2022,6 +2028,15 @@ impl Wallet {
                 // If bumping fees only add to optional UTxOs those confirmed.
                 .filter(|local_output| {
                     params.bumping_fee.is_none() || local_output.chain_position.is_confirmed()
+                })
+                // Bitcoin Core's TRUC policy requires spending unconfirmed v3 outputs with a v3
+                // transaction.
+                .filter(|local_output| {
+                    !excludes_unconfirmed_v3
+                        || local_output.chain_position.is_confirmed()
+                        || tx_graph
+                            .get_tx(local_output.outpoint.txid)
+                            .is_none_or(|tx| tx.version != transaction::Version(3))
                 })
                 .map(|utxo| WeightedUtxo {
                     satisfaction_weight: self
@@ -2982,7 +2997,11 @@ mod test {
         builder.add_utxo(outpoint).expect("should add local utxo");
         let params = builder.params.clone();
         // enforce selection of first output in transaction
-        let received = wallet.filter_utxos(&params, wallet.latest_checkpoint().block_id().height);
+        let received = wallet.filter_utxos(
+            &params,
+            wallet.latest_checkpoint().block_id().height,
+            transaction::Version::TWO,
+        );
         // Notice expected doesn't include the first output from two_output_tx as it should be
         // filtered out.
         let expected = vec![wallet
