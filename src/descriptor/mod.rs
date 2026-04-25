@@ -321,6 +321,12 @@ pub(crate) fn check_wallet_descriptor(
         ));
     }
 
+    // Reject bare descriptors: they have no standard address form and would cause panics
+    // inside the wallet when address derivation is attempted.
+    if descriptor.desc_type() == DescriptorType::Bare {
+        return Err(DescriptorError::UnsupportedDescriptorType);
+    }
+
     // Run miniscript's sanity check, which will look for duplicated keys and other potential
     // issues.
     descriptor.sanity_check()?;
@@ -912,6 +918,16 @@ mod test {
         let result = check_wallet_descriptor(&descriptor);
 
         assert!(result.is_err());
+
+        // Bare descriptors (e.g. pk()) have no standard address form and must be rejected.
+        let descriptor = Descriptor::<DescriptorPublicKey>::from_str(
+            "pk(tpubD6NzVbkrYhZ4XHndKkuB8FifXm8r5FQHwrN6oZuWCz13qb93rtgKvD4PQsqC4HP4yhV3tA2fqr2RbY5mNXfM7RxXUoeABoDtsFUq2zJq6YK/0/*)",
+        )
+        .expect("must parse");
+        assert_matches!(
+            check_wallet_descriptor(&descriptor),
+            Err(DescriptorError::UnsupportedDescriptorType)
+        );
     }
 
     #[test]
