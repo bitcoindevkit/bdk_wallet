@@ -298,7 +298,7 @@ fn test_create_tx_custom_locktime() {
     let mut builder = wallet.build_tx();
     builder
         .add_recipient(addr.script_pubkey(), Amount::from_sat(25_000))
-        .current_height(630_001)
+        .current_height(absolute::Height::from_consensus(630_001).unwrap())
         .nlocktime(absolute::LockTime::from_height(630_000).unwrap());
     let psbt = builder.finish().unwrap();
 
@@ -2537,7 +2537,7 @@ fn test_spend_coinbase() {
     let mut builder = wallet.build_tx();
     builder
         .add_recipient(addr.script_pubkey(), balance.immature / 2)
-        .current_height(confirmation_height);
+        .current_height(absolute::Height::from_consensus(confirmation_height).unwrap());
     assert!(matches!(
         builder.finish(),
         Err(CreateTxError::CoinSelection(
@@ -2552,7 +2552,7 @@ fn test_spend_coinbase() {
     let mut builder = wallet.build_tx();
     builder
         .add_recipient(addr.script_pubkey(), balance.immature / 2)
-        .current_height(not_yet_mature_time);
+        .current_height(absolute::Height::from_consensus(not_yet_mature_time).unwrap());
     assert_matches!(
         builder.finish(),
         Err(CreateTxError::CoinSelection(
@@ -2583,7 +2583,7 @@ fn test_spend_coinbase() {
     let mut builder = wallet.build_tx();
     builder
         .add_recipient(addr.script_pubkey(), balance.confirmed / 2)
-        .current_height(maturity_time);
+        .current_height(absolute::Height::from_consensus(maturity_time).unwrap());
     builder.finish().unwrap();
 }
 
