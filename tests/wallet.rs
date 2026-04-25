@@ -2624,8 +2624,8 @@ fn test_fee_rate_sign_no_grinding_high_r() {
     builder
         .drain_to(addr.script_pubkey())
         .drain_wallet()
-        .fee_rate(fee_rate)
-        .add_data(&data);
+        .fee_rate(fee_rate);
+    builder.try_add_data(&data).unwrap();
     let mut psbt = builder.finish().unwrap();
     let fee = check_fee!(wallet, psbt);
     let (op_return_vout, _) = psbt
@@ -3011,5 +3011,46 @@ fn test_tx_ordering_untouched_preserves_insertion_ordering_bnb_success() {
             .collect::<Vec<_>>(),
         vec![outpoint_0, outpoint_1],
         "UTXOs should be ordered with required first, then selected"
+    );
+}
+
+#[test]
+fn test_try_add_data_valid() {
+    let (mut wallet, _) = get_funded_wallet_wpkh();
+    let addr = wallet.next_unused_address(KeychainKind::External);
+    let data = PushBytesBuf::try_from(vec![0u8; 80]).unwrap();
+
+    let mut builder = wallet.build_tx();
+    builder.add_recipient(addr.script_pubkey(), Amount::from_sat(1000));
+    assert!(builder.try_add_data(&data).is_ok());
+    assert!(builder.finish().is_ok());
+}
+
+#[test]
+fn test_try_add_data_too_large() {
+    let (mut wallet, _) = get_funded_wallet_wpkh();
+    let addr = wallet.next_unused_address(KeychainKind::External);
+    let data = PushBytesBuf::try_from(vec![0u8; 81]).unwrap();
+
+    let mut builder = wallet.build_tx();
+    builder.add_recipient(addr.script_pubkey(), Amount::from_sat(1000));
+    assert_matches!(
+        builder.try_add_data(&data),
+        Err(CreateTxError::OpReturnInvalidDataSize(81))
+    );
+}
+
+#[test]
+fn test_try_add_data_multiple_op_return() {
+    let (mut wallet, _) = get_funded_wallet_wpkh();
+    let addr = wallet.next_unused_address(KeychainKind::External);
+    let data = PushBytesBuf::try_from(vec![0u8; 4]).unwrap();
+
+    let mut builder = wallet.build_tx();
+    builder.add_recipient(addr.script_pubkey(), Amount::from_sat(1000));
+    builder.try_add_data(&data).unwrap();
+    assert_matches!(
+        builder.try_add_data(&data),
+        Err(CreateTxError::MultipleOpReturnOutputs)
     );
 }

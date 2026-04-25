@@ -680,11 +680,54 @@ impl<'a, Cs> TxBuilder<'a, Cs> {
         self
     }
 
-    /// Add data as an output, using OP_RETURN
+    /// Add data as an output, using OP_RETURN.
+    ///
+    /// # Deprecation
+    ///
+    /// This method does not enforce Bitcoin standardness rules. Use [`try_add_data`] instead,
+    /// which returns an error if the data exceeds 80 bytes or if an OP_RETURN output is already
+    /// present.
+    ///
+    /// [`try_add_data`]: Self::try_add_data
+    #[deprecated(since = "3.1.0", note = "use `try_add_data` instead")]
     pub fn add_data<T: AsRef<PushBytes>>(&mut self, data: &T) -> &mut Self {
         let script = ScriptBuf::new_op_return(data);
         self.add_recipient(script, Amount::ZERO);
         self
+    }
+
+    /// Add data as an output, using OP_RETURN, enforcing Bitcoin standardness rules.
+    ///
+    /// Returns an error if:
+    /// - `data` exceeds 80 bytes ([`CreateTxError::OpReturnInvalidDataSize`]). Bitcoin Core's
+    ///   `MAX_OP_RETURN_RELAY` limits the `scriptPubKey` to 83 bytes, which constrains the data
+    ///   payload to at most 80 bytes.
+    /// - A recipient with an OP_RETURN script is already present
+    ///   ([`CreateTxError::MultipleOpReturnOutputs`]). Standardness rules allow at most one
+    ///   OP_RETURN output per transaction.
+    pub fn try_add_data<T: AsRef<PushBytes>>(
+        &mut self,
+        data: &T,
+    ) -> Result<&mut Self, CreateTxError> {
+        const MAX_OP_RETURN_DATA_BYTES: usize = 80;
+
+        let bytes = data.as_ref();
+        if bytes.len() > MAX_OP_RETURN_DATA_BYTES {
+            return Err(CreateTxError::OpReturnInvalidDataSize(bytes.len()));
+        }
+
+        if self
+            .params
+            .recipients
+            .iter()
+            .any(|(script, _)| script.is_op_return())
+        {
+            return Err(CreateTxError::MultipleOpReturnOutputs);
+        }
+
+        let script = ScriptBuf::new_op_return(bytes);
+        self.add_recipient(script, Amount::ZERO);
+        Ok(self)
     }
 
     /// Sets the address to *drain* excess coins to.
