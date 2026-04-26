@@ -74,6 +74,7 @@ fn spk_at_index(descriptor: &Descriptor<DescriptorPublicKey>, index: u32) -> Scr
 /// We create a dummy [`ChangeSet`], persist it and check if loaded [`ChangeSet`] matches
 /// the persisted one. We then create another such dummy [`ChangeSet`], persist it and load it to
 /// check if merged [`ChangeSet`] is returned.
+#[allow(deprecated)]
 pub fn persist_wallet_changeset<Store, CreateStore>(filename: &str, create_store: CreateStore)
 where
     CreateStore: Fn(&Path) -> anyhow::Result<Store>,
@@ -250,6 +251,7 @@ where
 /// We create a dummy [`ChangeSet`] for first wallet and persist it then we create a dummy
 /// [`ChangeSet`] for second wallet and persist that. Finally we load these two [`ChangeSet`]s and
 /// check if they were persisted correctly.
+#[allow(deprecated)]
 pub fn persist_multiple_wallet_changesets<Store, CreateStores>(
     filename: &str,
     create_dbs: CreateStores,
@@ -357,6 +359,7 @@ where
 ///
 /// We create a dummy [`ChangeSet`] with only descriptor fields populated, persist it and check if
 /// loaded [`ChangeSet`] has the same descriptors as what we persisted.
+#[allow(deprecated)]
 pub fn persist_keychains<Store, CreateStore>(filename: &str, create_store: CreateStore)
 where
     CreateStore: Fn(&Path) -> anyhow::Result<Store>,
@@ -399,6 +402,7 @@ where
 ///
 /// We create a dummy [`ChangeSet`] with only descriptor field populated, persist it and check if
 /// loaded [`ChangeSet`] has the same descriptor as what we persisted.
+#[allow(deprecated)]
 pub fn persist_single_keychain<Store, CreateStore>(filename: &str, create_store: CreateStore)
 where
     CreateStore: Fn(&Path) -> anyhow::Result<Store>,
