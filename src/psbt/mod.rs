@@ -17,7 +17,6 @@ use bitcoin::FeeRate;
 use bitcoin::Psbt;
 use bitcoin::TxOut;
 
-#[allow(unused)]
 mod params;
 
 pub use params::*;
