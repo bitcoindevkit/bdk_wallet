@@ -79,6 +79,34 @@ fn test_get_funded_wallet_balance() {
 }
 
 #[test]
+fn test_insert_tx() {
+    let (desc, change_desc) = get_test_tr_single_sig_xprv_and_change_desc();
+
+    let mut wallet = Wallet::create(desc, change_desc)
+        .network(Network::Testnet)
+        .create_wallet_no_persist()
+        .unwrap();
+
+    let tx = Transaction {
+        input: vec![],
+        output: vec![TxOut {
+            script_pubkey: wallet
+                .next_unused_address(KeychainKind::External)
+                .script_pubkey(),
+            value: Amount::from_sat(25_000),
+        }],
+        version: transaction::Version::TWO,
+        lock_time: absolute::LockTime::ZERO,
+    };
+    let txid = tx.compute_txid();
+
+    wallet.insert_tx(tx);
+
+    assert!(wallet.tx_graph().get_tx(txid).is_some());
+    assert!(wallet.take_staged().is_some());
+}
+
+#[test]
 fn test_get_funded_wallet_sent_and_received() {
     let (wallet, txid) = get_funded_wallet_wpkh();
 

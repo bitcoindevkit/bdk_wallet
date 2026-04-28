@@ -366,9 +366,12 @@ impl<'a, Cs> TxBuilder<'a, Cs> {
     ///
     /// This is an **EXPERIMENTAL** feature, API and other major changes are expected.
     ///
-    /// In order to use [`Wallet::calculate_fee`] or [`Wallet::calculate_fee_rate`] for a
-    /// transaction created with foreign UTXO(s) you must manually insert the corresponding
-    /// TxOut(s) into the tx graph using the [`Wallet::insert_txout`] function.
+    /// Before calling this method, you must preregister the foreign prev data in the wallet tx
+    /// graph. Use [`Wallet::insert_txout`] if `psbt_input` only provides a `witness_utxo`, or
+    /// [`Wallet::insert_tx`] if it provides a `non_witness_utxo`.
+    ///
+    /// This preregistration is also what allows [`Wallet::calculate_fee`] or
+    /// [`Wallet::calculate_fee_rate`] to work for transactions created with foreign UTXO(s).
     ///
     /// # Errors
     ///
@@ -376,6 +379,7 @@ impl<'a, Cs> TxBuilder<'a, Cs> {
     ///
     /// 1. The `psbt_input` does not contain a `witness_utxo` or `non_witness_utxo`.
     /// 2. The data in `non_witness_utxo` does not match what is in `outpoint`.
+    /// 3. The wallet tx graph does not already contain the prev data required by `psbt_input`.
     ///
     /// Note unless you set [`only_witness_utxo`] any non-taproot `psbt_input` you pass to this
     /// method must have `non_witness_utxo` set otherwise you will get an error when [`finish`]
@@ -407,23 +411,30 @@ impl<'a, Cs> TxBuilder<'a, Cs> {
         satisfaction_weight: Weight,
         sequence: Sequence,
     ) -> Result<&mut Self, AddForeignUtxoError> {
-        if psbt_input.witness_utxo.is_none() {
-            match psbt_input.non_witness_utxo.as_ref() {
-                Some(tx) => {
-                    if tx.compute_txid() != outpoint.txid {
-                        return Err(AddForeignUtxoError::InvalidTxid {
-                            input_txid: tx.compute_txid(),
-                            foreign_utxo: outpoint,
-                        });
-                    }
-                    if tx.output.len() <= outpoint.vout as usize {
-                        return Err(AddForeignUtxoError::InvalidOutpoint(outpoint));
-                    }
-                }
-                None => {
-                    return Err(AddForeignUtxoError::MissingUtxo);
-                }
+        if psbt_input.witness_utxo.is_none() && psbt_input.non_witness_utxo.is_none() {
+            return Err(AddForeignUtxoError::MissingUtxo);
+        }
+
+        if let Some(tx) = psbt_input.non_witness_utxo.as_ref() {
+            if tx.compute_txid() != outpoint.txid {
+                return Err(AddForeignUtxoError::InvalidTxid {
+                    input_txid: tx.compute_txid(),
+                    foreign_utxo: outpoint,
+                });
             }
+            if tx.output.len() <= outpoint.vout as usize {
+                return Err(AddForeignUtxoError::InvalidOutpoint(outpoint));
+            }
+        }
+
+        if psbt_input.non_witness_utxo.is_some() {
+            if self.wallet.tx_graph().get_tx(outpoint.txid).is_none() {
+                return Err(AddForeignUtxoError::MissingRegisteredTx(outpoint));
+            }
+        } else if psbt_input.witness_utxo.is_some()
+            && self.wallet.tx_graph().get_txout(outpoint).is_none()
+        {
+            return Err(AddForeignUtxoError::MissingRegisteredTxOut(outpoint));
         }
 
         let mut existing_index: Option<usize> = None;
@@ -803,6 +814,10 @@ pub enum AddForeignUtxoError {
     InvalidOutpoint(OutPoint),
     /// Foreign utxo missing witness_utxo or non_witness_utxo
     MissingUtxo,
+    /// Foreign utxo outpoint has not been preregistered in the wallet tx graph
+    MissingRegisteredTxOut(OutPoint),
+    /// Foreign utxo parent transaction has not been preregistered in the wallet tx graph
+    MissingRegisteredTx(OutPoint),
 }
 
 impl fmt::Display for AddForeignUtxoError {
@@ -822,6 +837,16 @@ impl fmt::Display for AddForeignUtxoError {
                 outpoint.txid, outpoint.vout,
             ),
             Self::MissingUtxo => write!(f, "Foreign utxo missing witness_utxo or non_witness_utxo"),
+            Self::MissingRegisteredTxOut(outpoint) => write!(
+                f,
+                "Foreign UTXO must be inserted with Wallet::insert_txout or Wallet::insert_tx before calling add_foreign_utxo for txid: {} with vout: {}",
+                outpoint.txid, outpoint.vout,
+            ),
+            Self::MissingRegisteredTx(outpoint) => write!(
+                f,
+                "Foreign UTXO parent transaction must be inserted with Wallet::insert_tx before calling add_foreign_utxo for txid: {} with vout: {}",
+                outpoint.txid, outpoint.vout,
+            ),
         }
     }
 }
@@ -1379,6 +1404,9 @@ mod test {
             .public_descriptor(KeychainKind::External)
             .max_weight_to_satisfy()
             .unwrap();
+
+        // Preregister the full foreign parent tx for `non_witness_utxo`.
+        wallet2.insert_tx(tx1.as_ref().clone());
 
         let mut builder = wallet2.build_tx();
 
