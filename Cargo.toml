@@ -83,3 +83,9 @@ name = "esplora_blocking"
 
 [[example]]
 name = "bitcoind_rpc"
+
+[[example]]
+name = "psbt"
+
+[[example]]
+name = "replace_by_fee"
