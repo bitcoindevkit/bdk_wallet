@@ -939,7 +939,7 @@ mod test {
             .coin_select(
                 utxos,
                 vec![],
-                FeeRate::from_sat_per_vb_unchecked(1),
+                FeeRate::from_sat_per_vb_u32(1),
                 target_amount,
                 &drain_script,
                 &mut thread_rng(),
@@ -961,7 +961,7 @@ mod test {
             .coin_select(
                 utxos,
                 vec![],
-                FeeRate::from_sat_per_vb_unchecked(1),
+                FeeRate::from_sat_per_vb_u32(1),
                 target_amount,
                 &drain_script,
                 &mut thread_rng(),
@@ -983,7 +983,7 @@ mod test {
             .coin_select(
                 vec![],
                 utxos,
-                FeeRate::from_sat_per_vb_unchecked(1),
+                FeeRate::from_sat_per_vb_u32(1),
                 target_amount,
                 &drain_script,
                 &mut thread_rng(),
@@ -1004,7 +1004,7 @@ mod test {
         let result = LargestFirstCoinSelection.coin_select(
             vec![],
             utxos,
-            FeeRate::from_sat_per_vb_unchecked(1),
+            FeeRate::from_sat_per_vb_u32(1),
             target_amount,
             &drain_script,
             &mut thread_rng(),
@@ -1021,7 +1021,7 @@ mod test {
         let result = LargestFirstCoinSelection.coin_select(
             vec![],
             utxos,
-            FeeRate::from_sat_per_vb_unchecked(1000),
+            FeeRate::from_sat_per_vb_u32(1000),
             target_amount,
             &drain_script,
             &mut thread_rng(),
@@ -1039,7 +1039,7 @@ mod test {
             .coin_select(
                 vec![],
                 utxos,
-                FeeRate::from_sat_per_vb_unchecked(1),
+                FeeRate::from_sat_per_vb_u32(1),
                 target_amount,
                 &drain_script,
                 &mut thread_rng(),
@@ -1061,7 +1061,7 @@ mod test {
             .coin_select(
                 utxos,
                 vec![],
-                FeeRate::from_sat_per_vb_unchecked(1),
+                FeeRate::from_sat_per_vb_u32(1),
                 target_amount,
                 &drain_script,
                 &mut thread_rng(),
@@ -1085,7 +1085,7 @@ mod test {
             .coin_select(
                 vec![],
                 all_utxos,
-                FeeRate::from_sat_per_vb_unchecked(1),
+                FeeRate::from_sat_per_vb_u32(1),
                 target_amount,
                 &drain_script,
                 &mut thread_rng(),
@@ -1110,7 +1110,7 @@ mod test {
             .coin_select(
                 vec![],
                 all_utxos,
-                FeeRate::from_sat_per_vb_unchecked(1),
+                FeeRate::from_sat_per_vb_u32(1),
                 target_amount,
                 &drain_script,
                 &mut thread_rng(),
@@ -1136,7 +1136,7 @@ mod test {
             .coin_select(
                 vec![],
                 utxos,
-                FeeRate::from_sat_per_vb_unchecked(1),
+                FeeRate::from_sat_per_vb_u32(1),
                 target_amount,
                 &drain_script,
                 &mut thread_rng(),
@@ -1157,7 +1157,7 @@ mod test {
         let result = OldestFirstCoinSelection.coin_select(
             vec![],
             utxos,
-            FeeRate::from_sat_per_vb_unchecked(1),
+            FeeRate::from_sat_per_vb_u32(1),
             target_amount,
             &drain_script,
             &mut thread_rng(),
@@ -1176,7 +1176,7 @@ mod test {
         let result = OldestFirstCoinSelection.coin_select(
             vec![],
             utxos,
-            FeeRate::from_sat_per_vb_unchecked(1000),
+            FeeRate::from_sat_per_vb_u32(1000),
             target_amount,
             &drain_script,
             &mut thread_rng(),
@@ -1196,7 +1196,7 @@ mod test {
             .coin_select(
                 vec![],
                 utxos,
-                FeeRate::from_sat_per_vb_unchecked(1),
+                FeeRate::from_sat_per_vb_u32(1),
                 target_amount,
                 &drain_script,
                 &mut thread_rng(),
@@ -1218,7 +1218,7 @@ mod test {
             .coin_select(
                 utxos.clone(),
                 utxos,
-                FeeRate::from_sat_per_vb_unchecked(1),
+                FeeRate::from_sat_per_vb_u32(1),
                 target_amount,
                 &drain_script,
                 &mut thread_rng(),
@@ -1260,7 +1260,7 @@ mod test {
         let mut rng: StdRng = SeedableRng::from_seed(seed);
         let mut utxos = generate_random_utxos(&mut rng, 300);
         let target_amount = sum_random_utxos(&mut rng, &mut utxos) + FEE_AMOUNT;
-        let fee_rate = FeeRate::from_sat_per_vb_unchecked(1);
+        let fee_rate = FeeRate::from_sat_per_vb_u32(1);
         let drain_script = ScriptBuf::default();
 
         let result = SingleRandomDraw.coin_select(
@@ -1288,7 +1288,7 @@ mod test {
         // 100_000, 10, 200_000
         let utxos = get_test_utxos();
         let target_amount = Amount::from_sat(300_000) + FEE_AMOUNT;
-        let fee_rate = FeeRate::from_sat_per_vb_unchecked(1);
+        let fee_rate = FeeRate::from_sat_per_vb_u32(1);
         let drain_script = ScriptBuf::default();
 
         let result = SingleRandomDraw.coin_select(
@@ -1361,7 +1361,7 @@ mod test {
         let result = BranchAndBoundCoinSelection::<SingleRandomDraw>::default().coin_select(
             vec![],
             utxos,
-            FeeRate::from_sat_per_vb_unchecked(1),
+            FeeRate::from_sat_per_vb_u32(1),
             target_amount,
             &drain_script,
             &mut thread_rng(),
@@ -1379,7 +1379,7 @@ mod test {
         let result = BranchAndBoundCoinSelection::<SingleRandomDraw>::default().coin_select(
             vec![],
             utxos,
-            FeeRate::from_sat_per_vb_unchecked(1000),
+            FeeRate::from_sat_per_vb_u32(1000),
             target_amount,
             &drain_script,
             &mut thread_rng(),
@@ -1440,7 +1440,7 @@ mod test {
 
     #[test]
     fn test_bnb_function_no_exact_match() {
-        let fee_rate = FeeRate::from_sat_per_vb_unchecked(10);
+        let fee_rate = FeeRate::from_sat_per_vb_u32(10);
         let utxos: Vec<OutputGroup> = get_test_utxos()
             .into_iter()
             .map(|u| OutputGroup::new(u, fee_rate))
@@ -1472,7 +1472,7 @@ mod test {
 
     #[test]
     fn test_bnb_function_tries_exceeded() {
-        let fee_rate = FeeRate::from_sat_per_vb_unchecked(10);
+        let fee_rate = FeeRate::from_sat_per_vb_u32(10);
         let utxos: Vec<OutputGroup> = generate_same_value_utxos(Amount::from_sat(100_000), 100_000)
             .into_iter()
             .map(|u| OutputGroup::new(u, fee_rate))
@@ -1506,7 +1506,7 @@ mod test {
     // The match won't be exact but still in the range
     #[test]
     fn test_bnb_function_almost_exact_match_with_fees() {
-        let fee_rate = FeeRate::from_sat_per_vb_unchecked(1);
+        let fee_rate = FeeRate::from_sat_per_vb_u32(1);
         let size_of_change = 31;
         let cost_of_change = (Weight::from_vb_unchecked(size_of_change) * fee_rate)
             .to_signed()
@@ -1597,7 +1597,7 @@ mod test {
         let selection = BranchAndBoundCoinSelection::<SingleRandomDraw>::default().coin_select(
             vec![],
             utxos,
-            FeeRate::from_sat_per_vb_unchecked(10),
+            FeeRate::from_sat_per_vb_u32(10),
             Amount::from_sat(500_000),
             &drain_script,
             &mut thread_rng(),
@@ -1624,7 +1624,7 @@ mod test {
         let selection = BranchAndBoundCoinSelection::<SingleRandomDraw>::default().coin_select(
             required,
             optional,
-            FeeRate::from_sat_per_vb_unchecked(10),
+            FeeRate::from_sat_per_vb_u32(10),
             Amount::from_sat(500_000),
             &drain_script,
             &mut thread_rng(),
@@ -1647,7 +1647,7 @@ mod test {
         let selection = BranchAndBoundCoinSelection::<SingleRandomDraw>::default().coin_select(
             utxos,
             vec![],
-            FeeRate::from_sat_per_vb_unchecked(10_000),
+            FeeRate::from_sat_per_vb_u32(10_000),
             Amount::from_sat(500_000),
             &drain_script,
             &mut thread_rng(),
@@ -1721,7 +1721,7 @@ mod test {
         ];
 
         let optional = generate_same_value_utxos(Amount::from_sat(100_000), 30);
-        let fee_rate = FeeRate::from_sat_per_vb_unchecked(1);
+        let fee_rate = FeeRate::from_sat_per_vb_u32(1);
         let target_amount = calc_target_amount(&optional[0..3], fee_rate);
         assert_eq!(target_amount, Amount::from_sat(299_796));
         let drain_script = ScriptBuf::default();
