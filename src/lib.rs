@@ -46,6 +46,7 @@ pub use bdk_chain::rusqlite;
 pub use bdk_chain::rusqlite_impl;
 pub use descriptor::template;
 pub use descriptor::HdKeyPaths;
+pub use psbt::*;
 pub use signer;
 pub use signer::SignOptions;
 pub use tx_builder::*;
