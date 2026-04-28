@@ -1,10 +1,908 @@
-use bdk_wallet::bitcoin::{Amount, FeeRate, Psbt, TxIn};
+use bdk_chain::{BlockId, ConfirmationBlockTime};
+use bdk_tx::bdk_coin_select;
+use bdk_tx::ChangeScript;
+use bdk_wallet::bitcoin;
 use bdk_wallet::test_utils::*;
-use bdk_wallet::{psbt, KeychainKind, SignOptions};
+use bdk_wallet::{error::CreatePsbtError, psbt, KeychainKind, PsbtParams, SignOptions, Wallet};
+use bitcoin::{
+    absolute, hashes::Hash, Address, Amount, FeeRate, Network, OutPoint, Psbt, ScriptBuf, Sequence,
+    Transaction, TxIn, TxOut,
+};
 use core::str::FromStr;
+use miniscript::plan::Assets;
+use std::sync::Arc;
 
 // from bip 174
 const PSBT_STR: &str = "cHNidP8BAKACAAAAAqsJSaCMWvfEm4IS9Bfi8Vqz9cM9zxU4IagTn4d6W3vkAAAAAAD+////qwlJoIxa98SbghL0F+LxWrP1wz3PFTghqBOfh3pbe+QBAAAAAP7///8CYDvqCwAAAAAZdqkUdopAu9dAy+gdmI5x3ipNXHE5ax2IrI4kAAAAAAAAGXapFG9GILVT+glechue4O/p+gOcykWXiKwAAAAAAAEHakcwRAIgR1lmF5fAGwNrJZKJSGhiGDR9iYZLcZ4ff89X0eURZYcCIFMJ6r9Wqk2Ikf/REf3xM286KdqGbX+EhtdVRs7tr5MZASEDXNxh/HupccC1AaZGoqg7ECy0OIEhfKaC3Ibi1z+ogpIAAQEgAOH1BQAAAAAXqRQ1RebjO4MsRwUPJNPuuTycA5SLx4cBBBYAFIXRNTfy4mVAWjTbr6nj3aAfuCMIAAAA";
+
+// Test that `create_psbt` results in the expected PSBT.
+#[test]
+fn test_create_psbt() {
+    let (desc, change_desc) = get_test_tr_single_sig_xprv_and_change_desc();
+    let mut wallet = Wallet::create(desc, change_desc)
+        .network(Network::Regtest)
+        .create_wallet_no_persist()
+        .unwrap();
+    let expected_xpub = match wallet.public_descriptor(KeychainKind::External) {
+        miniscript::Descriptor::Tr(tr) => match tr.internal_key() {
+            miniscript::DescriptorPublicKey::XPub(desc) => desc.xkey,
+            _ => unreachable!(),
+        },
+        _ => unreachable!(),
+    };
+
+    // Receive coins
+    let anchor = ConfirmationBlockTime {
+        block_id: BlockId {
+            height: 100,
+            hash: Hash::hash(b"100"),
+        },
+        confirmation_time: 1234567000,
+    };
+    insert_checkpoint(&mut wallet, anchor.block_id);
+    receive_output(&mut wallet, Amount::ONE_BTC, ReceiveTo::Block(anchor));
+
+    let change_descriptor = wallet
+        .public_descriptor(KeychainKind::Internal)
+        .at_derivation_index(0)
+        .unwrap();
+
+    let addr = wallet.reveal_next_address(KeychainKind::External);
+    let mut params = PsbtParams::default();
+    let feerate = FeeRate::from_sat_per_vb(4).unwrap();
+    let selection_strategy = psbt::SelectionStrategy::LowestFee {
+        longterm_feerate: FeeRate::from_sat_per_vb(2).unwrap(),
+        max_rounds: 1000,
+    };
+    params
+        .version(bitcoin::transaction::Version(3))
+        .coin_selection(selection_strategy)
+        .add_recipients([(addr.script_pubkey(), Amount::from_btc(0.42).unwrap())])
+        .change_script(ChangeScript::from_descriptor(change_descriptor))
+        .fee_rate(feerate)
+        .add_global_xpubs();
+
+    let (psbt, _) = wallet.create_psbt(params).unwrap();
+    let tx = &psbt.unsigned_tx;
+    assert_eq!(tx.version.0, 3);
+    assert_eq!(tx.lock_time.to_consensus_u32(), 0);
+    assert_eq!(tx.input.len(), 1);
+    assert_eq!(tx.output.len(), 2);
+
+    // global xpubs
+    assert_eq!(
+        psbt.xpub,
+        [(expected_xpub, ("f6a5cb8b".parse().unwrap(), vec![].into()))].into(),
+    );
+    // witness utxo
+    let psbt_input = &psbt.inputs[0];
+    assert_eq!(
+        psbt_input.witness_utxo.as_ref().map(|txo| txo.value),
+        Some(Amount::ONE_BTC),
+    );
+    // input internal key
+    assert!(psbt_input.tap_internal_key.is_some());
+    // input key origins
+    assert!(psbt_input
+        .tap_key_origins
+        .values()
+        .any(|(_, (fp, _))| fp.to_string() == "f6a5cb8b"));
+    // output internal key
+    assert!(psbt
+        .outputs
+        .iter()
+        .any(|output| output.tap_internal_key.is_some()));
+    // output key origins
+    assert!(psbt.outputs.iter().any(|output| output
+        .tap_key_origins
+        .values()
+        .any(|(_, (fp, _))| fp.to_string() == "f6a5cb8b")));
+}
+
+#[test]
+fn test_create_psbt_insufficient_funds_error() {
+    let (desc, change_desc) = get_test_tr_single_sig_xprv_and_change_desc();
+    let mut wallet = Wallet::create(desc, change_desc)
+        .network(Network::Regtest)
+        .create_wallet_no_persist()
+        .unwrap();
+
+    let addr = wallet.reveal_next_address(KeychainKind::External);
+
+    let mut params = PsbtParams::default();
+    params.add_recipients([(addr.script_pubkey(), Amount::from_sat(10_000))]);
+
+    let result = wallet.create_psbt(params);
+    assert!(matches!(
+        result,
+        Err(CreatePsbtError::InsufficientFunds(
+            bdk_coin_select::InsufficientFunds { missing: 10_000 }
+        )),
+    ));
+}
+
+#[test]
+fn test_create_psbt_maturity_height() {
+    let (desc, change_desc) = get_test_tr_single_sig_xprv_and_change_desc();
+    let mut wallet = Wallet::create(desc, change_desc)
+        .network(Network::Regtest)
+        .create_wallet_no_persist()
+        .unwrap();
+    let receive_address = wallet.reveal_next_address(KeychainKind::External);
+    let send_to_address = wallet.reveal_next_address(KeychainKind::External).address;
+
+    let block_1 = BlockId {
+        height: 1,
+        hash: Hash::hash(b"1"),
+    };
+    insert_checkpoint(&mut wallet, block_1);
+
+    // Receive coinbase output at height = 1.
+    // maturity height = (1 + 100) = 101
+    let tx = Transaction {
+        input: vec![TxIn::default()],
+        output: vec![TxOut {
+            value: Amount::ONE_BTC,
+            script_pubkey: receive_address.script_pubkey(),
+        }],
+        ..new_tx(0)
+    };
+    insert_tx_anchor(&mut wallet, tx, block_1);
+
+    // The output is still immature at height = 99.
+    let mut p = PsbtParams::default();
+    p.add_recipients([(send_to_address.clone(), Amount::from_sat(58_000))])
+        .maturity_height(bitcoin::absolute::Height::from_consensus(99).unwrap());
+
+    let _ = wallet
+        .create_psbt(p)
+        .expect_err("immature output must not be selected");
+
+    // We can use the params to coerce the coinbase maturity.
+    let mut p = PsbtParams::default();
+    p.add_recipients([(send_to_address.clone(), Amount::from_sat(58_000))])
+        .maturity_height(bitcoin::absolute::Height::from_consensus(100).unwrap());
+
+    let _ = wallet
+        .create_psbt(p)
+        .expect("`maturity_height` should enable selection");
+
+    // The output is eligible for selection once the wallet tip reaches maturity height minus 1
+    // (100), as it can be confirmed in the next block (101).
+    let block_100 = BlockId {
+        height: 100,
+        hash: Hash::hash(b"100"),
+    };
+    insert_checkpoint(&mut wallet, block_100);
+    let mut p = PsbtParams::default();
+    p.add_recipients([(send_to_address.clone(), Amount::from_sat(58_000))]);
+
+    let _ = wallet
+        .create_psbt(p)
+        .expect("mature coinbase should be selected");
+}
+
+#[test]
+fn test_create_psbt_cltv() {
+    use absolute::LockTime;
+
+    let desc = get_test_single_sig_cltv();
+    let mut wallet = Wallet::create_single(desc)
+        .network(Network::Regtest)
+        .create_wallet_no_persist()
+        .unwrap();
+
+    // Receive coins
+    let anchor = ConfirmationBlockTime {
+        block_id: BlockId {
+            height: 99_999,
+            hash: Hash::hash(b"abc"),
+        },
+        confirmation_time: 1234567000,
+    };
+    insert_checkpoint(&mut wallet, anchor.block_id);
+    let op = receive_output(&mut wallet, Amount::ONE_BTC, ReceiveTo::Block(anchor));
+
+    let addr = wallet.reveal_next_address(KeychainKind::External);
+
+    // No assets fail
+    {
+        let mut params = PsbtParams::default();
+        params
+            .add_utxos(&[op])
+            .add_recipients([(addr.script_pubkey(), Amount::from_btc(0.42).unwrap())]);
+        let res = wallet.create_psbt(params);
+        assert!(
+            matches!(res, Err(CreatePsbtError::Plan(err)) if err == op),
+            "UTXO requires CLTV but the assets are insufficient",
+        );
+    }
+
+    // Add assets ok
+    {
+        let mut params = PsbtParams::default();
+        params
+            .add_utxos(&[op])
+            .add_assets(Assets::new().after(LockTime::from_consensus(100_000)))
+            .add_recipients([(addr.script_pubkey(), Amount::from_btc(0.42).unwrap())]);
+        let (psbt, _) = wallet.create_psbt(params).unwrap();
+        assert_eq!(psbt.unsigned_tx.lock_time.to_consensus_u32(), 100_000);
+    }
+
+    // New chain tip (no assets) ok
+    {
+        let block_id = BlockId {
+            height: 100_000,
+            hash: Hash::hash(b"123"),
+        };
+        insert_checkpoint(&mut wallet, block_id);
+
+        let mut params = PsbtParams::default();
+        params
+            .add_utxos(&[op])
+            .add_recipients([(addr.script_pubkey(), Amount::from_btc(0.42).unwrap())]);
+        let (psbt, _) = wallet.create_psbt(params).unwrap();
+        assert_eq!(psbt.unsigned_tx.lock_time.to_consensus_u32(), 100_000);
+    }
+
+    // Locktime greater than required
+    {
+        let mut params = PsbtParams::default();
+        params
+            .add_utxos(&[op])
+            .locktime(LockTime::from_consensus(200_000))
+            .add_recipients([(addr.script_pubkey(), Amount::from_btc(0.42).unwrap())]);
+
+        let (psbt, _) = wallet.create_psbt(params).unwrap();
+        assert_eq!(psbt.unsigned_tx.lock_time.to_consensus_u32(), 200_000);
+    }
+}
+
+#[test]
+fn test_create_psbt_cltv_timestamp() {
+    use absolute::LockTime;
+
+    let lock_time = LockTime::from_consensus(1734230218);
+    let desc = get_test_single_sig_cltv_timestamp();
+    let mut wallet = Wallet::create_single(desc)
+        .network(Network::Regtest)
+        .create_wallet_no_persist()
+        .unwrap();
+
+    // Receive coins
+    let op = receive_output(&mut wallet, Amount::ONE_BTC, ReceiveTo::Mempool(1));
+
+    let addr = wallet.reveal_next_address(KeychainKind::External);
+
+    // No assets fail
+    {
+        let mut params = PsbtParams::default();
+        params
+            .add_utxos(&[op])
+            .add_recipients([(addr.script_pubkey(), Amount::from_btc(0.42).unwrap())]);
+        let res = wallet.create_psbt(params);
+        assert!(
+            matches!(res, Err(CreatePsbtError::Plan(err)) if err == op),
+            "UTXO requires CLTV but the assets are insufficient",
+        );
+    }
+
+    // Add assets ok
+    {
+        let mut params = PsbtParams::default();
+        params
+            .add_utxos(&[op])
+            .add_assets(Assets::new().after(lock_time))
+            .add_recipients([(addr.script_pubkey(), Amount::from_btc(0.42).unwrap())]);
+        let (psbt, _) = wallet.create_psbt(params).unwrap();
+        assert_eq!(psbt.unsigned_tx.lock_time, lock_time);
+    }
+
+    // Locktime greater than required
+    {
+        let new_lock_time = 1772167108;
+        assert!(new_lock_time > lock_time.to_consensus_u32());
+        let mut params = PsbtParams::default();
+        params
+            .add_utxos(&[op])
+            .add_assets(Assets::new().after(lock_time))
+            .locktime(LockTime::from_consensus(new_lock_time))
+            .add_recipients([(addr.script_pubkey(), Amount::from_btc(0.42).unwrap())]);
+
+        let (psbt, _) = wallet.create_psbt(params).unwrap();
+        assert_eq!(psbt.unsigned_tx.lock_time.to_consensus_u32(), new_lock_time);
+    }
+}
+
+#[test]
+fn test_create_psbt_csv() {
+    use bitcoin::relative;
+    use bitcoin::Sequence;
+
+    let desc = get_test_single_sig_csv();
+    let mut wallet = Wallet::create_single(desc)
+        .network(Network::Regtest)
+        .create_wallet_no_persist()
+        .unwrap();
+
+    // Receive coins
+    let anchor = ConfirmationBlockTime {
+        block_id: BlockId {
+            height: 10_000,
+            hash: Hash::hash(b"abc"),
+        },
+        confirmation_time: 1234567000,
+    };
+    insert_checkpoint(&mut wallet, anchor.block_id);
+    let op = receive_output(&mut wallet, Amount::ONE_BTC, ReceiveTo::Block(anchor));
+
+    let addr = wallet.reveal_next_address(KeychainKind::External);
+
+    // No assets fail
+    {
+        let mut params = PsbtParams::default();
+        params
+            .add_utxos(&[op])
+            .add_recipients([(addr.script_pubkey(), Amount::from_btc(0.42).unwrap())]);
+        let res = wallet.create_psbt(params);
+        assert!(
+            matches!(res, Err(CreatePsbtError::Plan(err)) if err == op),
+            "UTXO requires CSV but the assets are insufficient",
+        );
+    }
+
+    // Add assets ok
+    {
+        let mut params = PsbtParams::default();
+        let rel_locktime = relative::LockTime::from_consensus(6).unwrap();
+        params
+            .add_utxos(&[op])
+            .add_assets(Assets::new().older(rel_locktime))
+            .add_recipients([(addr.script_pubkey(), Amount::from_btc(0.42).unwrap())]);
+        let (psbt, _) = wallet.create_psbt(params).unwrap();
+        assert_eq!(psbt.unsigned_tx.input[0].sequence, Sequence(6));
+    }
+
+    // Add 6 confirmations (no assets)
+    {
+        let anchor = ConfirmationBlockTime {
+            block_id: BlockId {
+                height: 10_005,
+                hash: Hash::hash(b"xyz"),
+            },
+            confirmation_time: 1234567000,
+        };
+        insert_checkpoint(&mut wallet, anchor.block_id);
+        let mut params = PsbtParams::default();
+        params
+            .add_utxos(&[op])
+            .add_recipients([(addr.script_pubkey(), Amount::from_btc(0.42).unwrap())]);
+        let (psbt, _) = wallet.create_psbt(params).unwrap();
+        assert_eq!(psbt.unsigned_tx.input[0].sequence, Sequence(6));
+    }
+}
+
+/// Fallback sequence is applied to a coin-selected input that has no CSV
+/// requirement.
+#[test]
+fn test_create_psbt_fallback_sequence_applied_to_coin_selected_input() {
+    let (mut wallet, _) = get_funded_wallet_wpkh();
+    let addr = wallet.next_unused_address(KeychainKind::External);
+    let mut params = PsbtParams::default();
+    params
+        .add_recipients([(addr.script_pubkey(), Amount::from_sat(25_000))])
+        .fallback_sequence(Sequence::ENABLE_RBF_NO_LOCKTIME);
+    let psbt = wallet.create_psbt(params).unwrap().0;
+    assert_eq!(
+        psbt.unsigned_tx.input[0].sequence,
+        Sequence::ENABLE_RBF_NO_LOCKTIME
+    );
+}
+
+/// Fallback sequence is NOT applied when the input already has a CSV-derived sequence
+/// requirement — the CSV value wins.
+#[test]
+fn test_create_psbt_fallback_sequence_skipped_for_csv_input() {
+    use bitcoin::relative;
+    let mut wallet = Wallet::create_single(get_test_single_sig_csv())
+        .network(Network::Regtest)
+        .create_wallet_no_persist()
+        .unwrap();
+    let anchor = ConfirmationBlockTime {
+        block_id: BlockId {
+            height: 10_000,
+            hash: Hash::hash(b"csv_fallback"),
+        },
+        confirmation_time: 1_234_567_000,
+    };
+    insert_checkpoint(&mut wallet, anchor.block_id);
+    let op = receive_output(
+        &mut wallet,
+        Amount::from_sat(100_000),
+        ReceiveTo::Block(anchor),
+    );
+
+    let addr = wallet.next_unused_address(KeychainKind::External);
+    let rel_locktime = relative::LockTime::from_consensus(6).unwrap();
+    let mut params = PsbtParams::default();
+    params
+        .add_utxos(&[op])
+        .add_assets(Assets::new().older(rel_locktime))
+        .add_recipients([(addr.script_pubkey(), Amount::from_sat(25_000))])
+        .fallback_sequence(Sequence::ENABLE_RBF_NO_LOCKTIME);
+    let psbt = wallet.create_psbt(params).unwrap().0;
+    // CSV descriptor requires older(6); fallback must not clobber the CSV-derived sequence.
+    assert_eq!(psbt.unsigned_tx.input[0].sequence, Sequence(6));
+}
+
+/// A per-input sequence override is applied to a manually-selected UTXO.
+#[test]
+fn test_create_psbt_sequence_override_manually_selected_input() {
+    let (mut wallet, txid) = get_funded_wallet_wpkh();
+    let utxo = OutPoint::new(txid, 0);
+    let addr = wallet.next_unused_address(KeychainKind::External);
+    let mut params = PsbtParams::default();
+    params
+        .add_recipients([(addr.script_pubkey(), Amount::from_sat(25_000))])
+        .add_utxos(&[utxo])
+        .manually_selected_only()
+        .sequence_override(utxo, Sequence(42));
+    let psbt = wallet.create_psbt(params).unwrap().0;
+    assert_eq!(psbt.unsigned_tx.input[0].sequence, Sequence(42));
+}
+
+/// A per-input sequence override takes precedence over a fallback sequence.
+#[test]
+fn test_create_psbt_sequence_override_takes_precedence_over_fallback() {
+    let (mut wallet, txid) = get_funded_wallet_wpkh();
+    let utxo = OutPoint::new(txid, 0);
+    let addr = wallet.next_unused_address(KeychainKind::External);
+    let mut params = PsbtParams::default();
+    params
+        .add_recipients([(addr.script_pubkey(), Amount::from_sat(25_000))])
+        .add_utxos(&[utxo])
+        .manually_selected_only()
+        .sequence_override(utxo, Sequence(42))
+        .fallback_sequence(Sequence::ENABLE_RBF_NO_LOCKTIME);
+    let psbt = wallet.create_psbt(params).unwrap().0;
+    assert_eq!(psbt.unsigned_tx.input[0].sequence, Sequence(42));
+}
+
+/// A sequence override that violates the CSV requirement returns a Sequence error.
+#[test]
+fn test_create_psbt_sequence_override_csv_conflict_returns_error() {
+    use bitcoin::relative;
+    let mut wallet = Wallet::create_single(get_test_single_sig_csv())
+        .network(Network::Regtest)
+        .create_wallet_no_persist()
+        .unwrap();
+    let anchor = ConfirmationBlockTime {
+        block_id: BlockId {
+            height: 10_000,
+            hash: Hash::hash(b"csv_override"),
+        },
+        confirmation_time: 1_234_567_000,
+    };
+    insert_checkpoint(&mut wallet, anchor.block_id);
+    let op = receive_output(
+        &mut wallet,
+        Amount::from_sat(100_000),
+        ReceiveTo::Block(anchor),
+    );
+
+    let addr = wallet.next_unused_address(KeychainKind::External);
+    let rel_locktime = relative::LockTime::from_consensus(6).unwrap();
+    let mut params = PsbtParams::default();
+    params
+        .add_utxos(&[op])
+        .add_assets(Assets::new().older(rel_locktime))
+        .add_recipients([(addr.script_pubkey(), Amount::from_sat(25_000))])
+        .manually_selected_only()
+        .sequence_override(op, Sequence(3)); // CSV requires >= 6
+    let result = wallet.create_psbt(params);
+    assert!(matches!(result, Err(CreatePsbtError::Sequence(_))));
+}
+
+// Test that replacing two unconfirmed txs A, B results in a transaction
+// that spends the inputs of both A and B.
+#[test]
+fn test_replace_by_fee_and_recpients() {
+    use KeychainKind::*;
+    let (desc, change_desc) = get_test_wpkh_and_change_desc();
+    let mut wallet = Wallet::create(desc, change_desc)
+        .network(Network::Regtest)
+        .create_wallet_no_persist()
+        .unwrap();
+
+    // The anchor block
+    let block = BlockId {
+        height: 100,
+        hash: Hash::hash(b"100"),
+    };
+
+    let mut addrs: Vec<Address> = vec![];
+    for _ in 0..3 {
+        let addr = wallet.reveal_next_address(External);
+        addrs.push(addr.address);
+    }
+
+    // Insert parent 0 (coinbase)
+    let p0 = Transaction {
+        input: vec![TxIn::default()],
+        output: vec![TxOut {
+            value: Amount::ONE_BTC,
+            script_pubkey: addrs[0].script_pubkey(),
+        }],
+        ..new_tx(1)
+    };
+    let op0 = OutPoint::new(p0.compute_txid(), 0);
+
+    insert_tx_anchor(&mut wallet, p0.clone(), block);
+
+    // Insert parent 1 (coinbase)
+    let p1 = Transaction {
+        input: vec![TxIn::default()],
+        output: vec![TxOut {
+            value: Amount::ONE_BTC,
+            script_pubkey: addrs[1].script_pubkey(),
+        }],
+        ..new_tx(1)
+    };
+    let op1 = OutPoint::new(p1.compute_txid(), 0);
+
+    insert_tx_anchor(&mut wallet, p1.clone(), block);
+
+    // Add new tip, for maturity
+    let block = BlockId {
+        height: 1000,
+        hash: Hash::hash(b"1000"),
+    };
+    insert_checkpoint(&mut wallet, block);
+
+    // Create tx A (unconfirmed)
+    let recip =
+        ScriptBuf::from_hex("5120e8f5c4dc2f5d6a7595e7b108cb063da9c7550312da1e22875d78b9db62b59cd5")
+            .unwrap();
+    let mut params = PsbtParams::default();
+    params
+        .add_utxos(&[op0])
+        .add_recipients([(recip.clone(), Amount::from_sat(16_000))]);
+    let txa = wallet.create_psbt(params).unwrap().0.unsigned_tx;
+    insert_tx(&mut wallet, txa.clone());
+
+    // Create tx B (unconfirmed)
+    let mut params = PsbtParams::default();
+    params
+        .add_utxos(&[op1])
+        .add_recipients([(recip.clone(), Amount::from_sat(42_000))]);
+    let txb = wallet.create_psbt(params).unwrap().0.unsigned_tx;
+    insert_tx(&mut wallet, txb.clone());
+
+    // Now create RBF tx
+    let psbt = wallet
+        .replace_by_fee_and_recipients(
+            &[Arc::new(txa), Arc::new(txb)],
+            FeeRate::from_sat_per_vb(4).unwrap(),
+            vec![(recip, Amount::from_btc(1.99).unwrap())],
+        )
+        .unwrap()
+        .0;
+
+    // Expect replace inputs of A, B
+    assert_eq!(
+        psbt.unsigned_tx.input.len(),
+        2,
+        "We should have selected two inputs"
+    );
+    for op in [op0, op1] {
+        assert!(
+            psbt.unsigned_tx
+                .input
+                .iter()
+                .any(|txin| txin.previous_output == op),
+            "We should have replaced the original spends"
+        );
+    }
+}
+
+// Test that replacing tx A also accounts for the fees of A's unconfirmed descendants
+// B and C when calculating the minimum required replacement fee (RBF Rule 3).
+//
+//   A       A'
+//  / \
+// B   C
+//
+// A' conflicts with A. The replacement fee should exceed
+// fee(A) + fee(B) + fee(C).
+#[test]
+fn test_replace_by_fee_replaces_descendant_fees() {
+    use KeychainKind::*;
+
+    let (desc, change_desc) = get_test_wpkh_and_change_desc();
+    let mut wallet = Wallet::create(desc, change_desc)
+        .network(Network::Regtest)
+        .create_wallet_no_persist()
+        .unwrap();
+
+    let block_id = BlockId {
+        height: 100,
+        hash: Hash::hash(b"100"),
+    };
+
+    // addr0 receives the confirmed funding; addr1 and addr2 are wallet change
+    // addresses that tx A pays into so that B and C can spend them.
+    let addr0 = wallet.reveal_next_address(External).address;
+    let addr1 = wallet.reveal_next_address(Internal).address;
+    let addr2 = wallet.reveal_next_address(Internal).address;
+
+    // External (non-wallet) output script used as a sink for recipients.
+    let external =
+        ScriptBuf::from_hex("5120e8f5c4dc2f5d6a7595e7b108cb063da9c7550312da1e22875d78b9db62b59cd5")
+            .unwrap();
+
+    // Confirmed funding tx: 1_000_000 sats to addr0.
+    let funding_tx = Transaction {
+        input: vec![TxIn::default()],
+        output: vec![TxOut {
+            value: Amount::from_sat(1_000_000),
+            script_pubkey: addr0.script_pubkey(),
+        }],
+        ..new_tx(0)
+    };
+    let funding_op = OutPoint::new(funding_tx.compute_txid(), 0);
+    insert_tx_anchor(&mut wallet, funding_tx.clone(), block_id);
+
+    // Tx A (unconfirmed): spends the confirmed UTXO; two outputs return to wallet.
+    //   fee_a = 1_000_000 - 50_000 - 450_000 - 450_000 = 50_000 sats
+    let tx_a = Transaction {
+        input: vec![TxIn {
+            previous_output: funding_op,
+            ..TxIn::default()
+        }],
+        output: vec![
+            TxOut {
+                value: Amount::from_sat(50_000),
+                script_pubkey: external.clone(),
+            },
+            TxOut {
+                value: Amount::from_sat(450_000),
+                script_pubkey: addr1.script_pubkey(),
+            },
+            TxOut {
+                value: Amount::from_sat(450_000),
+                script_pubkey: addr2.script_pubkey(),
+            },
+        ],
+        ..new_tx(0)
+    };
+    let a_txid = tx_a.compute_txid();
+    let fee_a = wallet.calculate_fee(&tx_a).unwrap();
+    insert_tx(&mut wallet, tx_a.clone());
+
+    // Tx B (unconfirmed): spends A's first change output.
+    //   fee_b = 450_000 - 430_000 = 20_000 sats
+    let tx_b = Transaction {
+        input: vec![TxIn {
+            previous_output: OutPoint::new(a_txid, 1),
+            ..TxIn::default()
+        }],
+        output: vec![TxOut {
+            value: Amount::from_sat(430_000),
+            script_pubkey: external.clone(),
+        }],
+        ..new_tx(0)
+    };
+    let fee_b = wallet.calculate_fee(&tx_b).unwrap();
+    insert_tx(&mut wallet, tx_b);
+
+    // Tx C (unconfirmed): spends A's second change output.
+    //   fee_c = 450_000 - 430_000 = 20_000 sats
+    let tx_c = Transaction {
+        input: vec![TxIn {
+            previous_output: OutPoint::new(a_txid, 2),
+            ..TxIn::default()
+        }],
+        output: vec![TxOut {
+            value: Amount::from_sat(430_000),
+            script_pubkey: external.clone(),
+        }],
+        ..new_tx(0)
+    };
+    let fee_c = wallet.calculate_fee(&tx_c).unwrap();
+    insert_tx(&mut wallet, tx_c.clone());
+
+    // The replacement must pay at least the combined fee of all three transactions
+    // (Bitcoin Core RBF Rule 3).
+    let total_original_fee = fee_a + fee_b + fee_c;
+    assert_eq!(total_original_fee.to_sat(), 90_000);
+
+    // Build replacement A'. The wallet walks A's descendants (B and C) so their
+    // fees are included in the minimum required replacement fee.
+    let (psbt, _) = wallet
+        .replace_by_fee_and_recipients(
+            &[Arc::new(tx_a)],
+            FeeRate::from_sat_per_vb(4).unwrap(),
+            vec![(external, Amount::from_sat(100_000))],
+        )
+        .expect("should create replacement psbt");
+
+    let replacement_fee = wallet
+        .calculate_fee(&psbt.unsigned_tx)
+        .expect("replacement tx fee should be calculable");
+
+    assert!(
+        replacement_fee >= total_original_fee,
+        "replacement fee ({replacement_fee}) must be >= sum of fees for A + B + C ({total_original_fee})",
+    );
+}
+
+// Test that `replace_by_fee`` rejects a confirmed original tx
+#[test]
+fn test_replace_by_fee_confirmed_tx_error() {
+    use bdk_wallet::error::ReplaceByFeeError;
+    use KeychainKind::*;
+
+    let (desc, change_desc) = get_test_wpkh_and_change_desc();
+    let mut wallet = Wallet::create(desc, change_desc)
+        .network(Network::Regtest)
+        .create_wallet_no_persist()
+        .unwrap();
+
+    let block = BlockId {
+        height: 100,
+        hash: Hash::hash(b"100"),
+    };
+    let addr = wallet.reveal_next_address(External).address;
+
+    // Fund the wallet with a confirmed output.
+    let funding_tx = Transaction {
+        input: vec![TxIn::default()],
+        output: vec![TxOut {
+            value: Amount::from_sat(200_000),
+            script_pubkey: addr.script_pubkey(),
+        }],
+        ..new_tx(0)
+    };
+    let funding_op = OutPoint::new(funding_tx.compute_txid(), 0);
+    insert_tx_anchor(&mut wallet, funding_tx, block);
+
+    // Create an unconfirmed tx spending the confirmed UTXO.
+    let recip =
+        ScriptBuf::from_hex("5120e8f5c4dc2f5d6a7595e7b108cb063da9c7550312da1e22875d78b9db62b59cd5")
+            .unwrap();
+    let mut params = PsbtParams::default();
+    params
+        .add_utxos(&[funding_op])
+        .add_recipients([(recip, Amount::from_sat(100_000))]);
+    let unconfirmed_tx = wallet.create_psbt(params).unwrap().0.unsigned_tx;
+    insert_tx(&mut wallet, unconfirmed_tx.clone());
+
+    // Now confirm that tx.
+    let confirmed_txid = unconfirmed_tx.compute_txid();
+    let confirm_block = BlockId {
+        height: 1001,
+        hash: Hash::hash(b"1001"),
+    };
+    insert_tx_anchor(&mut wallet, unconfirmed_tx.clone(), confirm_block);
+    insert_checkpoint(&mut wallet, confirm_block);
+
+    // Attempting to replace the now-confirmed tx should return TransactionConfirmed.
+    let result = wallet.replace_by_fee_and_recipients(
+        &[Arc::new(unconfirmed_tx)],
+        FeeRate::from_sat_per_vb(10).unwrap(),
+        vec![],
+    );
+
+    assert!(
+        matches!(result, Err(ReplaceByFeeError::TransactionConfirmed(txid)) if txid == confirmed_txid),
+        "expected TransactionConfirmed error, got: {result:?}",
+    );
+}
+
+// Test that `replace_by_fee` errors when all original inputs have been removed via
+// `remove_utxo`, leaving the replacement with no inputs from the replaced transaction.
+#[test]
+fn test_replace_by_fee_no_inputs_from_original() {
+    use bdk_wallet::error::ReplaceByFeeError;
+    use KeychainKind::*;
+
+    let (desc, change_desc) = get_test_wpkh_and_change_desc();
+    let mut wallet = Wallet::create(desc, change_desc)
+        .network(Network::Regtest)
+        .create_wallet_no_persist()
+        .unwrap();
+
+    let addr = wallet.reveal_next_address(External).address;
+
+    // Fund the wallet with an unconfirmed output.
+    let funding_tx = Transaction {
+        input: vec![TxIn {
+            previous_output: OutPoint::new(Hash::hash(b"funding_parent"), 0),
+            ..Default::default()
+        }],
+        output: vec![TxOut {
+            value: Amount::from_sat(200_000),
+            script_pubkey: addr.script_pubkey(),
+        }],
+        ..new_tx(0)
+    };
+    let funding_op = OutPoint::new(funding_tx.compute_txid(), 0);
+    insert_tx(&mut wallet, funding_tx);
+
+    // Create an unconfirmed tx spending the funded UTXO.
+    let recip =
+        ScriptBuf::from_hex("5120e8f5c4dc2f5d6a7595e7b108cb063da9c7550312da1e22875d78b9db62b59cd5")
+            .unwrap();
+    let mut params = PsbtParams::default();
+    params
+        .add_utxos(&[funding_op])
+        .add_recipients([(recip, Amount::from_sat(100_000))]);
+    let unconfirmed_tx = wallet.create_psbt(params).unwrap().0.unsigned_tx;
+    let unconfirmed_txid = unconfirmed_tx.compute_txid();
+    insert_tx(&mut wallet, unconfirmed_tx.clone());
+
+    // Build replacement params, but remove the original inputs
+    let mut params = PsbtParams::default().replace_txs(&[Arc::new(unconfirmed_tx)]);
+    params.remove_utxo(&funding_op);
+
+    let result = wallet.replace_by_fee(params);
+    assert!(
+        matches!(result, Err(ReplaceByFeeError::NoInputsFromOriginal(txid)) if txid == unconfirmed_txid),
+        "expected NoInputsFromOriginal error, got: {result:?}",
+    );
+}
+
+#[test]
+fn test_create_psbt_utxo_filter() {
+    let (desc, change_desc) = get_test_tr_single_sig_xprv_and_change_desc();
+    let mut wallet = Wallet::create(desc, change_desc)
+        .network(Network::Regtest)
+        .create_wallet_no_persist()
+        .unwrap();
+
+    let anchor = ConfirmationBlockTime {
+        block_id: BlockId {
+            height: 1000,
+            hash: Hash::hash(b"1000"),
+        },
+        confirmation_time: 1234567,
+    };
+    insert_checkpoint(&mut wallet, anchor.block_id);
+
+    for value in [200, 300, 600, 1000] {
+        let _ = receive_output(
+            &mut wallet,
+            Amount::from_sat(value),
+            ReceiveTo::Block(anchor),
+        );
+    }
+    assert_eq!(wallet.list_unspent().count(), 4);
+    assert_eq!(wallet.balance().total().to_sat(), 2100);
+
+    let mut params = PsbtParams::default();
+    params.fee_rate(FeeRate::ZERO);
+    // Avoid selection of dust utxos
+    params.filter_utxos(|txo| {
+        let min_non_dust = txo.txout.script_pubkey.minimal_non_dust(); // 330
+        txo.txout.value >= min_non_dust
+    });
+    let change_script = ChangeScript::from_descriptor(
+        wallet
+            .public_descriptor(KeychainKind::Internal)
+            .at_derivation_index(0)
+            .unwrap(),
+    );
+    params.change_script(change_script);
+    params.drain_wallet();
+    let (psbt, _) = wallet.create_psbt(params).unwrap();
+    assert_eq!(psbt.unsigned_tx.input.len(), 2);
+    assert_eq!(psbt.unsigned_tx.output.len(), 1);
+    assert_eq!(
+        psbt.unsigned_tx.output[0].value.to_sat(),
+        1600,
+        "We should have selected 2 non-dust utxos"
+    );
+}
 
 #[test]
 #[should_panic(expected = "InputIndexOutOfRange")]

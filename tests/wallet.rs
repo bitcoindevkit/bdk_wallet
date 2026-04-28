@@ -6,7 +6,7 @@ use bdk_chain::{BlockId, CanonicalizationParams, ConfirmationBlockTime};
 use bdk_wallet::coin_selection;
 use bdk_wallet::descriptor::{calc_checksum, DescriptorError};
 use bdk_wallet::error::CreateTxError;
-use bdk_wallet::psbt::PsbtUtils;
+use bdk_wallet::psbt::{self, PsbtUtils};
 use bdk_wallet::signer::{SignOptions, SignerError};
 use bdk_wallet::test_utils::*;
 use bdk_wallet::KeychainKind;
@@ -24,6 +24,89 @@ use rand::rngs::StdRng;
 use rand::SeedableRng;
 
 mod common;
+
+// Test we can select and spend an indexed but not-yet-canonical utxo
+#[test]
+fn test_spend_non_canonical_txout() -> anyhow::Result<()> {
+    let (desc, change_desc) = get_test_wpkh_and_change_desc();
+    let mut wallet = Wallet::create(desc, change_desc)
+        .network(Network::Regtest)
+        .create_wallet_no_persist()
+        .unwrap();
+
+    let recip = ScriptBuf::from_hex("0014446906a6560d8ad760db3156706e72e171f3a2aa").unwrap();
+
+    // Receive tx0 (coinbase)
+    let tx = Transaction {
+        input: vec![TxIn::default()],
+        output: vec![TxOut {
+            value: Amount::ONE_BTC,
+            script_pubkey: wallet
+                .reveal_next_address(KeychainKind::External)
+                .script_pubkey(),
+        }],
+        ..new_tx(1)
+    };
+    let block = BlockId {
+        height: 100,
+        hash: Hash::hash(b"100"),
+    };
+    insert_tx_anchor(&mut wallet, tx, block);
+    let block = BlockId {
+        height: 1000,
+        hash: Hash::hash(b"1000"),
+    };
+    insert_checkpoint(&mut wallet, block);
+
+    // Create tx1
+    let mut params = psbt::PsbtParams::default();
+    params.add_recipients([(recip.clone(), Amount::from_btc(0.01)?)]);
+    let psbt = wallet.create_psbt(params)?.0;
+    let txid = psbt.unsigned_tx.compute_txid();
+    let (vout, _) = psbt
+        .unsigned_tx
+        .output
+        .iter()
+        .enumerate()
+        .find(|(_, txo)| wallet.is_mine(txo.script_pubkey.clone()))
+        .unwrap();
+    let to_select_op = OutPoint::new(txid, vout as u32);
+
+    let txid1 = psbt.unsigned_tx.compute_txid();
+    wallet.insert_tx(psbt.unsigned_tx);
+
+    // Create tx2, spending the change of tx1
+    let mut params = psbt::PsbtParams::default();
+    let canonical_params = bdk_chain::CanonicalizationParams {
+        assume_canonical: vec![to_select_op.txid],
+    };
+    params
+        .canonicalization_params(canonical_params)
+        .add_recipients([(recip, Amount::from_btc(0.01)?)]);
+
+    let psbt = wallet.create_psbt(params)?.0;
+
+    assert_eq!(psbt.unsigned_tx.input.len(), 1);
+    assert_eq!(psbt.unsigned_tx.input[0].previous_output, to_select_op);
+
+    let txid2 = psbt.unsigned_tx.compute_txid();
+    wallet.insert_tx(psbt.unsigned_tx);
+
+    // Check we can retrieve the unsigned txs.
+    let txs = wallet
+        .transactions_with_params(CanonicalizationParams {
+            assume_canonical: vec![txid2],
+        })
+        .filter(|c| c.chain_position.is_unconfirmed())
+        .collect::<Vec<_>>();
+
+    assert_eq!(txs.len(), 2);
+
+    assert!(txs.iter().any(|c| c.tx_node.txid == txid1));
+    assert!(txs.iter().any(|c| c.tx_node.txid == txid2));
+
+    Ok(())
+}
 
 #[test]
 fn test_error_external_and_internal_are_the_same() {
