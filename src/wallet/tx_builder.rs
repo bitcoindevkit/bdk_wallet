@@ -828,7 +828,7 @@ type TxSort<T> = dyn (Fn(&T, &T) -> core::cmp::Ordering) + Send + Sync;
 
 /// Ordering of the transaction's inputs and outputs
 #[derive(Clone, Default)]
-pub enum TxOrdering {
+pub enum TxOrdering<In = TxIn, Out = TxOut> {
     /// Randomized (default)
     #[default]
     Shuffle,
@@ -843,13 +843,13 @@ pub enum TxOrdering {
     /// Provide custom comparison functions for sorting
     Custom {
         /// Transaction inputs sort function
-        input_sort: Arc<TxSort<TxIn>>,
+        input_sort: Arc<TxSort<In>>,
         /// Transaction outputs sort function
-        output_sort: Arc<TxSort<TxOut>>,
+        output_sort: Arc<TxSort<Out>>,
     },
 }
 
-impl core::fmt::Debug for TxOrdering {
+impl<I, O> core::fmt::Debug for TxOrdering<I, O> {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         match self {
             TxOrdering::Shuffle => write!(f, "Shuffle"),
