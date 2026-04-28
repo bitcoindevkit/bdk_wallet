@@ -1,7 +1,10 @@
 [workspace]
 resolver = "2"
 members = [
-    "wallet",
+    "example_wallet_electrum",
+    "example_wallet_esplora_async",
+    "example_wallet_esplora_blocking",
+    "example_wallet_rpc"
 ]
 
 [workspace.package]
