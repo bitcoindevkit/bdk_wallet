@@ -43,15 +43,12 @@ impl PsbtUtils for Psbt {
 
         match (&input.witness_utxo, &input.non_witness_utxo) {
             (Some(_), _) => input.witness_utxo.clone(),
-            (_, Some(_)) => input.non_witness_utxo.as_ref().and_then(|in_tx| {
-                // Validate that the non_witness_utxo txid matches the input's previous output txid
-                if in_tx.compute_txid() != tx.input[input_index].previous_output.txid {
+            (_, Some(_)) => input.non_witness_utxo.as_ref().and_then(|prev_tx| {
+                let outpoint = tx.input[input_index].previous_output;
+                if prev_tx.compute_txid() != outpoint.txid {
                     return None;
                 }
-                in_tx
-                    .output
-                    .get(tx.input[input_index].previous_output.vout as usize)
-                    .cloned()
+                prev_tx.output.get(outpoint.vout as usize).cloned()
             }),
             _ => None,
         }
@@ -74,5 +71,87 @@ impl PsbtUtils for Psbt {
         let fee_amount = self.fee_amount();
         let weight = self.clone().extract_tx().ok()?.weight();
         fee_amount.map(|fee| fee / weight)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bitcoin::psbt::Input;
+    use bitcoin::{
+        absolute, transaction, Amount, OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut,
+        Witness,
+    };
+
+    /// Builds a simple transaction with one output of the given value
+    fn build_tx(value: Amount) -> Transaction {
+        Transaction {
+            version: transaction::Version::TWO,
+            lock_time: absolute::LockTime::ZERO,
+            input: vec![TxIn {
+                previous_output: OutPoint::null(),
+                script_sig: ScriptBuf::default(),
+                sequence: Sequence::MAX,
+                witness: Witness::default(),
+            }],
+            output: vec![TxOut {
+                value,
+                script_pubkey: ScriptBuf::default(),
+            }],
+        }
+    }
+
+    /// Builds a PSBT spending from the given previous transaction at the given vout
+    fn build_psbt(prev_tx: &Transaction, vout: u32) -> Psbt {
+        let unsigned_tx = Transaction {
+            version: transaction::Version::TWO,
+            lock_time: absolute::LockTime::ZERO,
+            input: vec![TxIn {
+                previous_output: OutPoint {
+                    txid: prev_tx.compute_txid(),
+                    vout,
+                },
+                script_sig: ScriptBuf::default(),
+                sequence: Sequence::MAX,
+                witness: Witness::default(),
+            }],
+            output: vec![TxOut {
+                value: Amount::from_sat(90_000),
+                script_pubkey: ScriptBuf::default(),
+            }],
+        };
+        Psbt::from_unsigned_tx(unsigned_tx).unwrap()
+    }
+
+    #[test]
+    fn get_utxo_for_returns_none_on_txid_mismatch() {
+        let real_tx = build_tx(Amount::from_sat(100_000));
+
+        // A different transaction with an inflated value — simulates attacker input
+        let fake_tx = build_tx(Amount::from_sat(999_999_999));
+
+        // PSBT spends from real_tx but attacker supplies fake_tx as non_witness_utxo
+        let mut psbt = build_psbt(&real_tx, 0);
+        psbt.inputs[0] = Input {
+            non_witness_utxo: Some(fake_tx), // txid won't match
+            ..Default::default()
+        };
+
+        // Must return None — fake tx rejected
+        assert_eq!(psbt.get_utxo_for(0), None);
+    }
+
+    #[test]
+    fn get_utxo_for_returns_none_on_vout_out_of_bounds() {
+        let prev_tx = build_tx(Amount::from_sat(100_000));
+        // prev_tx only has 1 output (vout 0), but we claim to spend vout 3
+        let mut psbt = build_psbt(&prev_tx, 3);
+        psbt.inputs[0] = Input {
+            non_witness_utxo: Some(prev_tx), // txid matches, but vout 3 doesn't exist
+            ..Default::default()
+        };
+
+        // Must return None — vout out of bounds, no panic
+        assert_eq!(psbt.get_utxo_for(0), None);
     }
 }
