@@ -1983,13 +1983,14 @@ impl Wallet {
             vec![]
         // Only process optional UTxOs if manually_selected_only is false.
         } else {
+            let tx_graph = self.tx_graph.graph();
+            let target_is_truc = params.version.unwrap_or(transaction::Version::TWO).0 == 3;
             let manually_selected_outpoints = params
                 .utxos
                 .iter()
                 .map(|wutxo| wutxo.utxo.outpoint())
                 .collect::<HashSet<OutPoint>>();
-            self.tx_graph
-                .graph()
+            tx_graph
                 // Get all unspent UTxOs from wallet.
                 // NOTE: the UTxOs returned by the following method already belong to wallet as the
                 // call chain uses get_tx_node infallibly.
@@ -2022,6 +2023,14 @@ impl Wallet {
                 // If bumping fees only add to optional UTxOs those confirmed.
                 .filter(|local_output| {
                     params.bumping_fee.is_none() || local_output.chain_position.is_confirmed()
+                })
+                // Bitcoin Core's TRUC policy requires a transaction and each unconfirmed parent it
+                // spends from to both be either TRUC (version 3) or both non-TRUC.
+                .filter(|local_output| {
+                    local_output.chain_position.is_confirmed()
+                        || tx_graph
+                            .get_tx(local_output.outpoint.txid)
+                            .is_some_and(|tx| (tx.version.0 == 3) == target_is_truc)
                 })
                 .map(|utxo| WeightedUtxo {
                     satisfaction_weight: self
