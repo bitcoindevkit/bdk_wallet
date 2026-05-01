@@ -462,11 +462,10 @@ impl DescriptorMeta for ExtendedDescriptor {
         // Ensure that deriving `xpub` with `path` yields `expected`.
         let verify_key =
             |xpub: &DescriptorXKey<Xpub>, path: &DerivationPath, expected: &SinglePubKey| {
-                let derived = xpub
-                    .xkey
-                    .derive_pub(secp, path)
-                    .expect("The path should never contain hardened derivation steps")
-                    .public_key;
+                let derived = match xpub.xkey.derive_pub(secp, path) {
+                    Ok(derived) => derived.public_key,
+                    Err(_) => return false,
+                };
 
                 match expected {
                     SinglePubKey::FullKey(pk) if &PublicKey::new(derived) == pk => true,
@@ -994,5 +993,42 @@ mod test {
             .unwrap_err();
 
         Ok(())
+    }
+
+    #[test]
+    fn test_derive_from_psbt_input_with_hardened_key_origin_does_not_panic() {
+        let secp = Secp256k1::new();
+
+        // Create a descriptor with an xpub that has a wildcard.
+        let descriptor = Descriptor::<DescriptorPublicKey>::from_str(
+            "pkh([0f056943/44h/0h/0h]tpubDDpWvmUrPZrhSPmUzCMBHffvC3HyMAPnWDSAQNBTnj1iZeJa7BZQEttFiP4DS4GCcXQHezdXhn86Hj6LHX5EDstXPWrMaSneRWM8yUf6NFd/10/*)",
+        )
+        .unwrap();
+
+        // Craft a PSBT input with a bip32_derivation entry that contains hardened
+        // derivation steps. This simulates untrusted/malicious PSBT data.
+        let fingerprint = bip32::Fingerprint::from_str("0f056943").unwrap();
+        let hardened_path = bip32::DerivationPath::from_str("m/44h/0h/0h/10/0h").unwrap();
+
+        // Derive the actual public key from the xpub in the descriptor so the
+        // fingerprint matches and we exercise the verify_key code path.
+        let xpub = bip32::Xpub::from_str(
+            "tpubDDpWvmUrPZrhSPmUzCMBHffvC3HyMAPnWDSAQNBTnj1iZeJa7BZQEttFiP4DS4GCcXQHezdXhn86Hj6LHX5EDstXPWrMaSneRWM8yUf6NFd",
+        )
+        .unwrap();
+        let dummy_pubkey = xpub.public_key;
+
+        let mut psbt_input = psbt::Input::default();
+        psbt_input
+            .bip32_derivation
+            .insert(dummy_pubkey, (fingerprint, hardened_path));
+
+        // Previously, this would panic with "The path should never contain hardened
+        // derivation steps". Now it should gracefully return None.
+        let result = descriptor.derive_from_psbt_input(&psbt_input, None, &secp);
+        assert!(
+            result.is_none(),
+            "should return None rather than panicking on hardened derivation in PSBT key origins"
+        );
     }
 }
