@@ -1305,7 +1305,11 @@ impl Wallet {
             // If they didn't tell us the current height, we assume it's the latest sync height.
             None => {
                 let tip_height = self.chain.tip().height();
-                absolute::LockTime::from_height(tip_height).expect("invalid height")
+                // If the local chain tip height is not a valid block height for a locktime,
+                // that's an invariant violation in `LocalChain` (block heights are
+                // always below the locktime threshold) and should be addressed upstream.
+                absolute::LockTime::from_height(tip_height)
+                    .expect("LocalChain tip height should be a valid block height")
             }
             Some(h) => h,
         };

@@ -645,9 +645,12 @@ impl<'a, Cs> TxBuilder<'a, Cs> {
     ///    them using [`TxBuilder::add_utxos`].
     ///
     /// In both cases, if you don't provide a current height, we use the last sync height.
-    pub fn current_height(&mut self, height: u32) -> &mut Self {
-        self.params.current_height =
-            Some(absolute::LockTime::from_height(height).expect("Invalid height"));
+    ///
+    /// This method takes an [`absolute::Height`], which is guaranteed by the type system to
+    /// be a valid block height for a locktime (below 500_000_000). Callers can construct one
+    /// with [`absolute::Height::from_consensus`].
+    pub fn current_height(&mut self, height: absolute::Height) -> &mut Self {
+        self.params.current_height = Some(absolute::LockTime::from(height));
         self
     }
 
