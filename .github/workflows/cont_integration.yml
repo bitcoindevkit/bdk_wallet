@@ -39,8 +39,8 @@ jobs:
         run: ./ci/pin-msrv.sh
       - name: Build + Test
         run: |
-          cargo build --workspace --all-targets ${{ matrix.features }}
-          cargo test --workspace ${{ matrix.features }}
+          cargo build --workspace --exclude bdk_wallet_fuzz --all-targets ${{ matrix.features }}
+          cargo test --workspace --exclude bdk_wallet_fuzz ${{ matrix.features }}
 
   build-test-stable:
     name: Build & Test Rust Stable
@@ -66,8 +66,8 @@ jobs:
           cache: true
       - name: Build + Test
         run: |
-          cargo build --workspace --all-targets ${{ matrix.features }}
-          cargo test --workspace ${{ matrix.features }}
+          cargo build --workspace --exclude bdk_wallet_fuzz --all-targets ${{ matrix.features }}
+          cargo test --workspace --exclude bdk_wallet_fuzz ${{ matrix.features }}
 
   check-no-std:
     name: Check no_std
@@ -144,7 +144,7 @@ jobs:
         with:
           cache: true
       - name: Clippy
-        run: cargo clippy --all-features --all-targets -- -D warnings
+        run: cargo clippy --workspace --exclude bdk_wallet_fuzz --all-features --all-targets -- -D warnings
 
   docs_check:
     name: Check cargo doc
@@ -160,4 +160,4 @@ jobs:
         with:
           cache: true
       - name: Check docs
-        run: RUSTDOCFLAGS='-D warnings' cargo doc --workspace --all-features --no-deps
+        run: RUSTDOCFLAGS='-D warnings' cargo doc --workspace --exclude bdk_wallet_fuzz --all-features --no-deps
