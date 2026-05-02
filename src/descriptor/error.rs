@@ -44,6 +44,8 @@ pub enum Error {
     Hex(bitcoin::hex::HexToBytesError),
     /// The provided wallet descriptors are identical
     ExternalAndInternalAreTheSame,
+    /// Descriptor type is not supported by the wallet (e.g. bare or raw scripts have no address form)
+    UnsupportedDescriptorType,
 }
 
 impl From<crate::keys::KeyError> for Error {
@@ -83,6 +85,12 @@ impl fmt::Display for Error {
             Self::Hex(err) => write!(f, "Hex decoding error: {err}"),
             Self::ExternalAndInternalAreTheSame => {
                 write!(f, "External and internal descriptors are the same")
+            }
+            Self::UnsupportedDescriptorType => {
+                write!(
+                    f,
+                    "Descriptor type is not supported by the wallet; bare and raw scripts have no address form"
+                )
             }
         }
     }

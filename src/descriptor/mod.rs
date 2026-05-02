@@ -334,6 +334,22 @@ pub(crate) fn check_wallet_descriptor(
         ));
     }
 
+    // Reject descriptor types that have no standard address form (e.g. bare scripts, raw scripts).
+    // Using an allowlist guards against any future unsupported types as well.
+    match descriptor.desc_type() {
+        DescriptorType::Pkh
+        | DescriptorType::Wpkh
+        | DescriptorType::ShWpkh
+        | DescriptorType::Sh
+        | DescriptorType::ShSortedMulti
+        | DescriptorType::Wsh
+        | DescriptorType::ShWsh
+        | DescriptorType::ShWshSortedMulti
+        | DescriptorType::WshSortedMulti
+        | DescriptorType::Tr => {}
+        _ => return Err(DescriptorError::UnsupportedDescriptorType),
+    }
+
     // Run miniscript's sanity check, which will look for duplicated keys and other potential
     // issues.
     descriptor.sanity_check()?;
@@ -925,6 +941,24 @@ mod test {
         let result = check_wallet_descriptor(&descriptor);
 
         assert!(result.is_err());
+
+        // Bare descriptors (e.g. pk()) have no standard address form and must be rejected.
+        let descriptor = Descriptor::<DescriptorPublicKey>::from_str(
+            "pk(tpubD6NzVbkrYhZ4XHndKkuB8FifXm8r5FQHwrN6oZuWCz13qb93rtgKvD4PQsqC4HP4yhV3tA2fqr2RbY5mNXfM7RxXUoeABoDtsFUq2zJq6YK/0/*)",
+        )
+        .expect("must parse");
+        assert_matches!(
+            check_wallet_descriptor(&descriptor),
+            Err(DescriptorError::UnsupportedDescriptorType)
+        );
+
+        // Raw script descriptors have no standard address form and must be rejected.
+        let descriptor = Descriptor::<DescriptorPublicKey>::from_str("raw(deadbeef)")
+            .expect("must parse");
+        assert_matches!(
+            check_wallet_descriptor(&descriptor),
+            Err(DescriptorError::UnsupportedDescriptorType)
+        );
     }
 
     #[test]
