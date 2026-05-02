@@ -44,7 +44,7 @@ pub enum Error {
     Hex(bitcoin::hex::HexToBytesError),
     /// The provided wallet descriptors are identical
     ExternalAndInternalAreTheSame,
-    /// Descriptor type is not supported by the wallet (e.g. bare scripts have no address form)
+    /// Descriptor type is not supported by the wallet (e.g. bare or raw scripts have no address form)
     UnsupportedDescriptorType,
 }
 
@@ -89,7 +89,7 @@ impl fmt::Display for Error {
             Self::UnsupportedDescriptorType => {
                 write!(
                     f,
-                    "Descriptor type is not supported by the wallet; bare scripts have no address form"
+                    "Descriptor type is not supported by the wallet; bare and raw scripts have no address form"
                 )
             }
         }
