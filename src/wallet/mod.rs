@@ -1551,9 +1551,14 @@ impl Wallet {
 
     /// Bump the fee of a transaction previously created with this wallet.
     ///
-    /// Returns an error if the transaction is already confirmed or doesn't explicitly signal
-    /// *replace by fee* (RBF). If the transaction can be fee bumped then it returns a [`TxBuilder`]
-    /// pre-populated with the inputs and outputs of the original transaction.
+    /// Returns an error if the transaction is already confirmed. If the transaction can be fee
+    /// bumped then it returns a [`TxBuilder`] pre-populated with the inputs and outputs of the
+    /// original transaction.
+    ///
+    /// Replacing an unconfirmed transaction does not require the original to signal opt-in RBF
+    /// (`nSequence` ≤ `0xFFFFFFFD`). Relay and mining acceptance depend on local policy; Bitcoin
+    /// Core 28+ defaults to full-RBF mempool relay, while other implementations or configs may
+    /// differ.
     ///
     /// ## Example
     ///
@@ -1614,16 +1619,6 @@ impl Wallet {
             .is_confirmed()
         {
             return Err(BuildFeeBumpError::TransactionConfirmed(txid));
-        }
-
-        if !tx
-            .input
-            .iter()
-            .any(|txin| txin.sequence.to_consensus_u32() <= 0xFFFFFFFD)
-        {
-            return Err(BuildFeeBumpError::IrreplaceableTransaction(
-                tx.compute_txid(),
-            ));
         }
 
         let fee = self

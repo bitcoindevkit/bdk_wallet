@@ -16,19 +16,39 @@ mod common;
 use common::*;
 
 #[test]
-#[should_panic(expected = "IrreplaceableTransaction")]
-fn test_bump_fee_irreplaceable_tx() {
+fn test_bump_fee_tx_without_rbf_signaling() {
     let (mut wallet, _) = get_funded_wallet_wpkh();
     let addr = wallet.next_unused_address(KeychainKind::External);
     let mut builder = wallet.build_tx();
     builder.add_recipient(addr.script_pubkey(), Amount::from_sat(25_000));
     builder.set_exact_sequence(Sequence(0xFFFFFFFE));
     let psbt = builder.finish().unwrap();
+    let original_fee = check_fee!(wallet, psbt);
 
     let tx = psbt.extract_tx().expect("failed to extract tx");
     let txid = tx.compute_txid();
     insert_tx(&mut wallet, tx);
-    wallet.build_fee_bump(txid).unwrap().finish().unwrap();
+
+    let feerate = FeeRate::from_sat_per_kwu(625);
+    let mut builder = wallet
+        .build_fee_bump(txid)
+        .expect("fee bump without opt-in RBF");
+    builder.fee_rate(feerate);
+    let psbt = builder.finish().expect("finish fee bump");
+    let fee = check_fee!(wallet, psbt);
+    assert!(
+        fee > original_fee,
+        "fee bump must increase absolute fee: {fee} > {original_fee}"
+    );
+
+    let new_tx = psbt.clone().extract_tx().expect("failed to extract tx");
+    assert_ne!(
+        new_tx.compute_txid(),
+        txid,
+        "replacement transaction must differ from the original"
+    );
+
+    assert_fee_rate!(psbt, fee, feerate, @add_signature);
 }
 
 #[test]
