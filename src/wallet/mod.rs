@@ -184,6 +184,55 @@ impl fmt::Display for AddressInfo {
 /// A `CanonicalTx` managed by a `Wallet`.
 pub type WalletTx<'a> = CanonicalTx<'a, Arc<Transaction>, ConfirmationBlockTime>;
 
+/// The finalization status for a single PSBT input.
+#[derive(Debug, PartialEq)]
+pub enum FinalizeInputOutcome {
+    /// The input was already finalized before this call.
+    AlreadyFinalized,
+    /// The input was successfully finalized during this call.
+    Finalized,
+    /// The wallet could not derive a descriptor for the input.
+    MissingDescriptor,
+    /// The wallet found the descriptor but could not construct the input satisfaction.
+    CouldNotSatisfy(miniscript::Error),
+}
+
+impl FinalizeInputOutcome {
+    /// Whether the input is finalized after this call.
+    pub fn is_finalized(&self) -> bool {
+        matches!(self, Self::AlreadyFinalized | Self::Finalized)
+    }
+}
+
+/// Holds per-input PSBT finalization outcomes.
+#[derive(Debug, PartialEq)]
+pub struct FinalizedInputs {
+    outcomes: BTreeMap<usize, FinalizeInputOutcome>,
+}
+
+impl FinalizedInputs {
+    fn new(outcomes: BTreeMap<usize, FinalizeInputOutcome>) -> Self {
+        Self { outcomes }
+    }
+
+    /// Whether all inputs are finalized after this call.
+    pub fn is_finalized(&self) -> bool {
+        self.outcomes
+            .values()
+            .all(FinalizeInputOutcome::is_finalized)
+    }
+
+    /// Borrow the per-input finalization outcomes.
+    pub fn outcomes(&self) -> &BTreeMap<usize, FinalizeInputOutcome> {
+        &self.outcomes
+    }
+
+    /// Consume the collection and return the per-input finalization outcomes.
+    pub fn into_outcomes(self) -> BTreeMap<usize, FinalizeInputOutcome> {
+        self.outcomes
+    }
+}
+
 impl Wallet {
     /// Build a new single descriptor [`Wallet`].
     ///
@@ -1842,6 +1891,19 @@ impl Wallet {
         psbt: &mut Psbt,
         sign_options: SignOptions,
     ) -> Result<bool, SignerError> {
+        Ok(self.try_finalize_psbt(psbt, sign_options)?.is_finalized())
+    }
+
+    /// Finalize a PSBT and return per-input finalization results. Use this method when you need to
+    /// inspect why a specific input could not be finalized.
+    ///
+    /// The method should only return `Err` when the PSBT is malformed, for example if its inputs
+    /// are out of bounds.
+    pub fn try_finalize_psbt(
+        &self,
+        psbt: &mut Psbt,
+        sign_options: SignOptions,
+    ) -> Result<FinalizedInputs, IndexOutOfBoundsError> {
         let tx = &psbt.unsigned_tx;
         let chain_tip = self.chain.tip().block_id();
         let prev_txids = tx
@@ -1867,7 +1929,7 @@ impl Wallet {
             })
             .collect::<HashMap<Txid, u32>>();
 
-        let mut finished = true;
+        let mut outcomes = BTreeMap::new();
 
         for (n, input) in tx.input.iter().enumerate() {
             let psbt_input = &psbt
@@ -1875,6 +1937,7 @@ impl Wallet {
                 .get(n)
                 .ok_or(IndexOutOfBoundsError::new(n, psbt.inputs.len()))?;
             if psbt_input.final_script_sig.is_some() || psbt_input.final_script_witness.is_some() {
+                outcomes.insert(n, FinalizeInputOutcome::AlreadyFinalized);
                 continue;
             }
             let confirmation_height = confirmation_heights
@@ -1927,23 +1990,29 @@ impl Wallet {
                             if !tmp_input.witness.is_empty() {
                                 psbt_input.final_script_witness = Some(tmp_input.witness);
                             }
+                            outcomes.insert(n, FinalizeInputOutcome::Finalized);
                         }
-                        Err(_) => finished = false,
+                        Err(err) => {
+                            outcomes.insert(n, FinalizeInputOutcome::CouldNotSatisfy(err));
+                        }
                     }
                 }
-                None => finished = false,
+                None => {
+                    outcomes.insert(n, FinalizeInputOutcome::MissingDescriptor);
+                }
             }
         }
 
         // Clear derivation paths from outputs.
-        if finished {
+        let finalized = FinalizedInputs::new(outcomes);
+        if finalized.is_finalized() {
             for output in &mut psbt.outputs {
                 output.bip32_derivation.clear();
                 output.tap_key_origins.clear();
             }
         }
 
-        Ok(finished)
+        Ok(finalized)
     }
 
     /// Return the secp256k1 context used for all signing operations.
