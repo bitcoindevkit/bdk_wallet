@@ -134,7 +134,7 @@ impl From<Fingerprint> for SignerId {
 }
 
 /// Signing error
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum SignerError {
     /// The private key is missing for the required public key
     MissingKey,
@@ -462,6 +462,17 @@ impl InputSigner for SignerWrapper<PrivateKey> {
             || psbt.inputs[input_index].final_script_witness.is_some()
         {
             return Ok(());
+        }
+
+        if !sign_options.allow_all_sighashes {
+            let sighash_type = psbt.inputs[input_index].sighash_type;
+            if sighash_type.is_some()
+                && sighash_type != Some(EcdsaSighashType::All.into())
+                && sighash_type != Some(TapSighashType::All.into())
+                && sighash_type != Some(TapSighashType::Default.into())
+            {
+                return Err(SignerError::NonStandardSighash);
+            }
         }
 
         let pubkey = PublicKey::from_private_key(secp, self);
@@ -1008,6 +1019,81 @@ mod signers_container_tests {
 
         // Can't find anything with ID that doesn't exist
         assert_matches!(signers.find(id_nonexistent), None);
+    }
+
+    #[test]
+    fn sign_input_rejects_non_standard_sighash() {
+        use bitcoin::{
+            absolute, psbt::Input, sighash::TapSighashType, transaction, Amount, OutPoint,
+            PrivateKey, ScriptBuf, Sequence, TxIn, TxOut, Witness,
+        };
+
+        let secp = Secp256k1::new();
+
+        // Build a private key and derive its x-only pubkey for taproot
+        let tprv = bip32::Xpriv::from_str(TPRV0_STR).unwrap();
+        let priv_key = PrivateKey::new(tprv.private_key, bitcoin::NetworkKind::Test);
+        let pubkey = priv_key.public_key(&secp);
+        let x_only = bitcoin::key::XOnlyPublicKey::from(pubkey.inner);
+
+        // Wrap as a taproot signer treating this key as the internal key
+        let signer = SignerWrapper::new(
+            priv_key,
+            SignerContext::Tap {
+                is_internal_key: true,
+            },
+        );
+
+        // Build a minimal unsigned transaction with one input
+        let unsigned_tx = bitcoin::Transaction {
+            version: transaction::Version::TWO,
+            lock_time: absolute::LockTime::ZERO,
+            input: vec![TxIn {
+                previous_output: OutPoint::null(),
+                script_sig: ScriptBuf::default(),
+                sequence: Sequence::MAX,
+                witness: Witness::default(),
+            }],
+            output: vec![TxOut {
+                value: Amount::from_sat(90_000),
+                script_pubkey: ScriptBuf::default(),
+            }],
+        };
+
+        let mut psbt = bitcoin::Psbt::from_unsigned_tx(unsigned_tx).unwrap();
+
+        // Set up the input with SIGHASH_NONE and taproot internal key
+        psbt.inputs[0] = Input {
+            sighash_type: Some(TapSighashType::None.into()), // non-standard
+            tap_internal_key: Some(x_only),
+            witness_utxo: Some(TxOut {
+                value: Amount::from_sat(100_000),
+                script_pubkey: ScriptBuf::default(),
+            }),
+            ..Default::default()
+        };
+
+        // allow_all_sighashes: false (default) → must reject SIGHASH_NONE
+        let opts_reject = SignOptions {
+            allow_all_sighashes: false,
+            ..Default::default()
+        };
+        assert_eq!(
+            signer.sign_input(&mut psbt, 0, &opts_reject, &secp),
+            Err(SignerError::NonStandardSighash),
+            "expected NonStandardSighash when allow_all_sighashes is false"
+        );
+
+        // allow_all_sighashes: true → must not be rejected by our guard
+        let opts_allow = SignOptions {
+            allow_all_sighashes: true,
+            ..Default::default()
+        };
+        assert_ne!(
+            signer.sign_input(&mut psbt, 0, &opts_allow, &secp),
+            Err(SignerError::NonStandardSighash),
+            "expected guard to pass when allow_all_sighashes is true"
+        );
     }
 
     #[derive(Debug, Clone, Copy)]
