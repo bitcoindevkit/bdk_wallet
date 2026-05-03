@@ -14,7 +14,7 @@ use bitcoin::{
 };
 use miniscript::{Descriptor, DescriptorPublicKey};
 
-use crate::{locked_outpoints, ChangeSet, WalletPersister};
+use crate::{locked_outpoints, AsyncWalletPersister, ChangeSet, WalletPersister};
 
 macro_rules! block_id {
     ($height:expr, $hash:literal) => {{
@@ -458,4 +458,124 @@ impl PersistError {
     {
         Self::Persister(Box::new(e))
     }
+}
+
+/// Tests the functionality of an [`AsyncWalletPersister`].
+///
+/// # Errors
+///
+/// If any of the following occurs:
+///
+/// - A newly initialized [`AsyncWalletPersister`] isn't empty
+/// - The [`AsyncWalletPersister`] fails to persist a wallet [`ChangeSet`]
+/// - A mismatch of [`ChangeSet`] between what is read and persisted
+pub async fn persist_wallet_changeset_async<F, P>(create_store: F) -> Result<(), PersistError>
+where
+    F: AsyncFnOnce() -> Result<P, P::Error>,
+    P: AsyncWalletPersister,
+    P::Error: core::error::Error + 'static,
+{
+    let mut persister = init_async_wallet_persister(create_store).await?;
+    let tx1 = create_one_inp_one_out_tx(hash!("We_are_all_Satoshi"), 30_000);
+    let tx2 = create_one_inp_one_out_tx(tx1.compute_txid(), 20_000);
+    let changeset1 = get_changeset(tx1);
+    persist_changeset_verify_async(&mut persister, &changeset1, &changeset1).await?;
+    let changeset2 = get_changeset_two(tx2);
+    let mut expected = changeset1;
+    Merge::merge(&mut expected, changeset2.clone());
+    persist_changeset_verify_async(&mut persister, &changeset2, &expected).await
+}
+
+/// Tests if descriptors are being persisted correctly by an [`AsyncWalletPersister`].
+///
+/// First persists only the external descriptor (covering the single-keychain case), then persists
+/// the change descriptor and verifies the backend returns both merged.
+pub async fn persist_keychains_async<F, P>(create_store: F) -> Result<(), PersistError>
+where
+    F: AsyncFnOnce() -> Result<P, P::Error>,
+    P: AsyncWalletPersister,
+    P::Error: core::error::Error + 'static,
+{
+    let mut persister = init_async_wallet_persister(create_store).await?;
+    // Round 1: single keychain (external descriptor only)
+    let changeset1 = descriptor_changeset();
+    persist_changeset_verify_async(&mut persister, &changeset1, &changeset1).await?;
+    // Round 2: add the change descriptor, verify both are returned
+    let changeset2 = change_descriptor_changeset();
+    let mut expected = changeset1;
+    Merge::merge(&mut expected, changeset2.clone());
+    persist_changeset_verify_async(&mut persister, &changeset2, &expected).await
+}
+
+/// Tests network persistence.
+///
+/// Persists a [`ChangeSet`] with only the network field set and verifies it round-trips correctly.
+pub async fn persist_network_async<F, P>(create_store: F) -> Result<(), PersistError>
+where
+    F: AsyncFnOnce() -> Result<P, P::Error>,
+    P: AsyncWalletPersister,
+    P::Error: core::error::Error + 'static,
+{
+    let mut persister = init_async_wallet_persister(create_store).await?;
+    let changeset = network_changeset();
+    let expected = &changeset;
+    persist_changeset_verify_async(&mut persister, &changeset, expected).await
+}
+
+/// Initializes a new [`AsyncWalletPersister`] and checks that the persistence backend is empty.
+///
+/// # Errors
+///
+/// - If the persister's [`initialize`] function returns a non-empty [`ChangeSet`], then
+///   [`PersistError::ChangeSetMismatch`] error occurs.
+///
+/// [`initialize`]: AsyncWalletPersister::initialize
+async fn init_async_wallet_persister<F, P>(create_store: F) -> Result<P, PersistError>
+where
+    F: AsyncFnOnce() -> Result<P, P::Error>,
+    P: AsyncWalletPersister,
+    P::Error: core::error::Error + 'static,
+{
+    let mut persister = create_store().await.map_err(PersistError::persister)?;
+    let changeset = AsyncWalletPersister::initialize(&mut persister)
+        .await
+        .map_err(PersistError::persister)?;
+    if changeset != ChangeSet::default() {
+        return Err(PersistError::ChangeSetMismatch {
+            got: Box::new(changeset),
+            expected: Box::new(ChangeSet::default()),
+        });
+    }
+    Ok(persister)
+}
+
+/// Persists the `changeset`, and verifies the persister returns the `expected` upon
+/// initializing the backend.
+///
+/// # Errors
+///
+/// - If the [`AsyncWalletPersister`] implementation fails
+/// - If the newly initialized [`ChangeSet`] doesn't match `expected`
+async fn persist_changeset_verify_async<P>(
+    persister: &mut P,
+    changeset: &ChangeSet,
+    expected: &ChangeSet,
+) -> Result<(), PersistError>
+where
+    P: AsyncWalletPersister,
+    P::Error: core::error::Error + 'static,
+{
+    AsyncWalletPersister::persist(persister, changeset)
+        .await
+        .map_err(PersistError::persister)?;
+    let changeset = AsyncWalletPersister::initialize(persister)
+        .await
+        .map_err(PersistError::persister)?;
+    if &changeset != expected {
+        return Err(PersistError::ChangeSetMismatch {
+            got: Box::new(changeset),
+            expected: Box::new(expected.clone()),
+        });
+    }
+    Ok(())
 }
