@@ -132,7 +132,7 @@ impl From<LoadMismatch> for LoadError {
 }
 
 /// Errors returned by miniscript when updating inconsistent PSBTs
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum MiniscriptPsbtError {
     /// Descriptor key conversion error
     Conversion(miniscript::descriptor::ConversionError),
