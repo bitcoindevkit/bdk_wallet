@@ -29,10 +29,8 @@ serde_json = { version = "1" }
 serde = { version = "1", features = ["derive"] }
 
 # Optional dependencies
-anyhow = { version = "1", optional = true }
 bdk_file_store = { version = "0.22.0", optional = true }
 bip39 = { version = "2.2.2", optional = true }
-tempfile = { version = "3.26.0", optional = true }
 
 
 [features]
@@ -44,7 +42,7 @@ keys-bip39 = ["bip39"]
 rusqlite = ["bdk_chain/rusqlite"]
 file_store = ["bdk_file_store"]
 bdk-tx = ["dep:bdk_tx"]
-test-utils = ["std", "anyhow", "tempfile"]
+test-utils = ["std"]
 
 [dev-dependencies]
 anyhow = "1"
