@@ -5,7 +5,7 @@ use std::time::Duration;
 use assert_matches::assert_matches;
 use bdk_chain::{BlockId, CanonicalizationParams, ConfirmationBlockTime};
 use bdk_testenv::TestEnv;
-use bdk_wallet::coin_selection;
+use bdk_wallet::coin_selection::{self, InsufficientFunds};
 use bdk_wallet::descriptor::{calc_checksum, DescriptorError};
 use bdk_wallet::error::CreateTxError;
 use bdk_wallet::psbt::PsbtUtils;
@@ -18,7 +18,6 @@ use bitcoin::hashes::Hash;
 use bitcoin::script::PushBytesBuf;
 use bitcoin::sighash::{EcdsaSighashType, TapSighashType};
 use bitcoin::taproot::TapNodeHash;
-use bitcoin::transaction::Version;
 use bitcoin::{
     absolute, transaction, Address, Amount, BlockHash, FeeRate, Network, OutPoint, ScriptBuf,
     Sequence, SignedAmount, Transaction, TxIn, TxOut, Txid,
@@ -3063,13 +3062,15 @@ fn test_create_and_spend_from_truc_tx() -> anyhow::Result<()> {
         "wallet balance SHOULD be 500K after initial full scan"
     );
 
-    // should be able to create/broadcast TRUC (v3) transactions.
+    // Should be able to create/broadcast TRUC (v3) transactions.
+    // NOTE: "A TRUC transaction can spend outputs from confirmed non-TRUC transactions. A non-TRUC
+    // transaction can spend outputs from confirmed TRUC transactions" See, rule #2: https://github.com/bitcoin/bips/blob/master/bip-0431.mediawiki#specification
 
     // create txA (TRUC)
     let recv_addr = wallet.next_unused_address(KeychainKind::External);
 
     let mut builder = wallet.build_tx();
-    builder.add_recipient(recv_addr.script_pubkey(), Amount::from_sat(50_000));
+    builder.add_recipient(recv_addr.script_pubkey(), Amount::from_sat(125_000));
     builder.version(3);
 
     let mut psbt = builder.finish().expect("should create txA (TRUC) successfully! as per BIP-431 it can spend confirmed outputs from non-TRUC txs.");
@@ -3094,15 +3095,15 @@ fn test_create_and_spend_from_truc_tx() -> anyhow::Result<()> {
     let balance = wallet.balance();
     assert_eq!(
         balance.untrusted_pending,
-        Amount::from_sat(50_000),
-        "wallet balance SHOULD have 50K unconfirmed UTXO after sync!"
+        Amount::from_sat(125_000),
+        "wallet balance SHOULD have 125K unconfirmed (TRUC) UTXO after txA sync!"
     );
 
     // create txB (non-TRUC)
     let recv_addr = wallet.next_unused_address(KeychainKind::External);
 
     let mut builder = wallet.build_tx();
-    builder.add_recipient(recv_addr.script_pubkey(), Amount::from_sat(50_000));
+    builder.add_recipient(recv_addr.script_pubkey(), Amount::from_sat(125_000));
 
     let mut psbt = builder
         .finish()
@@ -3111,57 +3112,18 @@ fn test_create_and_spend_from_truc_tx() -> anyhow::Result<()> {
     let _ = wallet.sign(&mut psbt, SignOptions::default());
     let tx_b = psbt.extract_tx()?;
 
-    // broadcast txB (non-TRUC)
-    let txid_b = electrum_client.transaction_broadcast(&tx_b);
+    // txB MUST NOT use the available unconfirmed TRUC UTXO.
     assert!(
-        matches!(
-            txid_b,
-            Err(e) if e.to_string().contains("TRUC-violation")
-                && e.to_string().contains("non-version=3 tx")
-                && e.to_string().contains("cannot spend from version=3 tx")
-        ),
-        "SHOULD fail if it's trying to spend an unconfirmed TRUC output in a non-TRUC tx!"
+        tx_b.input
+            .iter()
+            .all(|txin| txin.previous_output.txid.ne(&txid_a)),
+        "SHOULD NOT try to spend an unconfirmed TRUC output in a non-TRUC tx!"
     );
-
-    // create txB filtering out unconfirmed TRUC
-
-    // all unconfirmed-TRUC UTXOs
-    let tx_graph = wallet.tx_graph();
-    let chain = wallet.local_chain();
-    let chain_tip = chain.tip().block_id();
-    let params = CanonicalizationParams::default();
-    let txouts = wallet.spk_index().outpoints().iter().cloned();
-
-    let utxos = tx_graph
-        .filter_chain_unspents(chain, chain_tip, params, txouts)
-        .filter(|(_, ftxo)| ftxo.chain_position.is_unconfirmed())
-        .filter(|(_, ftxo)| {
-            tx_graph
-                .get_tx(ftxo.outpoint.txid)
-                .map(|tx| tx.version.eq(&Version(3)))
-                .unwrap_or(false)
-        })
-        .map(|(_, ftxo)| ftxo.outpoint)
-        .collect::<Vec<_>>();
-
-    let mut builder = wallet.build_tx();
-    builder.add_recipient(recv_addr.script_pubkey(), Amount::from_sat(50_000));
-    utxos.iter().for_each(|utxo| {
-        builder.add_unspendable(*utxo);
-    });
-
-    let mut psbt = builder
-        .finish()
-        .expect("SHOULD create txB (non-TRUC) successfully! However, a non-TRUC transaction can only spend confirmed outputs from TRUC transactions");
-
-    let _ = wallet.sign(&mut psbt, SignOptions::default());
-    let tx_b = psbt.extract_tx()?;
 
     // broadcast txB (non-TRUC)
     let txid_b = electrum_client
         .transaction_broadcast(&tx_b)
         .expect("should broadcast txB (non-TRUC) successfully!");
-    let _ = env.wait_until_electrum_sees_txid(txid_b, Duration::from_secs(6));
 
     // wallet sync
     let request = wallet.start_sync_with_revealed_spks();
@@ -3174,8 +3136,66 @@ fn test_create_and_spend_from_truc_tx() -> anyhow::Result<()> {
     let balance = wallet.balance();
     assert_eq!(
         balance.untrusted_pending,
-        Amount::from_sat(100_000),
-        "wallet balance SHOULD have 100K unconfirmed UTXO after sync!"
+        Amount::from_sat(250_000),
+        "wallet balance SHOULD have 250K unconfirmed, both non-TRUC (txB) and TRUC (txA) UTXOs after txB sync!"
+    );
+
+    // create txC (TRUC)
+    let recv_addr = wallet.next_unused_address(KeychainKind::External);
+
+    let mut builder = wallet.build_tx();
+    builder.add_recipient(recv_addr.script_pubkey(), Amount::from_sat(200_000));
+    builder.version(3);
+
+    let mut psbt = builder.finish().expect("should create txB (TRUC) successfully! as per BIP-431 it can spend unconfirmed outputs from TRUC txs.");
+
+    let _ = wallet.sign(&mut psbt, SignOptions::default())?;
+    let tx_c = psbt.extract_tx()?;
+
+    // txC MUST ONLY use the available confirmed UTXOs AND/OR unconfirmed TRUC UTXOs.
+    assert!(
+        tx_c.input
+            .iter()
+            .all(|txin| txin.previous_output.txid.ne(&txid_b)),
+        "SHOULD NOT try to spend an unconfirmed non-TRUC output in a TRUC tx!"
+    );
+
+    // broadcast txC (TRUC)
+    let txid_c = electrum_client
+        .transaction_broadcast(&tx_c)
+        .expect("should broadcast txC (TRUC) successfully!");
+    let _ = env.wait_until_electrum_sees_txid(txid_c, Duration::from_secs(6));
+
+    // wallet sync
+    let request = wallet.start_sync_with_revealed_spks();
+    let response = electrum_client
+        .sync(request, 5, true)
+        .expect("should execute sync successfully!");
+
+    wallet.apply_update(response)?;
+
+    let balance = wallet.balance();
+    assert_eq!(
+        balance.untrusted_pending,
+        Amount::from_sat(325_000),
+        "wallet balance SHOULD have 325K unconfirmed UTXOs after sync!"
+    );
+
+    // create txD (non-TRUC)
+    let recv_addr = wallet.next_unused_address(KeychainKind::External);
+
+    let mut builder = wallet.build_tx();
+    builder.add_recipient(recv_addr.script_pubkey(), Amount::from_sat(400_000));
+    builder.version(3);
+
+    let psbt = builder.finish();
+
+    assert!(
+        matches!(
+            psbt,
+            Err(CreateTxError::CoinSelection(InsufficientFunds { .. }))
+        ),
+        "SHOULD fail if it's trying to spend an unconfirmed TRUC output in a non-TRUC tx!"
     );
 
     Ok(())
