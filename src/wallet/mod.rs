@@ -41,8 +41,9 @@ use bitcoin::{
     psbt,
     secp256k1::Secp256k1,
     sighash::{EcdsaSighashType, TapSighashType},
-    transaction, Address, Amount, Block, FeeRate, Network, NetworkKind, OutPoint, Psbt, ScriptBuf,
-    Sequence, SignedAmount, Transaction, TxOut, Txid, Weight, Witness,
+    transaction::{self, Version},
+    Address, Amount, Block, FeeRate, Network, NetworkKind, OutPoint, Psbt, ScriptBuf, Sequence,
+    SignedAmount, Transaction, TxOut, Txid, Weight, Witness,
 };
 use miniscript::{
     descriptor::KeyMap,
@@ -1429,7 +1430,7 @@ impl Wallet {
         let (required_utxos, optional_utxos) = {
             // NOTE: manual selection overrides unspendable
             let mut required: Vec<WeightedUtxo> = params.utxos.clone();
-            let optional = self.filter_utxos(&params, current_height.to_consensus_u32());
+            let optional = self.filter_utxos(&params, current_height.to_consensus_u32(), version);
 
             // If `drain_wallet` is true, all UTxOs are required.
             if params.drain_wallet {
@@ -1978,7 +1979,12 @@ impl Wallet {
 
     /// Given the options returns the list of utxos that must be used to form the
     /// transaction and any further that may be used if needed.
-    fn filter_utxos(&self, params: &TxParams, current_height: u32) -> Vec<WeightedUtxo> {
+    fn filter_utxos(
+        &self,
+        params: &TxParams,
+        current_height: u32,
+        version: Version,
+    ) -> Vec<WeightedUtxo> {
         if params.manually_selected_only {
             vec![]
         // Only process optional UTxOs if manually_selected_only is false.
@@ -1988,6 +1994,7 @@ impl Wallet {
                 .iter()
                 .map(|wutxo| wutxo.utxo.outpoint())
                 .collect::<HashSet<OutPoint>>();
+
             self.tx_graph
                 .graph()
                 // Get all unspent UTxOs from wallet.
@@ -2006,6 +2013,29 @@ impl Wallet {
                     full_txo
                         .is_mature(current_height)
                         .then(|| new_local_utxo(k, i, full_txo))
+                })
+                // only add to optional UTXOs those that follows BIP-431 (TRUC) specification.
+                // see https://github.com/bitcoin/bips/blob/master/bip-0431.mediawiki#specification
+                .filter(|local_output| {
+                    local_output.chain_position.is_confirmed()
+                        || match self.tx_graph().get_tx(local_output.outpoint.txid) {
+                            Some(ancestor_tx) => match is_truc(version) {
+                                // if building TRUC; filter out all unconfirmed non-TRUC.
+                                true => {
+                                    is_truc(ancestor_tx.version)
+                                        && local_output.chain_position.is_unconfirmed()
+                                }
+                                // if building non-TRUC; filter out all unconfirmed TRUC.
+                                false => {
+                                    !is_truc(ancestor_tx.version)
+                                        && local_output.chain_position.is_unconfirmed()
+                                }
+                            },
+                            // if we don't have the full tx available we can't assure the ancestor
+                            // tx version it assumes it's a valid
+                            // candidate.
+                            None => true,
+                        }
                 })
                 // only process UTXOs not selected manually, they will be considered later in the
                 // chain
@@ -2885,6 +2915,12 @@ fn make_indexed_graph(
     Ok(indexed_graph)
 }
 
+/// Check if the given [`transaction::Version`] is TRUC (Topologically Restricted Until
+/// Confirmation)s.
+fn is_truc(version: transaction::Version) -> bool {
+    version.eq(&Version(3))
+}
+
 /// Transforms a [`FeeRate`] to `f64` with unit as sat/vb.
 #[macro_export]
 #[doc(hidden)]
@@ -2981,8 +3017,13 @@ mod test {
         let mut builder = wallet.build_tx();
         builder.add_utxo(outpoint).expect("should add local utxo");
         let params = builder.params.clone();
+        let version = params.version.unwrap_or(Version::TWO);
         // enforce selection of first output in transaction
-        let received = wallet.filter_utxos(&params, wallet.latest_checkpoint().block_id().height);
+        let received = wallet.filter_utxos(
+            &params,
+            wallet.latest_checkpoint().block_id().height,
+            version,
+        );
         // Notice expected doesn't include the first output from two_output_tx as it should be
         // filtered out.
         let expected = vec![wallet
