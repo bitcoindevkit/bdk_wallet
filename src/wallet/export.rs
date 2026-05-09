@@ -137,6 +137,7 @@
 use alloc::string::String;
 use alloc::string::ToString;
 use alloc::vec::Vec;
+use bdk_chain::{CanonicalizationParams, Indexer};
 use bitcoin::bip32::{DerivationPath, Fingerprint, Xpub};
 use core::fmt;
 use core::str::FromStr;
@@ -210,12 +211,17 @@ impl FullyNodedExport {
         Self::is_compatible_with_core(&descriptor)?;
 
         let blockheight = if include_blockheight {
-            wallet.transactions().next().map_or(0, |canonical_tx| {
-                canonical_tx
-                    .chain_position
-                    .confirmation_height_upper_bound()
-                    .unwrap_or(0)
-            })
+            wallet
+                .tx_graph()
+                .list_canonical_txs(
+                    wallet.local_chain(),
+                    wallet.local_chain().tip().block_id(),
+                    CanonicalizationParams::default(),
+                )
+                .filter(|tx| wallet.spk_index().is_tx_relevant(&tx.tx_node.tx))
+                .filter_map(|tx| tx.chain_position.confirmation_height_upper_bound())
+                .min()
+                .unwrap_or(0)
         } else {
             0
         };

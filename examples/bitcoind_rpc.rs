@@ -5,7 +5,8 @@ use bdk_bitcoind_rpc::{
 use bdk_wallet::rusqlite::Connection;
 use bdk_wallet::{
     bitcoin::{Block, Network},
-    KeychainKind, Wallet,
+    chain::ChainPosition,
+    KeychainKind, TxCanonicality, Wallet,
 };
 use clap::{self, Parser};
 use std::{
@@ -144,7 +145,13 @@ fn main() -> anyhow::Result<()> {
         args.start_height,
         wallet
             .transactions()
-            .filter(|tx| tx.chain_position.is_unconfirmed()),
+            .filter(|tx| {
+                matches!(
+                    tx.details.canonicality,
+                    TxCanonicality::Canonical(ChainPosition::Unconfirmed { .. })
+                )
+            })
+            .map(|tx| tx.tx_node.tx),
     );
     spawn(move || -> Result<(), anyhow::Error> {
         while let Some(emission) = emitter.next_block()? {
