@@ -1,6 +1,5 @@
 #![allow(clippy::print_stdout)]
 
-use std::str::FromStr;
 use std::sync::Arc;
 
 use bdk_chain::BlockId;
@@ -8,29 +7,31 @@ use bdk_tx::ChangeScript;
 use bdk_wallet::psbt::PsbtParams;
 use bdk_wallet::test_utils::*;
 use bdk_wallet::{KeychainKind, Wallet};
-use bitcoin::{bip32, consensus, secp256k1, FeeRate, Transaction};
+use bitcoin::{Amount, FeeRate, TxIn, TxOut};
 use miniscript::{DefiniteDescriptorKey, Descriptor};
 
 // This example demonstrates creating a sweep transaction using PsbtParams and replacing it with a
 // higher feerate.
 
 const NETWORK: bitcoin::Network = bitcoin::Network::Regtest;
-const XPRIV: &str = "tprv8ZgxMBicQKsPe5tkv8BYJRupCNULhJYDv6qrtVAK9fNVheU6TbscSedVi8KQk8vVZqXMnsGomtVkR4nprbgsxTS5mAQPV4dpPXNvsmYcgZU";
 
 fn main() -> anyhow::Result<()> {
-    let desc = "wpkh([7a5a223e/84'/1'/0']tpubDCpz3tR7UiAy1crSewah3t4kYgcSoBS2bJhGpK8VxrMnv8Ecbmw31DvYwhcsouVpETr8t2NinEyryMQtXbw1ujpQLu6WjHGnhqZRi7tV7pi/0/*)#ls3ewa0d";
-    let change_desc = "wpkh([7a5a223e/84'/1'/0']tpubDCpz3tR7UiAy1crSewah3t4kYgcSoBS2bJhGpK8VxrMnv8Ecbmw31DvYwhcsouVpETr8t2NinEyryMQtXbw1ujpQLu6WjHGnhqZRi7tV7pi/1/*)#wy5cngl4";
-    let secp = secp256k1::Secp256k1::new();
-
-    // Xpriv to be used for signing the PSBT
-    let xprv = bip32::Xpriv::from_str(XPRIV)?;
+    let (desc, change_desc) = get_test_wpkh_and_change_desc();
 
     // Create wallet and "fund" it with a single UTXO.
     let mut wallet = Wallet::create(desc, change_desc)
         .network(NETWORK)
         .create_wallet_no_persist()?;
 
-    let _funding_tx = fund_wallet(&mut wallet)?;
+    fund_wallet(&mut wallet)?;
+
+    // Create PSBT Signer, external to the wallet
+    let signer = {
+        let secp = wallet.secp_ctx();
+        let (_, external_keymap) = miniscript::Descriptor::parse_descriptor(secp, desc)?;
+        let (_, internal_keymap) = miniscript::Descriptor::parse_descriptor(secp, change_desc)?;
+        bdk_tx::Signer(external_keymap.into_iter().chain(internal_keymap).collect())
+    };
 
     // Get a derived descriptor from the wallet to sweep funds to
     let derived_descriptor: Descriptor<DefiniteDescriptorKey> = wallet
@@ -53,7 +54,9 @@ fn main() -> anyhow::Result<()> {
     let (mut psbt1, finalizer1) = wallet.create_psbt(params)?;
 
     // Sign and finalize tx1
-    let _ = psbt1.sign(&xprv, &secp);
+    let _ = psbt1
+        .sign(&signer, wallet.secp_ctx())
+        .map_err(|(_, errors)| anyhow::anyhow!("failed to sign PSBT: {errors:?}"))?;
     println!("tx1 signed: {}", !psbt1.inputs[0].partial_sigs.is_empty());
 
     let finalize_res = finalizer1.finalize(&mut psbt1);
@@ -87,7 +90,9 @@ fn main() -> anyhow::Result<()> {
     let (mut psbt2, finalizer2) = wallet.replace_by_fee(rbf_params)?;
 
     // Sign and finalize tx2
-    let _ = psbt2.sign(&xprv, &secp);
+    let _ = psbt2
+        .sign(&signer, wallet.secp_ctx())
+        .map_err(|(_, errors)| anyhow::anyhow!("failed to sign PSBT: {errors:?}"))?;
     println!("tx2 signed: {}", !psbt2.inputs[0].partial_sigs.is_empty());
 
     let finalize_res = finalizer2.finalize(&mut psbt2);
@@ -151,23 +156,30 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn fund_wallet(wallet: &mut Wallet) -> anyhow::Result<Arc<Transaction>> {
-    // First, we need a confirmed coinbase transaction
-    let coinbase_tx: Transaction = consensus::encode::deserialize_hex(
-        "020000000001010000000000000000000000000000000000000000000000000000000000000000ffffffff025100ffffffff0200f2052a010000001600144d34238b9c4c59b9e2781e2426a142a75b8901ab0000000000000000266a24aa21a9ede2f61c3f71d1defd3fa999dfa36953755c690689799962b48bebd836974e8cf90120000000000000000000000000000000000000000000000000000000000000000000000000",
-    )?;
-
+fn fund_wallet(wallet: &mut Wallet) -> anyhow::Result<()> {
     let anchor_block = BlockId {
         height: 1,
         hash: "3bcc1c447c6b3886f43e416b5c21cf5c139dc4829a71dc78609bc8f6235611c5".parse()?,
     };
     let chain_tip = BlockId {
-        height: anchor_block.height + bitcoin::constants::COINBASE_MATURITY,
+        height: 101,
         hash: "7f96292d115d19450e4bf7d4c4e15c9f3ad21e3a3cf616c498110b988963470b".parse()?,
     };
 
-    insert_tx_anchor(wallet, coinbase_tx.clone(), anchor_block);
+    insert_checkpoint(wallet, anchor_block);
+
+    let addr = wallet.reveal_next_address(KeychainKind::External).address;
+    let tx = bitcoin::Transaction {
+        lock_time: bitcoin::absolute::LockTime::ZERO,
+        version: bitcoin::transaction::Version::TWO,
+        input: vec![TxIn::default()],
+        output: vec![TxOut {
+            script_pubkey: addr.script_pubkey(),
+            value: Amount::from_sat(50_000_000),
+        }],
+    };
+    insert_tx_anchor(wallet, tx, anchor_block);
     insert_checkpoint(wallet, chain_tip);
 
-    Ok(Arc::new(coinbase_tx))
+    Ok(())
 }

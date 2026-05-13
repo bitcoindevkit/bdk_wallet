@@ -8,11 +8,7 @@ use bdk_chain::ConfirmationBlockTime;
 use bdk_wallet::psbt::{PsbtParams, SelectionStrategy::*};
 use bdk_wallet::test_utils::*;
 use bdk_wallet::{KeychainKind::External, Wallet};
-use bitcoin::{
-    bip32, consensus,
-    secp256k1::{self, rand},
-    Address, Amount, TxIn, TxOut,
-};
+use bitcoin::{consensus, secp256k1::rand, Address, Amount, TxIn, TxOut};
 use rand::Rng;
 
 // This example shows how to create a PSBT using BDK Wallet.
@@ -24,10 +20,6 @@ const FEERATE: f64 = 2.0; // sat/vb
 
 fn main() -> anyhow::Result<()> {
     let (desc, change_desc) = get_test_wpkh_and_change_desc();
-    let secp = secp256k1::Secp256k1::new();
-
-    // Xpriv to be used for signing the PSBT
-    let xprv = bip32::Xpriv::from_str("tprv8ZgxMBicQKsPdy6LMhUtFHAgpocR8GC6QmwMSFpZs7h6Eziw3SpThFfczTDh5rW2krkqffa11UpX3XkeTTB2FvzZKWXqPY54Y6Rq4AQ5R8L")?;
 
     // Create wallet and fund it.
     let mut wallet = Wallet::create(desc, change_desc)
@@ -35,6 +27,14 @@ fn main() -> anyhow::Result<()> {
         .create_wallet_no_persist()?;
 
     fund_wallet(&mut wallet)?;
+
+    // Create PSBT Signer, external to the wallet
+    let signer = {
+        let secp = wallet.secp_ctx();
+        let (_, external_keymap) = miniscript::Descriptor::parse_descriptor(secp, desc)?;
+        let (_, internal_keymap) = miniscript::Descriptor::parse_descriptor(secp, change_desc)?;
+        bdk_tx::Signer(external_keymap.into_iter().chain(internal_keymap).collect())
+    };
 
     let utxos = wallet
         .list_unspent()
@@ -65,7 +65,10 @@ fn main() -> anyhow::Result<()> {
         println!("TxOut: {}", txout.value);
     }
 
-    let _ = psbt.sign(&xprv, &secp);
+    let _ = psbt
+        .sign(&signer, wallet.secp_ctx())
+        .map_err(|(_, errors)| anyhow::anyhow!("failed to sign PSBT: {errors:?}"))?;
+
     println!("Signed: {}", !psbt.inputs[0].partial_sigs.is_empty());
     let finalize_res = finalizer.finalize(&mut psbt);
     println!("Finalized: {}", finalize_res.is_finalized());
