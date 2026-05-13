@@ -101,22 +101,39 @@ fn wallet_is_persisted() -> anyhow::Result<()> {
         let (external_desc, internal_desc) = get_test_tr_single_sig_xprv_and_change_desc();
 
         // create new wallet
-        let wallet_spk_index = {
+        {
             let mut db = create_db(&file_path)?;
-            let mut wallet = Wallet::create(external_desc, internal_desc)
+            let wallet = Wallet::create(external_desc, internal_desc)
                 .network(Network::Testnet)
                 .use_spk_cache(true)
                 .create_wallet(&mut db)?;
 
-            wallet.reveal_next_address(KeychainKind::External);
+            assert!(
+                wallet.staged().is_none(),
+                "persisted wallet creation should write the initial changeset"
+            );
+        }
+
+        // reload immediately to ensure the initial cached SPKs were persisted at creation time
+        let wallet_spk_index = {
+            let mut db = open_db(&file_path)?;
+            let mut wallet = Wallet::load()
+                .check_network(Network::Testnet)
+                .use_spk_cache(true)
+                .load_wallet(&mut db)?
+                .expect("wallet must exist");
+
+            assert!(wallet.staged().is_none());
+
+            let revealed_external_addr = wallet.reveal_next_address(KeychainKind::External);
 
             check_cache_cs(
                 &staged_cache(&wallet),
-                [
-                    (KeychainKind::External, 0..DEFAULT_LOOKAHEAD + 1),
-                    (KeychainKind::Internal, 0..DEFAULT_LOOKAHEAD),
-                ],
-                "cache cs must return initial set + the external index that was just derived",
+                [(
+                    KeychainKind::External,
+                    [revealed_external_addr.index + DEFAULT_LOOKAHEAD],
+                )],
+                "initial cached SPKs should already be persisted at wallet creation",
             );
 
             // persist new wallet changes
@@ -390,8 +407,13 @@ fn single_descriptor_wallet_persist_and_recover() {
     let desc = get_test_tr_single_sig_xprv();
     let mut wallet = Wallet::create_single(desc)
         .network(Network::Testnet)
+        .use_spk_cache(true)
         .create_wallet(&mut db)
         .unwrap();
+    assert!(
+        wallet.staged().is_none(),
+        "single-descriptor wallet creation should write the initial changeset"
+    );
     let _ = wallet.reveal_addresses_to(KeychainKind::External, 2);
     assert!(wallet.persist(&mut db).unwrap());
 
@@ -402,9 +424,11 @@ fn single_descriptor_wallet_persist_and_recover() {
     let wallet = Wallet::load()
         .descriptor(KeychainKind::External, Some(desc))
         .extract_keys()
+        .use_spk_cache(true)
         .load_wallet(&mut db)
         .unwrap()
         .expect("must have loaded changeset");
+    assert!(wallet.staged().is_none());
     assert_eq!(wallet.derivation_index(KeychainKind::External), Some(2));
     // should have private key
     assert_eq!(
