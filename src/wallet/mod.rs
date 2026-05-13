@@ -2883,17 +2883,47 @@ impl Wallet {
         Assets::new().add(pks)
     }
 
-    /// Obtain the next change script (descriptor) from the wallet.
-    fn change_script(&self, change_script: Option<ChangeScript>) -> ChangeScript {
-        change_script.unwrap_or_else(|| {
-            let change_keychain = self.map_keychain(KeychainKind::Internal);
-            let descriptor = self.public_descriptor(change_keychain);
-            let next_index = self.next_derivation_index(change_keychain);
-            let definite_descriptor = descriptor
-                .at_derivation_index(next_index)
-                .expect("should be valid derivation index");
-            ChangeScript::from_descriptor(definite_descriptor)
-        })
+    /// Peek at the next change address without revealing it, returning the auto-derived
+    /// change info `(keychain, index, spk)` alongside the [`ChangeScript`].
+    ///
+    /// When the caller supplies a [`ChangeScript`] via `override_script`, it is passed through
+    /// unchanged and `None` is returned for the change info (no address needs to be revealed).
+    ///
+    /// Otherwise we select the next unused address (already-revealed-but-unused first, then the
+    /// next-to-be-revealed index) **without** mutating wallet state. Revelation is deferred to
+    /// after all error paths have been cleared by the caller.
+    fn peek_change_info(
+        &self,
+        override_script: Option<ChangeScript>,
+    ) -> (Option<(KeychainKind, u32, ScriptBuf)>, ChangeScript) {
+        match override_script {
+            Some(cs) => (None, cs),
+            None => {
+                let change_keychain = self.map_keychain(KeychainKind::Internal);
+                let (index, spk) = self
+                    .tx_graph
+                    .index
+                    .unused_keychain_spks(change_keychain)
+                    .next()
+                    .unwrap_or_else(|| {
+                        let (next_index, _) = self
+                            .tx_graph
+                            .index
+                            .next_index(change_keychain)
+                            .expect("keychain must exist");
+                        let spk = self
+                            .peek_address(change_keychain, next_index)
+                            .script_pubkey();
+                        (next_index, spk)
+                    });
+                let descriptor = self.public_descriptor(change_keychain);
+                let definite_descriptor = descriptor
+                    .at_derivation_index(index)
+                    .expect("should be valid derivation index");
+                let change_script = ChangeScript::from_descriptor(definite_descriptor);
+                (Some((change_keychain, index, spk)), change_script)
+            }
+        }
     }
 
     /// Parses the common parameters used during PSBT creation and returns the spend assets
@@ -2998,7 +3028,7 @@ impl Wallet {
     /// # use std::str::FromStr;
     /// # use bitcoin::{Amount, Address, FeeRate, OutPoint};
     /// # use bdk_wallet::psbt::{PsbtParams, SelectionStrategy};
-    /// # let wallet = bdk_wallet::doctest_wallet!();
+    /// # let mut wallet = bdk_wallet::doctest_wallet!();
     /// # let outpoint = OutPoint::null();
     /// # let address = Address::from_str("bcrt1q3qtze4ys45tgdvguj66zrk4fu6hq3a3v9pfly5").unwrap().assume_checked();
     /// # let amount = Amount::ZERO;
@@ -3021,10 +3051,22 @@ impl Wallet {
     /// - The input value is insufficient to fund the outputs
     /// - Failure to complete coin selection
     /// - Failure to create or update the PSBT.
+    ///
+    /// # Change address
+    ///
+    /// When no [`ChangeScript`] is supplied via [`PsbtParams`], the wallet automatically selects
+    /// the next unused internal address and reveals it so that incoming change is tracked on
+    /// the next sync. The change address will not be marked used, so calling `create_psbt`
+    /// again before syncing will return the same change address. If you intend to build
+    /// multiple transactions without syncing between them, either provide the change script in
+    /// the [`PsbtParams`], or call [`Wallet::mark_used`] after each call to prevent reuse.
+    ///
+    /// **You must persist the change set staged as a result of this call.**
+    /// See [`Wallet::take_staged`].
     #[cfg(feature = "std")]
     #[cfg_attr(docsrs, doc(cfg(feature = "std")))]
     pub fn create_psbt(
-        &self,
+        &mut self,
         params: PsbtParams<CreateTx>,
     ) -> Result<(Psbt, Finalizer), CreatePsbtError> {
         self.create_psbt_with_rng(params, &mut rand::thread_rng())
@@ -3039,15 +3081,17 @@ impl Wallet {
     /// - `params`: [`PsbtParams`]
     /// - `rng`: Source of entropy, may be used during coin selection and to sort inputs and outputs
     ///   by the [`TxOrdering`](crate::wallet::tx_builder::TxOrdering).
+    ///
+    /// See [`Wallet::create_psbt`] for notes on change address handling.
+    ///
+    /// **You must persist the change set staged as a result of this call.**
+    /// See [`Wallet::take_staged`].
     pub fn create_psbt_with_rng(
-        &self,
+        &mut self,
         mut params: PsbtParams<CreateTx>,
         rng: &mut impl RngCore,
     ) -> Result<(Psbt, Finalizer), CreatePsbtError> {
-        // Get change script.
-        // This is currently awkward as ChangeScript is not yet Clone, so here we take
-        // the optional value directly from the params.
-        let change_script = self.change_script(params.change_script.take());
+        let (change_info, change_script) = self.peek_change_info(params.change_script.take());
 
         let (assets, txouts) = self.parse_params(&params);
 
@@ -3092,7 +3136,25 @@ impl Wallet {
         )
         .map_err(CreatePsbtError::Selector)?;
 
-        self.create_psbt_from_selector(&mut selector, &params, rng)
+        let (psbt, finalizer) = self.create_psbt_from_selector(&mut selector, &params, rng)?;
+
+        // Reveal the auto-selected change address.
+        if let Some((keychain, index, spk)) = change_info {
+            if psbt
+                .unsigned_tx
+                .output
+                .iter()
+                .any(|txo| txo.script_pubkey == spk)
+            {
+                if let Some((_, index_changeset)) =
+                    self.tx_graph.index.reveal_to_target(keychain, index)
+                {
+                    self.stage.merge(index_changeset.into());
+                }
+            }
+        }
+
+        Ok((psbt, finalizer))
     }
 
     /// Create the PSBT from [`Selector`] and `params`.
@@ -3200,7 +3262,7 @@ impl Wallet {
     /// # use bitcoin::FeeRate;
     /// # use bdk_wallet::psbt::{PsbtParams, SelectionStrategy};
     /// # use bdk_wallet::test_utils;
-    /// # let wallet = bdk_wallet::doctest_wallet!();
+    /// # let mut wallet = bdk_wallet::doctest_wallet!();
     /// # let to_replace = Arc::new(test_utils::new_tx(0));
     /// # let vout = 0;
     /// // Retrieve the original recipient from tx `to_replace`.
@@ -3216,7 +3278,7 @@ impl Wallet {
     #[cfg(feature = "std")]
     #[cfg_attr(docsrs, doc(cfg(feature = "std")))]
     pub fn replace_by_fee_and_recipients(
-        &self,
+        &mut self,
         txs: &[Arc<Transaction>],
         fee_rate: FeeRate,
         recipients: Vec<(ScriptBuf, Amount)>,
@@ -3245,10 +3307,22 @@ impl Wallet {
     /// - Failure to calculate the [fee](Wallet::calculate_fee) of an original transaction
     /// - Failure to complete coin selection
     /// - Failure to create or update the PSBT.
+    ///
+    /// # Change address
+    ///
+    /// When no [`ChangeScript`] is supplied via [`PsbtParams`], the wallet automatically selects
+    /// the next unused internal address and reveals it so that incoming change is tracked on
+    /// the next sync. The change address will not be marked used, so calling `create_psbt`
+    /// again before syncing will return the same change address. If you intend to build
+    /// multiple transactions without syncing between them, either provide the change script in
+    /// the [`PsbtParams`], or call [`Wallet::mark_used`] after each call to prevent reuse.
+    ///
+    /// **You must persist the change set staged as a result of this call.**
+    /// See [`Wallet::take_staged`].
     #[cfg(feature = "std")]
     #[cfg_attr(docsrs, doc(cfg(feature = "std")))]
     pub fn replace_by_fee(
-        &self,
+        &mut self,
         params: PsbtParams<Rbf>,
     ) -> Result<(Psbt, Finalizer), ReplaceByFeeError> {
         self.replace_by_fee_with_rng(params, &mut rand::thread_rng())
@@ -3262,12 +3336,17 @@ impl Wallet {
     /// - `params`: [`PsbtParams`]
     /// - `rng`: Source of entropy, may be used during coin selection and to sort inputs and outputs
     ///   by the [`TxOrdering`](crate::wallet::tx_builder::TxOrdering).
+    ///
+    /// See [`Wallet::replace_by_fee`] for notes on change address handling.
+    ///
+    /// **You must persist the change set staged as a result of this call.**
+    /// See [`Wallet::take_staged`].
     pub fn replace_by_fee_with_rng(
-        &self,
+        &mut self,
         mut params: PsbtParams<Rbf>,
         rng: &mut impl RngCore,
     ) -> Result<(Psbt, Finalizer), ReplaceByFeeError> {
-        let change_script = self.change_script(params.change_script.take());
+        let (change_info, change_script) = self.peek_change_info(params.change_script.take());
 
         let (assets, txouts) = self.parse_params(&params);
 
@@ -3384,8 +3463,27 @@ impl Wallet {
         )
         .map_err(CreatePsbtError::Selector)?;
 
-        self.create_psbt_from_selector(&mut selector, &params, rng)
-            .map_err(ReplaceByFeeError::CreatePsbt)
+        let (psbt, finalizer) = self
+            .create_psbt_from_selector(&mut selector, &params, rng)
+            .map_err(ReplaceByFeeError::CreatePsbt)?;
+
+        // Reveal the auto-selected change address
+        if let Some((keychain, index, spk)) = change_info {
+            if psbt
+                .unsigned_tx
+                .output
+                .iter()
+                .any(|txo| txo.script_pubkey == spk)
+            {
+                if let Some((_, index_changeset)) =
+                    self.tx_graph.index.reveal_to_target(keychain, index)
+                {
+                    self.stage.merge(index_changeset.into());
+                }
+            }
+        }
+
+        Ok((psbt, finalizer))
     }
 
     /// Plan the output with the available assets and return a new [`Input`] if possible. See also

@@ -554,7 +554,7 @@ mod test {
     #[test]
     fn test_replace_params() {
         use crate::KeychainKind::Internal;
-        let (wallet, txid0) = crate::test_utils::get_funded_wallet_wpkh();
+        let (mut wallet, txid0) = crate::test_utils::get_funded_wallet_wpkh();
         let outpoint_0 = OutPoint::new(txid0, 0);
         let change_descriptor = wallet
             .public_descriptor(Internal)
