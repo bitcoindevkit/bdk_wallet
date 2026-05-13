@@ -2896,13 +2896,8 @@ impl Wallet {
         })
     }
 
-    /// Parses the common parameters used during PSBT creation.
-    ///
-    /// ## Returns
-    ///
-    /// - Assets
-    /// - Change script
-    /// - Indexed wallet txouts
+    /// Parses the common parameters used during PSBT creation and returns the spend assets
+    /// and a map of indexed tx outputs.
     fn parse_params<C>(
         &self,
         params: &PsbtParams<C>,
@@ -3273,22 +3268,30 @@ impl Wallet {
     ) -> Result<(Psbt, Finalizer), ReplaceByFeeError> {
         let change_script = self.change_script(params.change_script.take());
 
+        let (assets, txouts) = self.parse_params(&params);
+
         let PsbtParams {
             replace: txids_to_replace,
             ..
         } = &params;
-        // Txs and their descendants to be replaced. This is used to filter outputs that can't
-        // be selected.
-        let mut to_replace = txids_to_replace.clone();
-        for txid in txids_to_replace.iter().copied() {
-            to_replace.extend(
-                self.tx_graph
-                    .graph()
-                    .walk_descendants(txid, |_, txid| Some(txid)),
-            );
-        }
 
-        let (assets, txouts) = self.parse_params(&params);
+        // Txs and their descendants to be replaced
+        //
+        // Here `to_replace` serves a dual purpose:
+        //
+        // 1. Filtering outputs that *must not* be selected
+        // 2. Constructing the OriginalTxStats for RbfParams
+        let to_replace: HashSet<Txid> = txids_to_replace
+            .iter()
+            .copied()
+            .flat_map(|txid| {
+                core::iter::once(txid).chain(
+                    self.tx_graph
+                        .graph()
+                        .walk_descendants(txid, |_, txid| Some(txid)),
+                )
+            })
+            .collect();
 
         let must_spend: Vec<Input> = params
             .utxos
@@ -3308,7 +3311,7 @@ impl Wallet {
             self.filter_spendable(txouts.into_values(), &params, |txo| {
                 // To be included for coin selection the UTXO
                 // - must not exist in `to_replace`
-                // - must be confirmed (per replacement policy Rule 2)
+                // - must be confirmed per replacement policy Rule 2 (removed in Core v31)
                 // - must pass a user-defined filter
                 !to_replace.contains(&txo.outpoint.txid)
                     && txo.chain_position.is_confirmed()
@@ -3331,7 +3334,7 @@ impl Wallet {
             return Err(CreatePsbtError::InsufficientFunds(err))?;
         }
 
-        let original_txs: Vec<OriginalTxStats> = txids_to_replace
+        let original_txs: Vec<OriginalTxStats> = to_replace
             .iter()
             .map(|&txid| -> Result<_, ReplaceByFeeError> {
                 let tx = self

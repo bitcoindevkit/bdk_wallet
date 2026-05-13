@@ -486,6 +486,137 @@ fn test_replace_by_fee_and_recpients() {
     }
 }
 
+// Test that replacing tx A also accounts for the fees of A's unconfirmed descendants
+// B and C when calculating the minimum required replacement fee (RBF Rule 3).
+//
+//   A       A'
+//  / \
+// B   C
+//
+// A' conflicts with A. The replacement fee should exceed
+// fee(A) + fee(B) + fee(C).
+#[test]
+fn test_replace_by_fee_replaces_descendant_fees() {
+    use KeychainKind::*;
+
+    let (desc, change_desc) = get_test_wpkh_and_change_desc();
+    let mut wallet = Wallet::create(desc, change_desc)
+        .network(Network::Regtest)
+        .create_wallet_no_persist()
+        .unwrap();
+
+    let block_id = BlockId {
+        height: 100,
+        hash: Hash::hash(b"100"),
+    };
+
+    // addr0 receives the confirmed funding; addr1 and addr2 are wallet change
+    // addresses that tx A pays into so that B and C can spend them.
+    let addr0 = wallet.reveal_next_address(External).address;
+    let addr1 = wallet.reveal_next_address(Internal).address;
+    let addr2 = wallet.reveal_next_address(Internal).address;
+
+    // External (non-wallet) output script used as a sink for recipients.
+    let external =
+        ScriptBuf::from_hex("5120e8f5c4dc2f5d6a7595e7b108cb063da9c7550312da1e22875d78b9db62b59cd5")
+            .unwrap();
+
+    // Confirmed funding tx: 1_000_000 sats to addr0.
+    let funding_tx = Transaction {
+        input: vec![TxIn::default()],
+        output: vec![TxOut {
+            value: Amount::from_sat(1_000_000),
+            script_pubkey: addr0.script_pubkey(),
+        }],
+        ..new_tx(0)
+    };
+    let funding_op = OutPoint::new(funding_tx.compute_txid(), 0);
+    insert_tx_anchor(&mut wallet, funding_tx.clone(), block_id);
+
+    // Tx A (unconfirmed): spends the confirmed UTXO; two outputs return to wallet.
+    //   fee_a = 1_000_000 - 50_000 - 450_000 - 450_000 = 50_000 sats
+    let tx_a = Transaction {
+        input: vec![TxIn {
+            previous_output: funding_op,
+            ..TxIn::default()
+        }],
+        output: vec![
+            TxOut {
+                value: Amount::from_sat(50_000),
+                script_pubkey: external.clone(),
+            },
+            TxOut {
+                value: Amount::from_sat(450_000),
+                script_pubkey: addr1.script_pubkey(),
+            },
+            TxOut {
+                value: Amount::from_sat(450_000),
+                script_pubkey: addr2.script_pubkey(),
+            },
+        ],
+        ..new_tx(0)
+    };
+    let a_txid = tx_a.compute_txid();
+    let fee_a = wallet.calculate_fee(&tx_a).unwrap();
+    insert_tx(&mut wallet, tx_a.clone());
+
+    // Tx B (unconfirmed): spends A's first change output.
+    //   fee_b = 450_000 - 430_000 = 20_000 sats
+    let tx_b = Transaction {
+        input: vec![TxIn {
+            previous_output: OutPoint::new(a_txid, 1),
+            ..TxIn::default()
+        }],
+        output: vec![TxOut {
+            value: Amount::from_sat(430_000),
+            script_pubkey: external.clone(),
+        }],
+        ..new_tx(0)
+    };
+    let fee_b = wallet.calculate_fee(&tx_b).unwrap();
+    insert_tx(&mut wallet, tx_b);
+
+    // Tx C (unconfirmed): spends A's second change output.
+    //   fee_c = 450_000 - 430_000 = 20_000 sats
+    let tx_c = Transaction {
+        input: vec![TxIn {
+            previous_output: OutPoint::new(a_txid, 2),
+            ..TxIn::default()
+        }],
+        output: vec![TxOut {
+            value: Amount::from_sat(430_000),
+            script_pubkey: external.clone(),
+        }],
+        ..new_tx(0)
+    };
+    let fee_c = wallet.calculate_fee(&tx_c).unwrap();
+    insert_tx(&mut wallet, tx_c.clone());
+
+    // The replacement must pay at least the combined fee of all three transactions
+    // (Bitcoin Core RBF Rule 3).
+    let total_original_fee = fee_a + fee_b + fee_c;
+    assert_eq!(total_original_fee.to_sat(), 90_000);
+
+    // Build replacement A'. The wallet walks A's descendants (B and C) so their
+    // fees are included in the minimum required replacement fee.
+    let (psbt, _) = wallet
+        .replace_by_fee_and_recipients(
+            &[Arc::new(tx_a)],
+            FeeRate::from_sat_per_vb(4).unwrap(),
+            vec![(external, Amount::from_sat(100_000))],
+        )
+        .expect("should create replacement psbt");
+
+    let replacement_fee = wallet
+        .calculate_fee(&psbt.unsigned_tx)
+        .expect("replacement tx fee should be calculable");
+
+    assert!(
+        replacement_fee >= total_original_fee,
+        "replacement fee ({replacement_fee}) must be >= sum of fees for A + B + C ({total_original_fee})",
+    );
+}
+
 #[test]
 fn test_create_psbt_utxo_filter() {
     let (desc, change_desc) = get_test_tr_single_sig_xprv_and_change_desc();
