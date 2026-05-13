@@ -46,6 +46,7 @@ test-utils = ["std", "anyhow", "tempfile"]
 [dev-dependencies]
 anyhow = "1"
 assert_matches = "1.5.0"
+bdk_testenv = { version = "0.13.1" }
 bdk_bitcoind_rpc = { version = "0.22.0" }
 bdk_electrum = { version = "0.23.2" }
 bdk_esplora = { version = "0.22.1", features = ["async-https", "blocking-https", "tokio"] }
@@ -77,3 +78,7 @@ name = "esplora_blocking"
 
 [[example]]
 name = "bitcoind_rpc"
+
+# override `bdk_testenv` to the latest one, as it's the one that have `bitcoind v0.28`
+[patch.crates-io]
+bdk_testenv = { git = "https://github.com/bitcoindevkit/bdk.git", branch = "master", package = "bdk_testenv" }
