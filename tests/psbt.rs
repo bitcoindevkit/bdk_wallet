@@ -617,6 +617,69 @@ fn test_replace_by_fee_replaces_descendant_fees() {
     );
 }
 
+// Test that `replace_by_fee`` rejects a confirmed original tx
+#[test]
+fn test_replace_by_fee_confirmed_tx_error() {
+    use bdk_wallet::error::ReplaceByFeeError;
+    use KeychainKind::*;
+
+    let (desc, change_desc) = get_test_wpkh_and_change_desc();
+    let mut wallet = Wallet::create(desc, change_desc)
+        .network(Network::Regtest)
+        .create_wallet_no_persist()
+        .unwrap();
+
+    let block = BlockId {
+        height: 100,
+        hash: Hash::hash(b"100"),
+    };
+    let addr = wallet.reveal_next_address(External).address;
+
+    // Fund the wallet with a confirmed output.
+    let funding_tx = Transaction {
+        input: vec![TxIn::default()],
+        output: vec![TxOut {
+            value: Amount::from_sat(200_000),
+            script_pubkey: addr.script_pubkey(),
+        }],
+        ..new_tx(0)
+    };
+    let funding_op = OutPoint::new(funding_tx.compute_txid(), 0);
+    insert_tx_anchor(&mut wallet, funding_tx, block);
+
+    // Create an unconfirmed tx spending the confirmed UTXO.
+    let recip =
+        ScriptBuf::from_hex("5120e8f5c4dc2f5d6a7595e7b108cb063da9c7550312da1e22875d78b9db62b59cd5")
+            .unwrap();
+    let mut params = PsbtParams::default();
+    params
+        .add_utxos(&[funding_op])
+        .add_recipients([(recip, Amount::from_sat(100_000))]);
+    let unconfirmed_tx = wallet.create_psbt(params).unwrap().0.unsigned_tx;
+    insert_tx(&mut wallet, unconfirmed_tx.clone());
+
+    // Now confirm that tx.
+    let confirmed_txid = unconfirmed_tx.compute_txid();
+    let confirm_block = BlockId {
+        height: 1001,
+        hash: Hash::hash(b"1001"),
+    };
+    insert_tx_anchor(&mut wallet, unconfirmed_tx.clone(), confirm_block);
+    insert_checkpoint(&mut wallet, confirm_block);
+
+    // Attempting to replace the now-confirmed tx should return TransactionConfirmed.
+    let result = wallet.replace_by_fee_and_recipients(
+        &[Arc::new(unconfirmed_tx)],
+        FeeRate::from_sat_per_vb(10).unwrap(),
+        vec![],
+    );
+
+    assert!(
+        matches!(result, Err(ReplaceByFeeError::TransactionConfirmed(txid)) if txid == confirmed_txid),
+        "expected TransactionConfirmed error, got: {result:?}",
+    );
+}
+
 #[test]
 fn test_create_psbt_utxo_filter() {
     let (desc, change_desc) = get_test_tr_single_sig_xprv_and_change_desc();

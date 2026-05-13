@@ -417,6 +417,8 @@ pub enum ReplaceByFeeError {
     PreviousFee(bdk_chain::tx_graph::CalculateFeeError),
     /// Original transaction could not be found
     MissingTransaction(Txid),
+    /// One of the transactions to be replaced is already confirmed
+    TransactionConfirmed(Txid),
 }
 
 impl fmt::Display for ReplaceByFeeError {
@@ -425,6 +427,9 @@ impl fmt::Display for ReplaceByFeeError {
             Self::CreatePsbt(e) => write!(f, "{e}"),
             Self::PreviousFee(e) => write!(f, "{e}"),
             Self::MissingTransaction(txid) => write!(f, "missing transaction: {txid}"),
+            Self::TransactionConfirmed(txid) => {
+                write!(f, "transaction already confirmed: {txid}")
+            }
         }
     }
 }
