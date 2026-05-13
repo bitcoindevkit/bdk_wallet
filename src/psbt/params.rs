@@ -194,6 +194,8 @@ impl<C> PsbtParams<C> {
     pub fn remove_utxo(&mut self, outpoint: &OutPoint) -> &mut Self {
         if self.set.remove(outpoint) {
             self.utxos.retain(|op| op != outpoint);
+            self.inputs
+                .retain(|input| input.prev_outpoint() != *outpoint);
         }
         self
     }
