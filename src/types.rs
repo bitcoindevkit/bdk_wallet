@@ -122,17 +122,13 @@ impl Utxo {
                 outpoint,
                 psbt_input,
                 ..
-            } => {
-                if let Some(prev_tx) = &psbt_input.non_witness_utxo {
-                    return &prev_tx.output[outpoint.vout as usize];
-                }
-
-                if let Some(txout) = &psbt_input.witness_utxo {
-                    return txout;
-                }
-
-                unreachable!("Foreign UTXOs will always have one of these set")
-            }
+            } => psbt_input.witness_utxo.as_ref().unwrap_or_else(|| {
+                psbt_input
+                    .non_witness_utxo
+                    .as_ref()
+                    .and_then(|tx| tx.output.get(outpoint.vout as usize))
+                    .expect("Foreign UTXOs should have one of witness_utxo, non_witness_utxo set")
+            }),
         }
     }
 
@@ -172,3 +168,77 @@ impl fmt::Display for IndexOutOfBoundsError {
 }
 
 impl core::error::Error for IndexOutOfBoundsError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bitcoin::{
+        absolute, transaction, Amount, OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut,
+        Witness,
+    };
+
+    fn build_tx(txout: TxOut) -> Transaction {
+        Transaction {
+            version: transaction::Version::TWO,
+            lock_time: absolute::LockTime::ZERO,
+            input: vec![TxIn {
+                previous_output: OutPoint::null(),
+                script_sig: ScriptBuf::default(),
+                sequence: Sequence::MAX,
+                witness: Witness::default(),
+            }],
+            output: vec![txout],
+        }
+    }
+
+    #[test]
+    fn txout_foreign_returns_witness_utxo() {
+        let txout = TxOut {
+            value: Amount::from_sat(100_000),
+            script_pubkey: ScriptBuf::default(),
+        };
+        let utxo = Utxo::Foreign {
+            outpoint: OutPoint::null(),
+            sequence: Sequence::MAX,
+            psbt_input: Box::new(psbt::Input {
+                witness_utxo: Some(txout.clone()),
+                ..Default::default()
+            }),
+        };
+        assert_eq!(utxo.txout(), &txout);
+    }
+
+    #[test]
+    fn txout_foreign_returns_non_witness_utxo() {
+        let txout = TxOut {
+            value: Amount::from_sat(100_000),
+            script_pubkey: ScriptBuf::default(),
+        };
+        let prev_tx = build_tx(txout.clone());
+        let utxo = Utxo::Foreign {
+            outpoint: OutPoint {
+                txid: prev_tx.compute_txid(),
+                vout: 0,
+            },
+            sequence: Sequence::MAX,
+            psbt_input: Box::new(psbt::Input {
+                non_witness_utxo: Some(prev_tx),
+                ..Default::default()
+            }),
+        };
+        assert_eq!(utxo.txout(), &txout);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "Foreign UTXOs should have one of witness_utxo, non_witness_utxo set"
+    )]
+    fn txout_foreign_panics_with_empty_psbt_input() {
+        let utxo = Utxo::Foreign {
+            outpoint: OutPoint::null(),
+            sequence: Sequence::MAX,
+            psbt_input: Box::new(psbt::Input::default()),
+        };
+        utxo.txout();
+    }
+}
