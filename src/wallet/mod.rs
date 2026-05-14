@@ -117,6 +117,7 @@ pub struct Wallet {
     network: Network,
     secp: SecpCtx,
     locked_outpoints: HashSet<OutPoint>,
+    min_output_value: Option<Amount>,
 }
 
 /// An update to [`Wallet`].
@@ -374,6 +375,7 @@ impl Wallet {
             stage,
             secp,
             locked_outpoints,
+            min_output_value: params.min_output_value,
         })
     }
 
@@ -581,12 +583,23 @@ impl Wallet {
             network,
             secp,
             locked_outpoints,
+            min_output_value: params.min_output_value,
         }))
     }
 
     /// Get the [`Network`] the wallet is using.
     pub fn network(&self) -> Network {
         self.network
+    }
+
+    /// Get the minimum output value, if set.
+    pub fn min_output_value(&self) -> Option<Amount> {
+        self.min_output_value
+    }
+
+    /// Set or clear the minimum output value.
+    pub fn set_min_output_value(&mut self, min_output_value: Option<Amount>) {
+        self.min_output_value = min_output_value;
     }
 
     /// Iterator over all keychains in this wallet
@@ -777,7 +790,11 @@ impl Wallet {
     }
 
     /// Return the list of unspent outputs of this wallet
+    ///
+    /// If [`min_output_value`](Wallet::min_output_value) is set, outputs with a value below
+    /// that threshold are excluded.
     pub fn list_unspent(&self) -> impl Iterator<Item = LocalOutput> + '_ {
+        let min_value = self.min_output_value;
         self.tx_graph
             .graph()
             .filter_chain_unspents(
@@ -787,6 +804,7 @@ impl Wallet {
                 self.tx_graph.index.outpoints().iter().cloned(),
             )
             .map(|((k, i), full_txo)| new_local_utxo(k, i, full_txo))
+            .filter(move |utxo| min_value.is_none_or(|threshold| utxo.txout.value >= threshold))
     }
 
     /// Get the [`TxDetails`] of a wallet transaction.
@@ -799,7 +817,7 @@ impl Wallet {
         let (sent, received) = self.sent_and_received(&tx.tx_node.tx);
         let fee: Option<Amount> = self.calculate_fee(&tx.tx_node.tx).ok();
         let fee_rate: Option<FeeRate> = self.calculate_fee_rate(&tx.tx_node.tx).ok();
-        let balance_delta: SignedAmount = self.tx_graph.index.net_value(&tx.tx_node.tx, ..);
+        let balance_delta: SignedAmount = self.net_value(&tx.tx_node.tx);
         let chain_position = tx.chain_position;
 
         let tx_details: TxDetails = TxDetails {
@@ -818,8 +836,11 @@ impl Wallet {
 
     /// List all relevant outputs (includes both spent and unspent, confirmed and unconfirmed).
     ///
+    /// If [`min_output_value`](Wallet::min_output_value) is set, outputs with a value below
+    /// that threshold are excluded.
     /// To list only unspent outputs (UTXOs), use [`Wallet::list_unspent`] instead.
     pub fn list_output(&self) -> impl Iterator<Item = LocalOutput> + '_ {
+        let min_value = self.min_output_value;
         self.tx_graph
             .graph()
             .filter_chain_txouts(
@@ -829,6 +850,7 @@ impl Wallet {
                 self.tx_graph.index.outpoints().iter().cloned(),
             )
             .map(|((k, i), full_txo)| new_local_utxo(k, i, full_txo))
+            .filter(move |output| min_value.is_none_or(|threshold| output.txout.value >= threshold))
     }
 
     /// Get all the checkpoints the wallet is currently storing indexed by height.
@@ -976,6 +998,8 @@ impl Wallet {
     /// This method returns a tuple `(sent, received)`. Sent is the sum of the txin amounts
     /// that spend from previous txouts tracked by this wallet. Received is the summation
     /// of this tx's outputs that send to script pubkeys tracked by this wallet.
+    /// If [`min_output_value`](Wallet::min_output_value) is set, outputs with a value below
+    /// that threshold are excluded from both `sent` and `received`.
     ///
     /// # Examples
     ///
@@ -997,7 +1021,36 @@ impl Wallet {
     /// let (sent, received) = wallet.sent_and_received(tx);
     /// ```
     pub fn sent_and_received(&self, tx: &Transaction) -> (Amount, Amount) {
-        self.tx_graph.index.sent_and_received(tx, ..)
+        let (mut sent, mut received) = self.tx_graph.index.sent_and_received(tx, ..);
+
+        // filter out outputs below the min_output_value threshold
+        if let Some(threshold) = self.min_output_value {
+            for spent in self.tx_graph.index.spent_txouts(tx) {
+                if spent.txout.value < threshold {
+                    sent -= spent.txout.value;
+                }
+            }
+            for created in self.tx_graph.index.created_txouts(tx) {
+                if created.txout.value < threshold {
+                    received -= created.txout.value;
+                }
+            }
+        }
+
+        (sent, received)
+    }
+
+    /// Compute the net value transferred to/from this wallet by `tx`.
+    ///
+    /// This is equivalent to `received - sent` from [`sent_and_received`],
+    /// and respects [`min_output_value`] if set.
+    ///
+    /// [`sent_and_received`]: Wallet::sent_and_received
+    /// [`min_output_value`]: Wallet::min_output_value
+    pub fn net_value(&self, tx: &Transaction) -> SignedAmount {
+        let (sent, received) = self.sent_and_received(tx);
+        received.to_signed().expect("valid `SignedAmount`")
+            - sent.to_signed().expect("valid `SignedAmount`")
     }
 
     /// Get a single transaction from the wallet as a [`WalletTx`] (if the transaction exists).
@@ -1114,12 +1167,32 @@ impl Wallet {
 
     /// Return the balance, separated into available, trusted-pending, untrusted-pending, and
     /// immature values.
+    ///
+    /// If [`min_output_value`](Wallet::min_output_value) is set, outputs with a value below
+    /// that threshold are excluded from the balance.
     pub fn balance(&self) -> Balance {
-        self.tx_graph.graph().balance(
+        let graph = self.tx_graph.graph();
+        let chain_tip = self.chain.tip().block_id();
+        let min_value = self.min_output_value;
+
+        let outpoints = self
+            .tx_graph
+            .index
+            .outpoints()
+            .iter()
+            .filter(|(_, op)| match min_value {
+                None => true,
+                Some(threshold) => graph
+                    .get_txout(*op)
+                    .is_none_or(|txout| txout.value >= threshold),
+            })
+            .cloned();
+
+        graph.balance(
             &self.chain,
-            self.chain.tip().block_id(),
+            chain_tip,
             CanonicalizationParams::default(),
-            self.tx_graph.index.outpoints().iter().cloned(),
+            outpoints,
             |&(k, _), _| k == KeychainKind::Internal,
         )
     }
@@ -2001,6 +2074,11 @@ impl Wallet {
                 )
                 // Filter out locked outpoints.
                 .filter(|(_, txo)| !self.is_outpoint_locked(txo.outpoint))
+                // Filter out outputs below `min_output_value`, if set.
+                .filter(|(_, txo)| {
+                    self.min_output_value
+                        .is_none_or(|threshold| txo.txout.value >= threshold)
+                })
                 // Only create LocalOutput if UTxO is mature.
                 .filter_map(move |((k, i), full_txo)| {
                     full_txo
