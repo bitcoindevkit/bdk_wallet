@@ -230,6 +230,239 @@ fn test_create_tx_custom_version() {
 }
 
 #[test]
+fn test_create_tx_non_v3_excludes_unconfirmed_v3_utxos() {
+    let (descriptor, change_descriptor) = get_test_wpkh_and_change_desc();
+    let mut wallet = Wallet::create(descriptor, change_descriptor)
+        .network(Network::Regtest)
+        .create_wallet_no_persist()
+        .expect("wallet");
+
+    insert_checkpoint(
+        &mut wallet,
+        BlockId {
+            height: 1,
+            hash: BlockHash::all_zeros(),
+        },
+    );
+
+    let confirmed_tx = Transaction {
+        version: transaction::Version::ONE,
+        lock_time: absolute::LockTime::ZERO,
+        input: vec![],
+        output: vec![TxOut {
+            script_pubkey: wallet
+                .next_unused_address(KeychainKind::External)
+                .script_pubkey(),
+            value: Amount::from_sat(10_000),
+        }],
+    };
+    let confirmed_txid = confirmed_tx.compute_txid();
+    insert_tx(&mut wallet, confirmed_tx);
+    let block_id = wallet.latest_checkpoint().block_id();
+    insert_anchor(
+        &mut wallet,
+        confirmed_txid,
+        ConfirmationBlockTime {
+            block_id,
+            confirmation_time: 1,
+        },
+    );
+
+    let truc_tx = Transaction {
+        version: transaction::Version(3),
+        lock_time: absolute::LockTime::ZERO,
+        input: vec![],
+        output: vec![TxOut {
+            script_pubkey: wallet
+                .next_unused_address(KeychainKind::External)
+                .script_pubkey(),
+            value: Amount::from_sat(30_000),
+        }],
+    };
+    let truc_txid = truc_tx.compute_txid();
+    insert_tx(&mut wallet, truc_tx);
+
+    let recipient = wallet.next_unused_address(KeychainKind::External);
+
+    let mut builder = wallet.build_tx();
+    builder
+        .fee_rate(FeeRate::ZERO)
+        .add_recipient(recipient.script_pubkey(), Amount::from_sat(20_000));
+    assert_matches!(
+        builder.finish(),
+        Err(CreateTxError::CoinSelection(
+            coin_selection::InsufficientFunds { .. }
+        ))
+    );
+
+    let mut builder = wallet.build_tx();
+    builder
+        .fee_rate(FeeRate::ZERO)
+        .version(3)
+        .add_recipient(recipient.script_pubkey(), Amount::from_sat(20_000));
+    let psbt = builder
+        .finish()
+        .expect("v3 transaction should be buildable");
+
+    assert_eq!(psbt.unsigned_tx.version, transaction::Version(3));
+    assert!(
+        psbt.unsigned_tx
+            .input
+            .iter()
+            .any(|input| input.previous_output.txid == truc_txid),
+        "version=3 transaction should be able to spend the unconfirmed v3 output"
+    );
+}
+
+#[test]
+fn test_create_tx_non_v3_allows_unconfirmed_non_v3_utxos() {
+    let (descriptor, change_descriptor) = get_test_wpkh_and_change_desc();
+    let mut wallet = Wallet::create(descriptor, change_descriptor)
+        .network(Network::Regtest)
+        .create_wallet_no_persist()
+        .expect("wallet");
+
+    let unconfirmed_tx = Transaction {
+        version: transaction::Version::ONE,
+        lock_time: absolute::LockTime::ZERO,
+        input: vec![],
+        output: vec![TxOut {
+            script_pubkey: wallet
+                .next_unused_address(KeychainKind::External)
+                .script_pubkey(),
+            value: Amount::from_sat(30_000),
+        }],
+    };
+    let unconfirmed_txid = unconfirmed_tx.compute_txid();
+    insert_tx(&mut wallet, unconfirmed_tx);
+
+    let recipient = wallet.next_unused_address(KeychainKind::External);
+    let mut builder = wallet.build_tx();
+    builder
+        .fee_rate(FeeRate::ZERO)
+        .add_recipient(recipient.script_pubkey(), Amount::from_sat(20_000));
+    let psbt = builder
+        .finish()
+        .expect("non-v3 unconfirmed outputs should remain spendable");
+
+    assert!(
+        psbt.unsigned_tx
+            .input
+            .iter()
+            .any(|input| input.previous_output.txid == unconfirmed_txid),
+        "expected the unconfirmed non-v3 output to be available for selection"
+    );
+}
+
+#[test]
+fn test_create_tx_v3_excludes_unconfirmed_non_v3_utxos() {
+    let (descriptor, change_descriptor) = get_test_wpkh_and_change_desc();
+    let mut wallet = Wallet::create(descriptor, change_descriptor)
+        .network(Network::Regtest)
+        .create_wallet_no_persist()
+        .expect("wallet");
+
+    insert_checkpoint(
+        &mut wallet,
+        BlockId {
+            height: 1,
+            hash: BlockHash::all_zeros(),
+        },
+    );
+
+    let confirmed_tx = Transaction {
+        version: transaction::Version::ONE,
+        lock_time: absolute::LockTime::ZERO,
+        input: vec![],
+        output: vec![TxOut {
+            script_pubkey: wallet
+                .next_unused_address(KeychainKind::External)
+                .script_pubkey(),
+            value: Amount::from_sat(10_000),
+        }],
+    };
+    let confirmed_txid = confirmed_tx.compute_txid();
+    insert_tx(&mut wallet, confirmed_tx);
+    let block_id = wallet.latest_checkpoint().block_id();
+    insert_anchor(
+        &mut wallet,
+        confirmed_txid,
+        ConfirmationBlockTime {
+            block_id,
+            confirmation_time: 1,
+        },
+    );
+
+    let unconfirmed_non_v3_tx = Transaction {
+        version: transaction::Version::ONE,
+        lock_time: absolute::LockTime::ZERO,
+        input: vec![],
+        output: vec![TxOut {
+            script_pubkey: wallet
+                .next_unused_address(KeychainKind::External)
+                .script_pubkey(),
+            value: Amount::from_sat(30_000),
+        }],
+    };
+    let unconfirmed_non_v3_txid = unconfirmed_non_v3_tx.compute_txid();
+    insert_tx(&mut wallet, unconfirmed_non_v3_tx);
+
+    let recipient_script = wallet
+        .next_unused_address(KeychainKind::External)
+        .script_pubkey();
+
+    let mut builder = wallet.build_tx();
+    builder
+        .fee_rate(FeeRate::ZERO)
+        .version(3)
+        .add_recipient(recipient_script.clone(), Amount::from_sat(20_000));
+    assert_matches!(
+        builder.finish(),
+        Err(CreateTxError::CoinSelection(
+            coin_selection::InsufficientFunds { .. }
+        ))
+    );
+
+    let unconfirmed_v3_tx = Transaction {
+        version: transaction::Version(3),
+        lock_time: absolute::LockTime::ZERO,
+        input: vec![],
+        output: vec![TxOut {
+            script_pubkey: wallet
+                .next_unused_address(KeychainKind::External)
+                .script_pubkey(),
+            value: Amount::from_sat(30_000),
+        }],
+    };
+    let unconfirmed_v3_txid = unconfirmed_v3_tx.compute_txid();
+    insert_tx(&mut wallet, unconfirmed_v3_tx);
+
+    let mut builder = wallet.build_tx();
+    builder
+        .fee_rate(FeeRate::ZERO)
+        .version(3)
+        .add_recipient(recipient_script, Amount::from_sat(20_000));
+    let psbt = builder
+        .finish()
+        .expect("v3 transaction should not select unconfirmed non-v3 inputs");
+
+    assert!(
+        psbt.unsigned_tx
+            .input
+            .iter()
+            .all(|input| input.previous_output.txid != unconfirmed_non_v3_txid),
+        "unconfirmed non-v3 outputs should be excluded from v3 transaction selection"
+    );
+    assert!(
+        psbt.unsigned_tx
+            .input
+            .iter()
+            .any(|input| input.previous_output.txid == unconfirmed_v3_txid),
+        "expected at least one unconfirmed v3 input to be selected"
+    );
+}
+
+#[test]
 fn test_create_tx_default_locktime_is_last_sync_height() {
     let (mut wallet, _) = get_funded_wallet_wpkh();
 
@@ -532,11 +765,11 @@ fn test_create_tx_custom_fee_rate() {
     let mut builder = wallet.build_tx();
     builder
         .add_recipient(addr.script_pubkey(), Amount::from_sat(25_000))
-        .fee_rate(FeeRate::from_sat_per_vb_u32(5));
+        .fee_rate(FeeRate::from_sat_per_vb(5).unwrap());
     let psbt = builder.finish().unwrap();
     let fee = check_fee!(wallet, psbt);
 
-    assert_fee_rate!(psbt, fee, FeeRate::from_sat_per_vb_u32(5), @add_signature);
+    assert_fee_rate!(psbt, fee, FeeRate::from_sat_per_vb(5).unwrap(), @add_signature);
 }
 
 #[test]
@@ -546,11 +779,11 @@ fn test_legacy_create_tx_custom_fee_rate() {
     let mut builder = wallet.build_tx();
     builder
         .add_recipient(addr.script_pubkey(), Amount::from_sat(25_000))
-        .fee_rate(FeeRate::from_sat_per_vb_u32(5));
+        .fee_rate(FeeRate::from_sat_per_vb(5).unwrap());
     let psbt = builder.finish().unwrap();
     let fee = check_fee!(wallet, psbt);
 
-    assert_fee_rate_legacy!(psbt, fee, FeeRate::from_sat_per_vb_u32(5), @add_signature);
+    assert_fee_rate_legacy!(psbt, fee, FeeRate::from_sat_per_vb(5).unwrap(), @add_signature);
 }
 
 #[test]
@@ -705,7 +938,7 @@ fn test_create_tx_drain_to_dust_amount() {
     builder
         .drain_to(addr.script_pubkey())
         .drain_wallet()
-        .fee_rate(FeeRate::from_sat_per_vb_u32(454));
+        .fee_rate(FeeRate::from_sat_per_vb(454).unwrap());
     builder.finish().unwrap();
 }
 
@@ -2612,7 +2845,7 @@ fn test_fee_rate_sign_no_grinding_high_r() {
     // alright.
     let (mut wallet, _) = get_funded_wallet_single("wpkh(tprv8ZgxMBicQKsPd3EupYiPRhaMooHKUHJxNsTfYuScep13go8QFfHdtkG9nRkFGb7busX4isf6X9dURGCoKgitaApQ6MupRhZMcELAxTBRJgS/*)");
     let addr = wallet.next_unused_address(KeychainKind::External);
-    let fee_rate = FeeRate::from_sat_per_vb_u32(1);
+    let fee_rate = FeeRate::from_sat_per_vb(1).unwrap();
     let mut builder = wallet.build_tx();
     let mut data = PushBytesBuf::try_from(vec![0]).unwrap();
     builder
@@ -2679,7 +2912,7 @@ fn test_fee_rate_sign_grinding_low_r() {
     // signature is 70 bytes.
     let (mut wallet, _) = get_funded_wallet_single("wpkh(tprv8ZgxMBicQKsPd3EupYiPRhaMooHKUHJxNsTfYuScep13go8QFfHdtkG9nRkFGb7busX4isf6X9dURGCoKgitaApQ6MupRhZMcELAxTBRJgS/*)");
     let addr = wallet.next_unused_address(KeychainKind::External);
-    let fee_rate = FeeRate::from_sat_per_vb_u32(1);
+    let fee_rate = FeeRate::from_sat_per_vb(1).unwrap();
     let mut builder = wallet.build_tx();
     builder
         .drain_to(addr.script_pubkey())
