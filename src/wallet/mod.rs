@@ -41,12 +41,13 @@ use bitcoin::{
     psbt,
     secp256k1::Secp256k1,
     sighash::{EcdsaSighashType, TapSighashType},
-    transaction, Address, Amount, Block, FeeRate, Network, NetworkKind, OutPoint, Psbt, ScriptBuf,
-    Sequence, SignedAmount, Transaction, TxOut, Txid, Weight, Witness,
+    transaction, Address, Amount, Block, FeeRate, Network, NetworkKind, OutPoint, Psbt, PublicKey,
+    ScriptBuf, Sequence, SignedAmount, Transaction, TxOut, Txid, Weight, Witness,
 };
 use miniscript::{
     descriptor::KeyMap,
     psbt::{PsbtExt, PsbtInputExt, PsbtInputSatisfier},
+    ToPublicKey,
 };
 use rand_core::RngCore;
 
@@ -64,7 +65,6 @@ pub mod signer;
 pub mod tx_builder;
 pub(crate) mod utils;
 
-use crate::collections::{BTreeMap, HashMap, HashSet};
 use crate::descriptor::{
     check_wallet_descriptor, error::Error as DescriptorError, policy::BuildSatisfaction,
     DerivedDescriptor, DescriptorMeta, ExtendedDescriptor, ExtractPolicy, IntoWalletDescriptor,
@@ -78,6 +78,10 @@ use crate::wallet::{
     signer::{SignOptions, SignerError, SignerOrdering, SignersContainer, TransactionSigner},
     tx_builder::{FeePolicy, TxBuilder, TxParams},
     utils::{check_nsequence_rbf, After, Older, SecpCtx},
+};
+use crate::{
+    collections::{BTreeMap, HashMap, HashSet},
+    keys::KeyError,
 };
 
 // re-exports
@@ -2701,6 +2705,39 @@ impl Wallet {
             })
             .collect()
     }
+
+    /// Get the public key at the specified derivation index
+    pub fn public_key_at_index(
+        &self,
+        keychain: KeychainKind,
+        index: u32,
+    ) -> Result<PublicKey, KeyError> {
+        let descriptor = self
+            .public_descriptor(keychain)
+            .at_derivation_index(index)
+            .map_err(|e| KeyError::Message(e.to_string()))?;
+
+        match descriptor {
+            miniscript::Descriptor::Pkh(pkh) => Ok(pkh.as_inner().to_public_key()),
+            miniscript::Descriptor::Wpkh(wpkh) => Ok(wpkh.as_inner().to_public_key()),
+            miniscript::Descriptor::Tr(tr) => Ok(tr.internal_key().to_public_key()),
+            miniscript::Descriptor::Bare(bare) => {
+                if bare.script_pubkey().is_p2pk() {
+                    let pk = bare.script_pubkey().p2pk_public_key();
+                    return Ok(pk.unwrap());
+                }
+                Err(KeyError::Message(
+                    "Can't get a public key from given bare descriptor".to_string(),
+                ))
+            }
+            miniscript::Descriptor::Sh(_) => Err(KeyError::Message(
+                "Can't get a public key from given sh descriptor".to_string(),
+            )),
+            miniscript::Descriptor::Wsh(_) => Err(KeyError::Message(
+                "Can't get a public key from given wsh descriptor".to_string(),
+            )),
+        }
+    }
 }
 
 /// Methods to construct sync/full-scan requests for spk-based chain sources.
@@ -2943,6 +2980,42 @@ mod test {
     use crate::miniscript::Error::Unexpected;
     use crate::test_utils::get_test_tr_single_sig_xprv_and_change_desc;
     use crate::test_utils::insert_tx;
+
+    #[test]
+    fn test_generate_public_keys() {
+        // Create new wallet.
+        let (internal_desc, external_desc) = crate::test_utils::get_test_wpkh_and_change_desc();
+        let wallet = Wallet::create(internal_desc, external_desc)
+            .network(Network::Testnet)
+            .create_wallet_no_persist()
+            .unwrap();
+
+        let pk = wallet
+            .public_key_at_index(KeychainKind::External, 0)
+            .unwrap();
+        let expected: [u8; 33] = [
+            2, 206, 182, 158, 34, 51, 63, 131, 85, 108, 93, 30, 251, 167, 90, 3, 52, 107, 243, 213,
+            44, 251, 211, 159, 197, 210, 77, 237, 3, 78, 247, 217, 244,
+        ];
+
+        assert_eq!(pk.to_bytes(), expected);
+
+        // Test: Simple 2-of-2 multi-signature
+        let my_key_1 = pk;
+        let my_key_2 = wallet
+            .public_key_at_index(KeychainKind::External, 1)
+            .unwrap();
+
+        let (descriptor, _, _) = crate::descriptor! {
+             wsh (
+                 multi(2, my_key_1, my_key_2)
+             )
+        }
+        .unwrap();
+
+        let expected_descriptor = "wsh(multi(2,02ceb69e22333f83556c5d1efba75a03346bf3d52cfbd39fc5d24ded034ef7d9f4,02d466308945a80e73cb65d35e30adcfaacfd8e4fb657edbe15537d770cf9021a9))#539zz7na";
+        assert_eq!(expected_descriptor, descriptor.to_string());
+    }
 
     #[test]
     fn not_duplicated_utxos_across_optional_and_required() {
