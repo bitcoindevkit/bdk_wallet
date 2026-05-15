@@ -361,3 +361,15 @@ pub fn insert_seen_at(wallet: &mut Wallet, txid: Txid, seen_at: u64) {
         })
         .expect("failed to apply update");
 }
+
+/// Marks the given `txid` evicted from the mempool at `evicted_at`
+pub fn insert_evicted_at(wallet: &mut Wallet, txid: Txid, evicted_at: u64) {
+    let mut tx_update = TxUpdate::default();
+    tx_update.evicted_ats = [(txid, evicted_at)].into();
+    wallet
+        .apply_update(Update {
+            tx_update,
+            ..Default::default()
+        })
+        .expect("failed to apply update");
+}

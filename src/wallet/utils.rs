@@ -14,8 +14,9 @@ use bitcoin::secp256k1::{All, Secp256k1};
 use bitcoin::{
     absolute, relative, Amount, FeeRate, Script, Sequence, SignedAmount, Transaction, Txid,
 };
-use chain::{ChainPosition, ConfirmationBlockTime};
 use miniscript::{MiniscriptKey, Satisfier, ToPublicKey};
+
+use super::TxCanonicality;
 
 use rand_core::RngCore;
 
@@ -136,8 +137,8 @@ pub(crate) fn shuffle_slice<T>(list: &mut [T], rng: &mut impl RngCore) {
 
 pub(crate) type SecpCtx = Secp256k1<All>;
 
-/// Details about a transaction affecting the wallet (relevant and canonical).
-#[derive(Debug)]
+/// Details about a transaction affecting the wallet.
+#[derive(Clone, Debug)]
 pub struct TxDetails {
     /// The transaction id.
     pub txid: Txid,
@@ -157,8 +158,8 @@ pub struct TxDetails {
     pub fee_rate: Option<FeeRate>,
     /// The net effect of the transaction on the balance of the wallet.
     pub balance_delta: SignedAmount,
-    /// The position of the transaction in the chain.
-    pub chain_position: ChainPosition<ConfirmationBlockTime>,
+    /// The canonicality of the transaction.
+    pub canonicality: TxCanonicality,
     /// The complete [`Transaction`].
     pub tx: Arc<Transaction>,
 }

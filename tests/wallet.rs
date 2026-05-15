@@ -10,7 +10,9 @@ use bdk_wallet::psbt::PsbtUtils;
 use bdk_wallet::signer::{SignOptions, SignerError};
 use bdk_wallet::test_utils::*;
 use bdk_wallet::KeychainKind;
-use bdk_wallet::{AddressInfo, Balance, PersistedWallet, Update, Wallet, WalletTx};
+use bdk_wallet::{
+    AddressInfo, Balance, PersistedWallet, TransactionInfo, TxCanonicality, Update, Wallet,
+};
 use bitcoin::constants::COINBASE_MATURITY;
 use bitcoin::hashes::Hash;
 use bitcoin::script::PushBytesBuf;
@@ -2807,11 +2809,14 @@ fn test_transactions_sort_by() {
     receive_output(&mut wallet, Amount::from_sat(25_000), ReceiveTo::Mempool(0));
 
     // sort by chain position, unconfirmed then confirmed by descending block height
-    let sorted_txs: Vec<WalletTx> =
-        wallet.transactions_sort_by(|t1, t2| t2.chain_position.cmp(&t1.chain_position));
+    let sorted_txs: Vec<TransactionInfo> =
+        wallet.transactions_sort_by(|t1, t2| t2.chain_position().cmp(&t1.chain_position()));
     let conf_heights: Vec<Option<u32>> = sorted_txs
         .iter()
-        .map(|tx| tx.chain_position.confirmation_height_upper_bound())
+        .map(|tx| {
+            tx.chain_position()
+                .and_then(|position| position.confirmation_height_upper_bound())
+        })
         .collect();
     assert_eq!([None, Some(2000), Some(1000)], conf_heights.as_slice());
 }
@@ -2872,29 +2877,102 @@ fn test_wallet_transactions_relevant() {
         .any(|wallet_tx| wallet_tx.tx_node.txid == other_txid));
     assert!(full_tx_count_before < full_tx_count_after);
     assert!(canonical_tx_count_before < canonical_tx_count_after);
+
+    // A wallet-relevant non-canonical tx is included.
+    let sendto = Address::from_str("bcrt1q3qtze4ys45tgdvguj66zrk4fu6hq3a3v9pfly5")
+        .unwrap()
+        .require_network(Network::Regtest)
+        .unwrap();
+    let mut builder = test_wallet.build_tx();
+    builder.add_recipient(sendto.script_pubkey(), Amount::from_sat(10_000));
+    let send_tx = builder.finish().unwrap().extract_tx().unwrap();
+    let send_txid = send_tx.compute_txid();
+    let mut update = Update::default();
+    update.tx_update.txs = vec![Arc::new(send_tx)];
+    update.tx_update.seen_ats = [(send_txid, 100)].into();
+    update.tx_update.evicted_ats = [(send_txid, 200)].into();
+    test_wallet.apply_update(update).unwrap();
+    let info = test_wallet
+        .transactions()
+        .find(|tx| tx.tx_node.txid == send_txid)
+        .expect("non-canonical send_tx should be included");
+    assert!(info.chain_position().is_none());
 }
 
 #[test]
-fn test_tx_details_method() {
-    let (test_wallet, txid_1) = get_funded_wallet_wpkh();
-    let tx_details_1_option = test_wallet.tx_details(txid_1);
+fn test_get_tx() {
+    let (mut wallet, funding_txid) = get_funded_wallet_wpkh();
 
-    assert!(tx_details_1_option.is_some());
-    let tx_details_1 = tx_details_1_option.unwrap();
-
+    // Canonical case: the confirmed funding tx.
+    let info = wallet.get_tx(funding_txid).expect("funded tx should exist");
+    let details = &info.details;
     assert_eq!(
-        tx_details_1.txid.to_string(),
+        details.txid.to_string(),
         "f2a03cdfe1bb6a295b0a4bb4385ca42f95e4b2c6d9a7a59355d32911f957a5b3"
     );
-    assert_eq!(tx_details_1.received, Amount::from_sat(50000));
-    assert_eq!(tx_details_1.sent, Amount::from_sat(76000));
-    assert_eq!(tx_details_1.fee.unwrap(), Amount::from_sat(1000));
-    assert_eq!(tx_details_1.balance_delta, SignedAmount::from_sat(-26000));
+    assert_eq!(details.received, Amount::from_sat(50000));
+    assert_eq!(details.sent, Amount::from_sat(76000));
+    assert_eq!(details.fee.unwrap(), Amount::from_sat(1000));
+    assert_eq!(details.balance_delta, SignedAmount::from_sat(-26000));
+    assert!(matches!(details.canonicality, TxCanonicality::Canonical(_)));
+    assert!(info.chain_position().is_some());
+    assert!(info.last_evicted.is_none());
+    assert!(info.conflicts.is_empty());
 
-    // Transaction id not part of the TxGraph
-    let txid_2 = Txid::from_raw_hash(Hash::all_zeros());
-    let tx_details_2_option = test_wallet.tx_details(txid_2);
-    assert!(tx_details_2_option.is_none());
+    // Build an unconfirmed tx and replace it via RBF.
+    let sendto = Address::from_str("bcrt1q3qtze4ys45tgdvguj66zrk4fu6hq3a3v9pfly5")
+        .unwrap()
+        .require_network(Network::Regtest)
+        .unwrap();
+    let mut builder = wallet.build_tx();
+    builder.add_recipient(sendto.script_pubkey(), Amount::from_sat(10_000));
+    let orig_tx = builder.finish().unwrap().extract_tx().unwrap();
+    let orig_txid = orig_tx.compute_txid();
+    insert_tx(&mut wallet, orig_tx);
+
+    let mut builder = wallet.build_fee_bump(orig_txid).unwrap();
+    builder.fee_rate(FeeRate::from_sat_per_vb(10).unwrap());
+    let rbf_tx = builder.finish().unwrap().extract_tx().unwrap();
+    let rbf_txid = rbf_tx.compute_txid();
+    insert_tx(&mut wallet, rbf_tx);
+    insert_evicted_at(&mut wallet, orig_txid, 220);
+
+    // Non-canonical (evicted) side.
+    let orig_info = wallet.get_tx(orig_txid).expect("evicted tx still visible");
+    assert!(matches!(
+        orig_info.details.canonicality,
+        TxCanonicality::NonCanonical
+    ));
+    assert!(orig_info.chain_position().is_none());
+    assert_eq!(orig_info.last_evicted, Some(220));
+    assert!(orig_info.conflicts.contains(&rbf_txid));
+
+    // Canonical replacement side.
+    let rbf_info = wallet
+        .get_tx(rbf_txid)
+        .expect("replacement tx should exist");
+    assert!(matches!(
+        rbf_info.details.canonicality,
+        TxCanonicality::Canonical(_)
+    ));
+    assert!(rbf_info.chain_position().is_some());
+    assert!(rbf_info.last_evicted.is_none());
+    assert!(rbf_info.conflicts.contains(&orig_txid));
+
+    // Unknown txid returns None.
+    let unknown = Txid::from_raw_hash(Hash::all_zeros());
+    assert!(wallet.get_tx(unknown).is_none());
+
+    // Known to the tx_graph but not wallet-relevant.
+    let (other_external, other_internal) = get_test_tr_single_sig_xprv_and_change_desc();
+    let (other_wallet, other_txid) = get_funded_wallet(other_internal, other_external);
+    wallet
+        .apply_update(Update {
+            tx_update: other_wallet.tx_graph().clone().into(),
+            ..Default::default()
+        })
+        .unwrap();
+    assert!(wallet.get_tx(other_txid).is_none());
 }
 
 #[test]
