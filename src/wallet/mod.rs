@@ -66,9 +66,9 @@ pub(crate) mod utils;
 
 use crate::collections::{BTreeMap, HashMap, HashSet};
 use crate::descriptor::{
-    check_wallet_descriptor, error::Error as DescriptorError, policy::BuildSatisfaction,
-    DerivedDescriptor, DescriptorMeta, ExtendedDescriptor, ExtractPolicy, IntoWalletDescriptor,
-    Policy, XKeyUtils,
+    check_wallet_descriptor, checksum::calc_checksum, error::Error as DescriptorError,
+    policy::BuildSatisfaction, DerivedDescriptor, DescriptorMeta, ExtendedDescriptor,
+    ExtractPolicy, IntoWalletDescriptor, Policy, XKeyUtils,
 };
 use crate::psbt::PsbtUtils;
 use crate::types::*;
@@ -2784,9 +2784,16 @@ impl AsRef<bdk_chain::tx_graph::TxGraph<ConfirmationBlockTime>> for Wallet {
     }
 }
 
-/// Deterministically generate a unique name given the descriptors defining the [`Wallet`].
+/// Generate a deterministic wallet name from descriptor checksums.
 ///
-/// Compatible with [`wallet_name_from_descriptor`].
+/// The wallet name is computed from the parsed public descriptor:
+/// - the checksum of the parsed public descriptor
+/// - if present, the checksum of the parsed change descriptor is appended
+///
+/// This is based on the public descriptor form, so equivalent xprv and xpub
+/// inputs produce the same wallet name.
+///
+/// Returns an error if descriptor parsing fails or if checksum computation fails.
 pub fn wallet_name_from_descriptor<T>(
     descriptor: T,
     change_descriptor: Option<T>,
@@ -2796,18 +2803,14 @@ pub fn wallet_name_from_descriptor<T>(
 where
     T: IntoWalletDescriptor,
 {
-    // TODO: check descriptors contains only public keys
-    let descriptor = descriptor
-        .into_wallet_descriptor(secp, network_kind)?
-        .0
-        .to_string();
-    let mut wallet_name = descriptor.split_once('#').unwrap().1.to_string();
+    // Wallet name is defined by the checksums of the wallet's public descriptors.
+    let (descriptor, _keymap) = descriptor.into_wallet_descriptor(secp, network_kind)?;
+    let mut wallet_name = calc_checksum(&descriptor.to_string())?;
+
     if let Some(change_descriptor) = change_descriptor {
-        let change_descriptor = change_descriptor
-            .into_wallet_descriptor(secp, network_kind)?
-            .0
-            .to_string();
-        wallet_name.push_str(change_descriptor.split_once('#').unwrap().1);
+        let (change_descriptor, _change_keymap) =
+            change_descriptor.into_wallet_descriptor(secp, network_kind)?;
+        wallet_name.push_str(&calc_checksum(&change_descriptor.to_string())?);
     }
 
     Ok(wallet_name)
@@ -3063,5 +3066,35 @@ mod test {
         let params = Wallet::create_from_two_path_descriptor(invalid_descriptor);
         let wallet = params.network(Network::Testnet).create_wallet_no_persist();
         assert!(wallet.is_err());
+    }
+    #[test]
+    fn test_wallet_name_from_descriptor_public_key_check() {
+        let secp = SecpCtx::new();
+
+        // Test with a public descriptor
+        let public_descriptor = "wpkh([31a30ffd/84'/1'/0']tpubDCG4yNzDpNYw5ZMuR2usfbPKcnaKjFGwgyussBdhjy2mXmLWnzkwUTZBQPrQxPVcfwh6uFPN4Q7Jk2DPRFb2c4xbrStpqCbKzLkGhvcJvSx/1/*)#vn4aqs37";
+        let public_result =
+            wallet_name_from_descriptor(public_descriptor, None, NetworkKind::Test, &secp);
+        assert!(public_result.is_ok());
+        let public_name = public_result.unwrap();
+        assert_eq!(public_name, "vn4aqs37"); // Checksum of the public descriptor
+
+        // Test with equivalent private descriptor (should produce same name)
+        let private_descriptor = "wpkh(tprv8ZgxMBicQKsPctT28ZYaU77s1UFjHv7o7cafmDntdggZ2dFtNn38RYMzJiDVMBqnqBFDP8rHxsiVRudhyrqi6mgPc4gekgxChgnkTSxHAZ5/84'/1'/0'/1/*)#7z7rgndh";
+        let private_result =
+            wallet_name_from_descriptor(private_descriptor, None, NetworkKind::Test, &secp);
+        assert!(private_result.is_ok());
+        assert_eq!(public_name, private_result.unwrap()); // Same wallet name
+
+        // Test with change descriptor
+        let change_descriptor = "wpkh([76011771/84'/1'/0']tpubDC3fWoucXCvSyfh6YbyHu1mSQdFjCz5Ejx62eUnRkKdr9bsHGgLEjAaCRNNuaeLjCttfz8sXgshqzawtgWvtozE84rH9BvQn2PUyMCiU1fT/1/*)#jgrerlc3";
+        let result_with_change = wallet_name_from_descriptor(
+            public_descriptor,
+            Some(change_descriptor),
+            NetworkKind::Test,
+            &secp,
+        );
+        assert!(result_with_change.is_ok());
+        // Wallet name should be main_checksum + change_checksum
     }
 }
