@@ -1114,14 +1114,107 @@ impl Wallet {
 
     /// Return the balance, separated into available, trusted-pending, untrusted-pending, and
     /// immature values.
+    ///
+    /// A pending UTXO is `trusted_pending` if every unconfirmed ancestor transaction  
+    /// was created by this wallet.
+    /// Otherwise it is `untrusted_pending`.
     pub fn balance(&self) -> Balance {
-        self.tx_graph.graph().balance(
+        let graph = self.tx_graph.graph();
+        let chain_tip = self.chain.tip().block_id();
+
+        // TODO: simplify with CanonicalView::txout() once released on bdk_chain
+        let canonical_txs: HashMap<Txid, (Arc<Transaction>, ChainPosition<ConfirmationBlockTime>)> =
+            graph
+                .list_canonical_txs(&self.chain, chain_tip, CanonicalizationParams::default())
+                .map(|ctx| {
+                    (
+                        ctx.tx_node.txid,
+                        (ctx.tx_node.tx.clone(), ctx.chain_position),
+                    )
+                })
+                .collect();
+
+        let mut immature = Amount::ZERO;
+        let mut trusted_pending = Amount::ZERO;
+        let mut untrusted_pending = Amount::ZERO;
+        let mut confirmed = Amount::ZERO;
+
+        for (_spk_i, txout) in graph.filter_chain_unspents(
             &self.chain,
-            self.chain.tip().block_id(),
+            chain_tip,
             CanonicalizationParams::default(),
             self.tx_graph.index.outpoints().iter().cloned(),
-            |&(k, _), _| k == KeychainKind::Internal,
-        )
+        ) {
+            match &txout.chain_position {
+                ChainPosition::Confirmed { .. } => {
+                    // TODO: Check with min_confirmation
+                    if txout.is_confirmed_and_spendable(chain_tip.height) {
+                        confirmed += txout.txout.value;
+                    } else if !txout.is_mature(chain_tip.height) {
+                        immature += txout.txout.value;
+                    }
+                }
+
+                ChainPosition::Unconfirmed { .. } => {
+                    let mut txids: Vec<Txid> = vec![txout.outpoint.txid];
+                    let mut visited_tx: HashSet<Txid> = HashSet::new();
+                    let mut trusted: bool = true;
+
+                    'trust_check: while let Some(current_txid) = txids.pop() {
+                        if !visited_tx.contains(&current_txid) {
+                            let Some((tx, _)) = canonical_txs.get(&current_txid) else {
+                                trusted = false;
+                                break;
+                            };
+
+                            for input in tx.input.iter() {
+                                if !&input.previous_output.is_null() {
+                                    let Some((parent_tx, parent_chain_pos)) =
+                                        canonical_txs.get(&input.previous_output.txid)
+                                    else {
+                                        trusted = false;
+                                        break 'trust_check;
+                                    };
+                                    // TODO: Check with min_confirmation
+                                    if !parent_chain_pos.is_confirmed() {
+                                        let vout = input.previous_output.vout as usize;
+                                        let is_ours = parent_tx
+                                            .output
+                                            .get(vout)
+                                            .map(|o| {
+                                                self.tx_graph
+                                                    .index
+                                                    .index_of_spk(o.script_pubkey.clone())
+                                                    .is_some()
+                                            })
+                                            .unwrap_or(false);
+                                        if is_ours {
+                                            txids.push(input.previous_output.txid);
+                                        } else {
+                                            trusted = false;
+                                            break 'trust_check;
+                                        }
+                                    }
+                                }
+                            }
+                            visited_tx.insert(current_txid);
+                        }
+                    }
+                    if trusted {
+                        trusted_pending += txout.txout.value;
+                    } else {
+                        untrusted_pending += txout.txout.value;
+                    }
+                }
+            }
+        }
+
+        Balance {
+            immature,
+            trusted_pending,
+            untrusted_pending,
+            confirmed,
+        }
     }
 
     /// Add an external signer
