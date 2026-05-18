@@ -328,8 +328,6 @@ pub enum BuildFeeBumpError {
     TransactionNotFound(Txid),
     /// Happens when trying to bump a transaction that is already confirmed
     TransactionConfirmed(Txid),
-    /// Trying to replace a tx that has a sequence >= `0xFFFFFFFE`
-    IrreplaceableTransaction(Txid),
     /// Node doesn't have data to estimate a fee rate
     FeeRateUnavailable,
     /// Input references an invalid output index in the previous transaction
@@ -352,9 +350,6 @@ impl fmt::Display for BuildFeeBumpError {
             }
             Self::TransactionConfirmed(txid) => {
                 write!(f, "Transaction already confirmed with txid: {txid}")
-            }
-            Self::IrreplaceableTransaction(txid) => {
-                write!(f, "Transaction can't be replaced with txid: {txid}")
             }
             Self::FeeRateUnavailable => write!(f, "Fee rate unavailable"),
             Self::InvalidOutputIndex(op) => {
