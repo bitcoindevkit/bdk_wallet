@@ -1,10 +1,12 @@
 //! User facing wallet events.
 
 use crate::collections::BTreeMap;
+use crate::keyring::KeyRing;
 use crate::wallet::ChainPosition::{Confirmed, Unconfirmed};
 use crate::Wallet;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+use bitcoin::psbt::KeyRequest;
 use bitcoin::{Transaction, Txid};
 use chain::{BlockId, ChainPosition, ConfirmationBlockTime};
 
@@ -84,8 +86,8 @@ pub enum WalletEvent {
 
 /// Generate `WalletEvent`s by comparing the chain tip and wallet transactions before and after
 /// updating the state of the `Wallet`.
-pub(crate) fn wallet_events(
-    wallet: &Wallet,
+pub(crate) fn wallet_events<K: Clone + core::fmt::Debug + Ord>(
+    wallet: &Wallet<K>,
     chain_tip1: BlockId,
     chain_tip2: BlockId,
     wallet_txs1: BTreeMap<Txid, (Arc<Transaction>, ChainPosition<ConfirmationBlockTime>)>,
