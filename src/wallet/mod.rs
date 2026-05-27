@@ -1115,13 +1115,154 @@ impl Wallet {
     /// Return the balance, separated into available, trusted-pending, untrusted-pending, and
     /// immature values.
     pub fn balance(&self) -> Balance {
-        self.tx_graph.graph().balance(
+        let graph = self.tx_graph.graph();
+
+        // TODO: Use min_confirmation to use tip - min_confirmations as new tip.
+        let chain_tip = self.chain.tip().block_id();
+
+        // TODO: simplify once CanonicalView is available in a published bdk_chain release
+        let canonical_txs: HashMap<Txid, (Arc<Transaction>, ChainPosition<ConfirmationBlockTime>)> =
+            graph
+                .list_canonical_txs(&self.chain, chain_tip, CanonicalizationParams::default())
+                .map(|ctx| {
+                    (
+                        ctx.tx_node.txid,
+                        (ctx.tx_node.tx.clone(), ctx.chain_position),
+                    )
+                })
+                .collect();
+
+        let mut immature = Amount::ZERO;
+        let mut trusted_pending = Amount::ZERO;
+        let mut untrusted_pending = Amount::ZERO;
+        let mut confirmed = Amount::ZERO;
+
+        for (_spk_i, txout) in graph.filter_chain_unspents(
             &self.chain,
-            self.chain.tip().block_id(),
+            chain_tip,
             CanonicalizationParams::default(),
             self.tx_graph.index.outpoints().iter().cloned(),
-            |&(k, _), _| k == KeychainKind::Internal,
-        )
+        ) {
+            match &txout.chain_position {
+                ChainPosition::Confirmed { .. } => {
+                    if txout.is_confirmed_and_spendable(chain_tip.height) {
+                        confirmed += txout.txout.value;
+                    } else if !txout.is_mature(chain_tip.height) {
+                        immature += txout.txout.value;
+                    }
+                }
+
+                ChainPosition::Unconfirmed { .. } => {
+                    let Some((root_tx, _)) = canonical_txs.get(&txout.outpoint.txid) else {
+                        untrusted_pending += txout.txout.value;
+                        continue;
+                    };
+
+                    let mut trusted = true;
+
+                    'root: for input in root_tx.input.iter() {
+                        if input.previous_output.is_null() {
+                            continue;
+                        }
+
+                        let vout = input.previous_output.vout as usize;
+
+                        match canonical_txs.get(&input.previous_output.txid) {
+                            // Check first if it is confirmed, in case it is it can be marked as
+                            // trusted
+                            Some((_, pos)) if pos.is_confirmed() => {
+                                continue;
+                            }
+                            Some((parent_tx, _)) => {
+                                let is_ours = parent_tx
+                                    .output
+                                    .get(vout)
+                                    .map(|o| {
+                                        self.tx_graph
+                                            .index
+                                            .index_of_spk(o.script_pubkey.clone())
+                                            .is_some()
+                                    })
+                                    .unwrap_or(false);
+
+                                if !is_ours {
+                                    trusted = false;
+                                    break 'root;
+                                }
+                            }
+                            None => {
+                                trusted = false;
+                                break 'root;
+                            }
+                        }
+                    }
+
+                    if trusted {
+                        graph
+                            .walk_ancestors(root_tx.clone(), |_, ancestor_tx| -> Option<()> {
+                                let ancestor_txid = ancestor_tx.compute_txid();
+                                match canonical_txs.get(&ancestor_txid) {
+                                    None => {
+                                        trusted = false;
+                                        return None;
+                                    }
+                                    Some((_, pos)) if pos.is_confirmed() => return None,
+                                    _ => {}
+                                }
+                                for input in ancestor_tx.input.iter() {
+                                    if input.previous_output.is_null() {
+                                        continue;
+                                    }
+
+                                    let vout = input.previous_output.vout as usize;
+
+                                    match canonical_txs.get(&input.previous_output.txid) {
+                                        Some((_, pos)) if pos.is_confirmed() => {
+                                            continue;
+                                        }
+                                        Some((ancestor_tx, _)) => {
+                                            let is_ours = ancestor_tx
+                                                .output
+                                                .get(vout)
+                                                .map(|o| {
+                                                    self.tx_graph
+                                                        .index
+                                                        .index_of_spk(o.script_pubkey.clone())
+                                                        .is_some()
+                                                })
+                                                .unwrap_or(false);
+
+                                            if !is_ours {
+                                                trusted = false;
+                                                break;
+                                            }
+                                        }
+                                        None => {
+                                            trusted = false;
+                                            break;
+                                        }
+                                    }
+                                }
+                                Some(())
+                            })
+                            .run_until_finished();
+                    }
+
+                    if trusted {
+                        trusted_pending += txout.txout.value;
+                    } else {
+                        untrusted_pending += txout.txout.value;
+                    }
+                }
+            }
+        }
+
+        Balance {
+            immature,
+            trusted_pending,
+            untrusted_pending,
+            confirmed,
+        }
     }
 
     /// Add an external signer
