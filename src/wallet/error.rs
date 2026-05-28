@@ -215,6 +215,16 @@ pub enum CreateTxError {
     MissingNonWitnessUtxo(OutPoint),
     /// Miniscript PSBT error
     MiniscriptPsbt(MiniscriptPsbtError),
+    /// TRUC (BIP-431) virtual size cap exceeded.
+    ///
+    /// `cap_vb == 10_000` means Rule 4 (any TRUC tx).
+    /// `cap_vb == 1_000` means Rule 5 (TRUC tx with unconfirmed TRUC ancestor).
+    TrucSizeExceeded {
+        /// The cap that was exceeded, in virtual bytes.
+        cap_vb: u64,
+        /// The estimated virtual size of the candidate transaction.
+        actual_vb: u64,
+    },
 }
 
 impl fmt::Display for CreateTxError {
@@ -280,6 +290,12 @@ impl fmt::Display for CreateTxError {
             }
             CreateTxError::MiniscriptPsbt(err) => {
                 write!(f, "Miniscript PSBT error: {err}")
+            }
+            CreateTxError::TrucSizeExceeded { cap_vb, actual_vb } => {
+                write!(
+                    f,
+                    "TRUC virtual size cap exceeded: estimated {actual_vb} vB > {cap_vb} vB"
+                )
             }
         }
     }

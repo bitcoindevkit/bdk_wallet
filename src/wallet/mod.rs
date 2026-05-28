@@ -1441,6 +1441,23 @@ impl Wallet {
             }
         };
 
+        const TRUC_MAX_VSIZE_VB: u64 = 10_000;
+        const TRUC_CHILD_MAX_VSIZE_VB: u64 = 1_000;
+
+        let is_truc_tx = is_truc(version);
+
+        // BIP-431: keep per-input satisfaction weights for the vsize check below;
+        // coin_select returns plain Utxos and the weights would otherwise be lost.
+        let satisfaction_weights: HashMap<OutPoint, Weight> = if is_truc_tx {
+            required_utxos
+                .iter()
+                .chain(optional_utxos.iter())
+                .map(|w| (w.utxo.outpoint(), w.satisfaction_weight))
+                .collect()
+        } else {
+            HashMap::new()
+        };
+
         // Get drain script.
         let mut drain_index = Option::<(KeychainKind, u32)>::None;
         let drain_script = match params.drain_to {
@@ -1534,6 +1551,39 @@ impl Wallet {
 
         // Sort inputs/outputs according to the chosen algorithm.
         params.ordering.sort_tx_with_aux_rand(&mut tx, rng);
+
+        // BIP-431 Rules 4 and 5: a TRUC transaction's sigop-adjusted vsize is capped at
+        // 10,000 vB, or 1,000 vB when it has an unconfirmed TRUC ancestor.
+        if is_truc_tx {
+            let total_satisfaction_weight: Weight = coin_selection
+                .selected
+                .iter()
+                .filter_map(|u| satisfaction_weights.get(&u.outpoint()).copied())
+                .sum();
+            let estimated_vb = estimate_truc_vsize(tx.weight(), total_satisfaction_weight);
+
+            let has_unconf_truc_ancestor = coin_selection.selected.iter().any(|utxo| match utxo {
+                Utxo::Local(local) if local.chain_position.is_unconfirmed() => self
+                    .tx_graph
+                    .graph()
+                    .get_tx(local.outpoint.txid)
+                    .is_some_and(|tx| is_truc(tx.version)),
+                // Foreign UTXOs carry no chain position; treat them as non-TRUC.
+                Utxo::Local(..) | Utxo::Foreign { .. } => false,
+            });
+
+            let cap_vb = if has_unconf_truc_ancestor {
+                TRUC_CHILD_MAX_VSIZE_VB
+            } else {
+                TRUC_MAX_VSIZE_VB
+            };
+            if estimated_vb > cap_vb {
+                return Err(CreateTxError::TrucSizeExceeded {
+                    cap_vb,
+                    actual_vb: estimated_vb,
+                });
+            }
+        }
 
         let psbt = self.complete_transaction(tx, coin_selection.selected, params)?;
 
@@ -3028,6 +3078,21 @@ fn make_indexed_graph(
     stage.tx_graph.merge(changeset.tx_graph);
     stage.indexer.merge(changeset.indexer);
     Ok(indexed_graph)
+}
+
+/// Check if the given [`transaction::Version`] is TRUC (Topologically Restricted Until
+/// Confirmation).
+fn is_truc(version: transaction::Version) -> bool {
+    version.eq(&Version(3))
+}
+
+/// Estimate the post-signing virtual size of a transaction in vB.
+///
+/// Returns plain `weight / 4`, not the sigop-adjusted vsize bitcoind applies to TRUC
+/// policy. The two coincide for all common descriptors (P2WPKH, P2TR, P2WSH); see #477
+/// for proper sigop accounting.
+fn estimate_truc_vsize(unsigned_tx_weight: Weight, satisfaction_weight: Weight) -> u64 {
+    (unsigned_tx_weight + satisfaction_weight).to_vbytes_ceil()
 }
 
 /// Transforms a [`FeeRate`] to `f64` with unit as sat/vb.
