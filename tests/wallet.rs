@@ -3470,3 +3470,244 @@ fn test_create_and_spend_from_truc_tx() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+// Fund the wallet with `count` confirmed P2WPKH UTXOs, each of `value` sats.
+// Used by TRUC vsize tests to create wallets with many small UTXOs so that a
+// `drain_wallet` v3 transaction exceeds the BIP-431 size caps.
+fn fund_wallet_with_n_utxos(wallet: &mut Wallet, count: usize, value: u64) {
+    let block_id = wallet.latest_checkpoint().block_id();
+    for _ in 0..count {
+        let tx = Transaction {
+            version: transaction::Version::ONE,
+            lock_time: absolute::LockTime::ZERO,
+            input: vec![],
+            output: vec![TxOut {
+                script_pubkey: wallet
+                    .next_unused_address(KeychainKind::External)
+                    .script_pubkey(),
+                value: Amount::from_sat(value),
+            }],
+        };
+        let txid = tx.compute_txid();
+        insert_tx(wallet, tx);
+        insert_anchor(
+            wallet,
+            txid,
+            ConfirmationBlockTime {
+                block_id,
+                confirmation_time: 1,
+            },
+        );
+    }
+}
+
+#[test]
+fn test_truc_rule_4_rejects_over_10k_vb() -> anyhow::Result<()> {
+    let (descriptor, change_descriptor) = get_test_wpkh_and_change_desc();
+    let mut wallet = Wallet::create(descriptor, change_descriptor)
+        .network(Network::Regtest)
+        .create_wallet_no_persist()?;
+
+    insert_checkpoint(
+        &mut wallet,
+        BlockId {
+            height: 1,
+            hash: BlockHash::all_zeros(),
+        },
+    );
+
+    // 200 P2WPKH inputs (~68 vB each) drained into one output exceeds
+    // BIP-431 Rule 4's 10,000 vB cap.
+    fund_wallet_with_n_utxos(&mut wallet, 200, 10_000);
+
+    let dest = wallet
+        .next_unused_address(KeychainKind::External)
+        .script_pubkey();
+
+    let mut builder = wallet.build_tx();
+    builder
+        .version(3)
+        .drain_wallet()
+        .drain_to(dest)
+        .fee_rate(FeeRate::from_sat_per_vb_u32(1));
+
+    assert_matches!(
+        builder.finish(),
+        Err(CreateTxError::TrucSizeExceeded { cap_vb: 10_000, .. })
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_truc_rule_5_rejects_over_1k_vb_with_unconf_truc_ancestor() -> anyhow::Result<()> {
+    let (descriptor, change_descriptor) = get_test_wpkh_and_change_desc();
+    let mut wallet = Wallet::create(descriptor, change_descriptor)
+        .network(Network::Regtest)
+        .create_wallet_no_persist()?;
+
+    insert_checkpoint(
+        &mut wallet,
+        BlockId {
+            height: 1,
+            hash: BlockHash::all_zeros(),
+        },
+    );
+
+    // 20 confirmed P2WPKH UTXOs + 1 unconfirmed v3 UTXO. Total ~21 inputs ~ 1428 vB,
+    // above Rule 5's 1,000 vB cap and below Rule 4's 10,000 vB cap.
+    fund_wallet_with_n_utxos(&mut wallet, 20, 10_000);
+
+    let v3_unconf_parent = Transaction {
+        version: transaction::Version(3),
+        lock_time: absolute::LockTime::ZERO,
+        input: vec![],
+        output: vec![TxOut {
+            script_pubkey: wallet
+                .next_unused_address(KeychainKind::External)
+                .script_pubkey(),
+            value: Amount::from_sat(10_000),
+        }],
+    };
+    insert_tx(&mut wallet, v3_unconf_parent);
+
+    let dest = wallet
+        .next_unused_address(KeychainKind::External)
+        .script_pubkey();
+
+    let mut builder = wallet.build_tx();
+    builder
+        .version(3)
+        .drain_wallet()
+        .drain_to(dest)
+        .fee_rate(FeeRate::from_sat_per_vb_u32(1));
+
+    assert_matches!(
+        builder.finish(),
+        Err(CreateTxError::TrucSizeExceeded { cap_vb: 1_000, .. })
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_truc_rule_5_accepts_under_1k_vb_with_unconf_truc_ancestor() -> anyhow::Result<()> {
+    let (descriptor, change_descriptor) = get_test_wpkh_and_change_desc();
+    let mut wallet = Wallet::create(descriptor, change_descriptor)
+        .network(Network::Regtest)
+        .create_wallet_no_persist()?;
+
+    insert_checkpoint(
+        &mut wallet,
+        BlockId {
+            height: 1,
+            hash: BlockHash::all_zeros(),
+        },
+    );
+
+    // Single unconfirmed v3 UTXO. 1 input ~ 68 vB, well under the 1,000 vB Rule 5 cap.
+    let v3_unconf_parent = Transaction {
+        version: transaction::Version(3),
+        lock_time: absolute::LockTime::ZERO,
+        input: vec![],
+        output: vec![TxOut {
+            script_pubkey: wallet
+                .next_unused_address(KeychainKind::External)
+                .script_pubkey(),
+            value: Amount::from_sat(100_000),
+        }],
+    };
+    insert_tx(&mut wallet, v3_unconf_parent);
+
+    let dest = wallet
+        .next_unused_address(KeychainKind::External)
+        .script_pubkey();
+
+    let mut builder = wallet.build_tx();
+    builder
+        .version(3)
+        .drain_wallet()
+        .drain_to(dest)
+        .fee_rate(FeeRate::from_sat_per_vb_u32(1));
+
+    let psbt = builder.finish().expect("v3 tx under 1,000 vB should build");
+    assert_eq!(psbt.unsigned_tx.version, transaction::Version(3));
+
+    Ok(())
+}
+
+#[test]
+fn test_truc_rule_4_cap_applies_when_no_unconf_truc_ancestor() -> anyhow::Result<()> {
+    let (descriptor, change_descriptor) = get_test_wpkh_and_change_desc();
+    let mut wallet = Wallet::create(descriptor, change_descriptor)
+        .network(Network::Regtest)
+        .create_wallet_no_persist()?;
+
+    insert_checkpoint(
+        &mut wallet,
+        BlockId {
+            height: 1,
+            hash: BlockHash::all_zeros(),
+        },
+    );
+
+    // 30 confirmed UTXOs ~ 30 * 68 = 2,040 vB. Between Rule 5's cap (1,000) and
+    // Rule 4's cap (10,000). With no unconfirmed TRUC ancestor selected, Rule 4
+    // applies and the tx should build.
+    fund_wallet_with_n_utxos(&mut wallet, 30, 10_000);
+
+    let dest = wallet
+        .next_unused_address(KeychainKind::External)
+        .script_pubkey();
+
+    let mut builder = wallet.build_tx();
+    builder
+        .version(3)
+        .drain_wallet()
+        .drain_to(dest)
+        .fee_rate(FeeRate::from_sat_per_vb_u32(1));
+
+    let psbt = builder
+        .finish()
+        .expect("v3 tx between 1k and 10k vB without unconfirmed TRUC ancestor should build");
+    assert_eq!(psbt.unsigned_tx.version, transaction::Version(3));
+
+    Ok(())
+}
+
+#[test]
+fn test_non_v3_tx_unaffected_by_truc_size_caps() -> anyhow::Result<()> {
+    let (descriptor, change_descriptor) = get_test_wpkh_and_change_desc();
+    let mut wallet = Wallet::create(descriptor, change_descriptor)
+        .network(Network::Regtest)
+        .create_wallet_no_persist()?;
+
+    insert_checkpoint(
+        &mut wallet,
+        BlockId {
+            height: 1,
+            hash: BlockHash::all_zeros(),
+        },
+    );
+
+    // Same wallet shape as the Rule 4 test (~13,600 vB), but a v2 build. TRUC rules do
+    // not apply so the tx must succeed.
+    fund_wallet_with_n_utxos(&mut wallet, 200, 10_000);
+
+    let dest = wallet
+        .next_unused_address(KeychainKind::External)
+        .script_pubkey();
+
+    let mut builder = wallet.build_tx();
+    builder
+        .drain_wallet()
+        .drain_to(dest)
+        .fee_rate(FeeRate::from_sat_per_vb_u32(1));
+
+    let psbt = builder
+        .finish()
+        .expect("v2 tx larger than 10k vB should build because TRUC rules do not apply");
+    assert_eq!(psbt.unsigned_tx.version, transaction::Version::TWO);
+
+    Ok(())
+}
