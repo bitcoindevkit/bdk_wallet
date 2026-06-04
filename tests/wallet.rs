@@ -17,8 +17,8 @@ use bitcoin::script::PushBytesBuf;
 use bitcoin::sighash::{EcdsaSighashType, TapSighashType};
 use bitcoin::taproot::TapNodeHash;
 use bitcoin::{
-    absolute, transaction, Address, Amount, BlockHash, FeeRate, Network, OutPoint, ScriptBuf,
-    Sequence, SignedAmount, Transaction, TxIn, TxOut, Txid,
+    absolute, transaction, Address, Amount, BlockHash, FeeRate, Network, OutPoint, Psbt, ScriptBuf,
+    Sequence, SignedAmount, Transaction, TxIn, TxOut, Txid, Witness,
 };
 use rand::rngs::StdRng;
 use rand::SeedableRng;
@@ -3006,4 +3006,62 @@ fn test_tx_ordering_untouched_preserves_insertion_ordering_bnb_success() {
         vec![outpoint_0, outpoint_1],
         "UTXOs should be ordered with required first, then selected"
     );
+}
+
+#[test]
+fn test_wallet_sign_rejects_malformed_psbt_input_count_mismatch() {
+    let (wallet, _) = get_funded_wallet_wpkh();
+
+    // Create a transaction with 1 input
+    let prev_tx = Transaction {
+        version: transaction::Version::TWO,
+        lock_time: absolute::LockTime::ZERO,
+        input: vec![TxIn {
+            previous_output: OutPoint::null(),
+            script_sig: ScriptBuf::default(),
+            sequence: Sequence::MAX,
+            witness: Witness::default(),
+        }],
+        output: vec![TxOut {
+            value: Amount::from_sat(50_000),
+            script_pubkey: ScriptBuf::default(),
+        }],
+    };
+
+    let unsigned_tx = Transaction {
+        version: transaction::Version::TWO,
+        lock_time: absolute::LockTime::ZERO,
+        input: vec![TxIn {
+            previous_output: OutPoint {
+                txid: prev_tx.compute_txid(),
+                vout: 0,
+            },
+            script_sig: ScriptBuf::default(),
+            sequence: Sequence::MAX,
+            witness: Witness::default(),
+        }],
+        output: vec![TxOut {
+            value: Amount::from_sat(40_000),
+            script_pubkey: ScriptBuf::default(),
+        }],
+    };
+
+    let mut psbt = Psbt::from_unsigned_tx(unsigned_tx).unwrap();
+
+    // Add extra PSBT inputs without adding to transaction
+    use bitcoin::psbt::Input;
+    psbt.inputs.push(Input {
+        non_witness_utxo: Some(prev_tx.clone()),
+        ..Default::default()
+    });
+    psbt.inputs.push(Input {
+        non_witness_utxo: Some(prev_tx),
+        ..Default::default()
+    });
+
+    assert_eq!(psbt.inputs.len(), 3);
+    assert_eq!(psbt.unsigned_tx.input.len(), 1);
+
+    let result = wallet.sign(&mut psbt.clone(), SignOptions::default());
+    assert!(matches!(result, Err(SignerError::MissingNonWitnessUtxo)));
 }

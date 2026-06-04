@@ -41,6 +41,12 @@ impl PsbtUtils for Psbt {
         let tx = &self.unsigned_tx;
         let input = self.inputs.get(input_index)?;
 
+        // Validate that the input index is within bounds of the transaction's inputs.
+        // This prevents out-of-bounds panic when PSBT is malformed (inputs.len() > tx.input.len()).
+        if input_index >= tx.input.len() {
+            return None;
+        }
+
         match (&input.witness_utxo, &input.non_witness_utxo) {
             (Some(_), _) => input.witness_utxo.clone(),
             (_, Some(_)) => input.non_witness_utxo.as_ref().and_then(|prev_tx| {
@@ -153,5 +159,24 @@ mod tests {
 
         // Must return None — vout out of bounds, no panic
         assert_eq!(psbt.get_utxo_for(0), None);
+    }
+
+    #[test]
+    fn get_utxo_doesnt_panic_on_input_count_mismatch() {
+        let prev_tx = build_tx(Amount::from_sat(100_000));
+
+        // Create a valid PSBT with 1 input
+        let mut psbt = build_psbt(&prev_tx, 0);
+
+        // Add more inputs to psbt.inputs without adding to unsigned_tx.input
+        let extra_input = Input {
+            non_witness_utxo: Some(prev_tx.clone()),
+            ..Default::default()
+        };
+        psbt.inputs.push(extra_input);
+
+        assert_eq!(psbt.inputs.len(), 2);
+        assert_eq!(psbt.unsigned_tx.input.len(), 1);
+        assert_eq!(None, psbt.get_utxo_for(1));
     }
 }
