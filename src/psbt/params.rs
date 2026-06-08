@@ -153,14 +153,13 @@ impl PsbtParams<CreateTx> {
     /// There should be no ancestry linking the elements of `txs`, since replacing an
     /// ancestor necessarily invalidates the descendant.
     ///
-    /// # Panics
+    /// `txs` must not be empty, or creating the PSBT will return [`NoOriginalTransactions`].
     ///
-    /// Panics if `txs` is empty.
-    pub fn replace_txs(self, txs: &[Arc<Transaction>]) -> PsbtParams<Rbf> {
-        assert!(
-            !txs.is_empty(),
-            "replace_txs requires at least one transaction"
-        );
+    /// [`NoOriginalTransactions`]: crate::error::ReplaceByFeeError::NoOriginalTransactions
+    pub fn replace_txs<T>(self, txs: impl IntoIterator<Item = T>) -> PsbtParams<Rbf>
+    where
+        T: Into<Arc<Transaction>>,
+    {
         let mut params = self.into_replace_params();
         params.replace(txs);
         params
@@ -518,16 +517,24 @@ impl fmt::Debug for UtxoFilter {
 impl PsbtParams<Rbf> {
     /// Replace spends of the provided `txs`. This will internally set the list of UTXOs
     /// to be spent.
-    fn replace(&mut self, txs: &[Arc<Transaction>]) {
+    fn replace<T>(&mut self, txs: impl IntoIterator<Item = T>)
+    where
+        T: Into<Arc<Transaction>>,
+    {
         self.utxos.clear();
         self.set.clear();
         let mut utxos = vec![];
 
-        let (mut txids_to_replace, txs): (HashSet<Txid>, Vec<Transaction>) = txs
-            .iter()
-            .map(|tx| (tx.compute_txid(), tx.as_ref().clone()))
-            .unzip();
-        let tx_graph = TxGraph::<BlockId>::new(txs);
+        let mut tx_graph = TxGraph::<BlockId>::default();
+        let mut txids_to_replace: HashSet<Txid> = txs
+            .into_iter()
+            .map(|tx| {
+                let tx: Arc<Transaction> = tx.into();
+                let txid = tx.compute_txid();
+                let _ = tx_graph.insert_tx(tx);
+                txid
+            })
+            .collect();
 
         // Sanitize the RBF set by removing elements of `txs` which have ancestors
         // in the same set. This is to avoid spending outputs of txs that are bound
@@ -603,7 +610,7 @@ mod test {
         let txid1 = tx.compute_txid();
 
         // Replace tx
-        let mut params = PsbtParams::default().replace_txs(&[Arc::new(tx)]);
+        let mut params = PsbtParams::default().replace_txs([tx]);
         params.add_recipients([(ScriptBuf::new_op_return([0xb1, 0x0c]), Amount::ZERO)]);
         let feerate = FeeRate::from_sat_per_vb(8).unwrap();
         params.fee_rate(feerate);
@@ -669,9 +676,7 @@ mod test {
         let expect_spends: HashSet<OutPoint> =
             [tx_a.input[0].previous_output, tx_c.input[0].previous_output].into();
 
-        let txs: Vec<Arc<Transaction>> =
-            [tx_a, tx_b, tx_c, tx_d].into_iter().map(Arc::new).collect();
-        let params = PsbtParams::new().replace_txs(&txs);
+        let params = PsbtParams::new().replace_txs([tx_a, tx_b, tx_c, tx_d]);
         assert_eq!(params.set, expect_spends);
         assert_eq!(params.replace, [txid_a, txid_c].into());
     }

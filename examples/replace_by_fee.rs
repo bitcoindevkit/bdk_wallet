@@ -79,7 +79,7 @@ fn main() -> anyhow::Result<()> {
     println!("\nCreating RBF replacement transaction (tx2)...");
 
     // Create tx2: Replace tx1 at a higher feerate using PsbtParams
-    let mut rbf_params = PsbtParams::new().replace_txs(&[Arc::clone(&tx1)]);
+    let mut rbf_params = PsbtParams::new().replace_txs([Arc::clone(&tx1)]);
 
     // Set higher feerate for the replacement
     rbf_params.fee_rate(FeeRate::from_sat_per_vb(5).expect("valid feerate"));

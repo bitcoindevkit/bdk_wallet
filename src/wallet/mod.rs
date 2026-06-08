@@ -3272,7 +3272,7 @@ impl Wallet {
     /// let txout = to_replace.tx_out(vout)?.clone();
     ///
     /// let (psbt, finalizer) = wallet.replace_by_fee_and_recipients(
-    ///     &[to_replace],
+    ///     [to_replace],
     ///     FeeRate::from_sat_per_vb(10).expect("valid feerate"),
     ///     vec![(txout.script_pubkey, txout.value)],
     /// )?;
@@ -3280,9 +3280,9 @@ impl Wallet {
     /// ```
     #[cfg(feature = "std")]
     #[cfg_attr(docsrs, doc(cfg(feature = "std")))]
-    pub fn replace_by_fee_and_recipients(
+    pub fn replace_by_fee_and_recipients<T: Into<Arc<Transaction>>>(
         &mut self,
-        txs: &[Arc<Transaction>],
+        txs: impl IntoIterator<Item = T>,
         fee_rate: FeeRate,
         recipients: Vec<(ScriptBuf, Amount)>,
     ) -> Result<(Psbt, Finalizer), ReplaceByFeeError> {
@@ -3349,6 +3349,9 @@ impl Wallet {
         mut params: PsbtParams<Rbf>,
         rng: &mut impl RngCore,
     ) -> Result<(Psbt, Finalizer), ReplaceByFeeError> {
+        if params.replace.is_empty() {
+            return Err(ReplaceByFeeError::NoOriginalTransactions);
+        }
         let (change_info, change_script) = self.peek_change_info(params.change_script.take());
 
         let (assets, txouts) = self.parse_params(&params);

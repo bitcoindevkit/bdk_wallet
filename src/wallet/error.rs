@@ -421,14 +421,9 @@ pub enum ReplaceByFeeError {
     MissingTransaction(Txid),
     /// One of the transactions to be replaced is already confirmed
     TransactionConfirmed(Txid),
-    /// The replacement transaction has no inputs from the replaced transaction.
-    ///
-    /// A replacement must spend at least one of the same inputs as the transaction it replaces,
-    /// since two transactions cannot spend the same UTXO. This error is returned when
-    /// [`PsbtParams::remove_utxo`] has been used to remove all original inputs belonging to
-    /// the given replaced transaction.
-    ///
-    /// [`PsbtParams::remove_utxo`]: crate::psbt::PsbtParams::remove_utxo
+    /// No original transactions were specified.
+    NoOriginalTransactions,
+    /// The replacement transaction has no inputs from the original transaction.
     NoInputsFromOriginal(Txid),
 }
 
@@ -441,10 +436,11 @@ impl fmt::Display for ReplaceByFeeError {
             Self::TransactionConfirmed(txid) => {
                 write!(f, "transaction already confirmed: {txid}")
             }
+            Self::NoOriginalTransactions => write!(f, "no original transactions were specified"),
             Self::NoInputsFromOriginal(txid) => {
                 write!(
                     f,
-                    "replacement has no inputs from replaced transaction: {txid}"
+                    "replacement has no inputs from original transaction: {txid}"
                 )
             }
         }

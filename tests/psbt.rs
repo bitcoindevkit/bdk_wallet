@@ -10,7 +10,6 @@ use bitcoin::{
 };
 use core::str::FromStr;
 use miniscript::plan::Assets;
-use std::sync::Arc;
 
 // from bip 174
 const PSBT_STR: &str = "cHNidP8BAKACAAAAAqsJSaCMWvfEm4IS9Bfi8Vqz9cM9zxU4IagTn4d6W3vkAAAAAAD+////qwlJoIxa98SbghL0F+LxWrP1wz3PFTghqBOfh3pbe+QBAAAAAP7///8CYDvqCwAAAAAZdqkUdopAu9dAy+gdmI5x3ipNXHE5ax2IrI4kAAAAAAAAGXapFG9GILVT+glechue4O/p+gOcykWXiKwAAAAAAAEHakcwRAIgR1lmF5fAGwNrJZKJSGhiGDR9iYZLcZ4ff89X0eURZYcCIFMJ6r9Wqk2Ikf/REf3xM286KdqGbX+EhtdVRs7tr5MZASEDXNxh/HupccC1AaZGoqg7ECy0OIEhfKaC3Ibi1z+ogpIAAQEgAOH1BQAAAAAXqRQ1RebjO4MsRwUPJNPuuTycA5SLx4cBBBYAFIXRNTfy4mVAWjTbr6nj3aAfuCMIAAAA";
@@ -506,7 +505,7 @@ fn test_create_psbt_sequence_override_csv_conflict_returns_error() {
 // Test that replacing two unconfirmed txs A, B results in a transaction
 // that spends the inputs of both A and B.
 #[test]
-fn test_replace_by_fee_and_recpients() {
+fn test_replace_by_fee_and_recipients() {
     use KeychainKind::*;
     let (desc, change_desc) = get_test_wpkh_and_change_desc();
     let mut wallet = Wallet::create(desc, change_desc)
@@ -581,7 +580,7 @@ fn test_replace_by_fee_and_recpients() {
     // Now create RBF tx
     let psbt = wallet
         .replace_by_fee_and_recipients(
-            &[Arc::new(txa), Arc::new(txb)],
+            [txa, txb],
             FeeRate::from_sat_per_vb(4).unwrap(),
             vec![(recip, Amount::from_btc(1.99).unwrap())],
         )
@@ -720,7 +719,7 @@ fn test_replace_by_fee_replaces_descendant_fees() {
     // fees are included in the minimum required replacement fee.
     let (psbt, _) = wallet
         .replace_by_fee_and_recipients(
-            &[Arc::new(tx_a)],
+            [tx_a],
             FeeRate::from_sat_per_vb(4).unwrap(),
             vec![(external, Amount::from_sat(100_000))],
         )
@@ -788,7 +787,7 @@ fn test_replace_by_fee_confirmed_tx_error() {
 
     // Attempting to replace the now-confirmed tx should return TransactionConfirmed.
     let result = wallet.replace_by_fee_and_recipients(
-        &[Arc::new(unconfirmed_tx)],
+        [unconfirmed_tx],
         FeeRate::from_sat_per_vb(10).unwrap(),
         vec![],
     );
@@ -842,13 +841,34 @@ fn test_replace_by_fee_no_inputs_from_original() {
     insert_tx(&mut wallet, unconfirmed_tx.clone());
 
     // Build replacement params, but remove the original inputs
-    let mut params = PsbtParams::default().replace_txs(&[Arc::new(unconfirmed_tx)]);
+    let mut params = PsbtParams::default().replace_txs([unconfirmed_tx]);
     params.remove_utxo(&funding_op);
 
     let result = wallet.replace_by_fee(params);
     assert!(
         matches!(result, Err(ReplaceByFeeError::NoInputsFromOriginal(txid)) if txid == unconfirmed_txid),
         "expected NoInputsFromOriginal error, got: {result:?}",
+    );
+}
+
+// Test that `replace_by_fee` returns `NoOriginalTransactions` when `replace_txs` is called
+// with an empty list, i.e. no transactions were provided for replacement.
+#[test]
+fn test_replace_by_fee_no_original_transactions() {
+    use bdk_wallet::error::ReplaceByFeeError;
+
+    let (desc, change_desc) = get_test_wpkh_and_change_desc();
+    let mut wallet = Wallet::create(desc, change_desc)
+        .network(Network::Regtest)
+        .create_wallet_no_persist()
+        .unwrap();
+
+    // replace_txs with an empty iterator produces PsbtParams<Rbf> with an empty replace set.
+    let params = PsbtParams::default().replace_txs(core::iter::empty::<Transaction>());
+    let result = wallet.replace_by_fee(params);
+    assert!(
+        matches!(result, Err(ReplaceByFeeError::NoOriginalTransactions)),
+        "expected NoOriginalTransactions, got: {result:?}",
     );
 }
 
