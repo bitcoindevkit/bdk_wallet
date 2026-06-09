@@ -126,7 +126,7 @@ impl PsbtParams<CreateTx> {
     /// responsible for ensuring that items of `outpoints` correspond to outputs of previous
     /// transactions and are currently unspent.
     ///
-    /// If an outpoint doesn't correspond to an indexed script pubkey, a [`UnknownUtxo`]
+    /// If an outpoint doesn't correspond to an indexed script pubkey, an [`UnknownUtxo`]
     /// error will occur. See [`Wallet::create_psbt`] for more.
     ///
     /// To add a UTXO that did not originate from this wallet (i.e. a "foreign" UTXO), see

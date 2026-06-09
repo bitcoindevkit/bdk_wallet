@@ -53,8 +53,6 @@ fn main() -> anyhow::Result<()> {
     // Create PSBT (which also returns the Finalizer).
     let (mut psbt, finalizer) = wallet.create_psbt(params)?;
 
-    dbg!(&psbt);
-
     let tx = &psbt.unsigned_tx;
     for txin in &tx.input {
         let op = txin.previous_output;
