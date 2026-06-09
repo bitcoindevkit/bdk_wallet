@@ -373,6 +373,15 @@ impl core::error::Error for BuildFeeBumpError {}
 pub enum CreatePsbtError {
     /// No Bnb solution.
     Bnb(bdk_coin_select::NoBnbSolution),
+    /// No output destinations were configured. At least one recipient, or
+    /// [`drain_wallet`] with an explicit [`change_script`], is required.
+    ///
+    /// [`drain_wallet`]: crate::PsbtParams::drain_wallet
+    /// [`change_script`]: crate::PsbtParams::change_script
+    NoRecipients,
+    /// After coin selection, all outputs fell below the dust threshold and were
+    /// dropped to fees.
+    AllOutputsBelowDust,
     /// Non-sufficient funds.
     InsufficientFunds(bdk_coin_select::InsufficientFunds),
     /// In order to use the [`add_global_xpubs`] option, every extended key in the descriptor must
@@ -397,6 +406,8 @@ impl fmt::Display for CreatePsbtError {
         match self {
             Self::Bnb(e) => write!(f, "{e}"),
             Self::InsufficientFunds(e) => write!(f, "{e}"),
+            Self::NoRecipients => write!(f, "no output destinations were configured"),
+            Self::AllOutputsBelowDust => write!(f, "all outputs are below the dust threshold",),
             Self::MissingKeyOrigin(e) => write!(f, "missing key origin: {e}"),
             Self::Plan(op) => write!(f, "failed to create a plan for txout with outpoint {op}"),
             Self::Psbt(e) => write!(f, "{e}"),

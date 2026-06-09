@@ -772,7 +772,7 @@ fn test_replace_by_fee_confirmed_tx_error() {
     let mut params = PsbtParams::default();
     params
         .add_utxos(&[funding_op])
-        .add_recipients([(recip, Amount::from_sat(100_000))]);
+        .add_recipients([(recip.clone(), Amount::from_sat(100_000))]);
     let unconfirmed_tx = wallet.create_psbt(params).unwrap().0.unsigned_tx;
     insert_tx(&mut wallet, unconfirmed_tx.clone());
 
@@ -783,13 +783,12 @@ fn test_replace_by_fee_confirmed_tx_error() {
         hash: Hash::hash(b"1001"),
     };
     insert_tx_anchor(&mut wallet, unconfirmed_tx.clone(), confirm_block);
-    insert_checkpoint(&mut wallet, confirm_block);
 
     // Attempting to replace the now-confirmed tx should return TransactionConfirmed.
     let result = wallet.replace_by_fee_and_recipients(
         [unconfirmed_tx],
         FeeRate::from_sat_per_vb(10).unwrap(),
-        vec![],
+        vec![(recip, Amount::from_sat(10_000))],
     );
 
     assert!(
@@ -835,14 +834,16 @@ fn test_replace_by_fee_no_inputs_from_original() {
     let mut params = PsbtParams::default();
     params
         .add_utxos(&[funding_op])
-        .add_recipients([(recip, Amount::from_sat(100_000))]);
+        .add_recipients([(recip.clone(), Amount::from_sat(100_000))]);
     let unconfirmed_tx = wallet.create_psbt(params).unwrap().0.unsigned_tx;
     let unconfirmed_txid = unconfirmed_tx.compute_txid();
     insert_tx(&mut wallet, unconfirmed_tx.clone());
 
-    // Build replacement params, but remove the original inputs
+    // Build replacement params with a recipient but remove the original inputs.
     let mut params = PsbtParams::default().replace_txs([unconfirmed_tx]);
-    params.remove_utxo(&funding_op);
+    params
+        .remove_utxo(&funding_op)
+        .add_recipients([(recip, Amount::from_sat(50_000))]);
 
     let result = wallet.replace_by_fee(params);
     assert!(
@@ -922,6 +923,48 @@ fn test_create_psbt_utxo_filter() {
         1600,
         "We should have selected 2 non-dust utxos"
     );
+}
+
+// Verify that `create_psbt` returns `NoRecipients` when no recipients are provided and
+// `drain_wallet` is not set, even when the wallet contains multiple UTXOs.
+#[test]
+fn test_create_psbt_no_recipients_error() {
+    use bdk_chain::{BlockId, ConfirmationBlockTime};
+    use bdk_wallet::error::CreatePsbtError;
+
+    let (mut wallet, _) = get_funded_wallet_wpkh();
+
+    // Add a second confirmed UTXO so we can confirm it's not "just draining one".
+    let anchor = ConfirmationBlockTime {
+        block_id: BlockId {
+            height: 200,
+            hash: bitcoin::hashes::Hash::hash(b"200"),
+        },
+        confirmation_time: 2000,
+    };
+    insert_checkpoint(&mut wallet, anchor.block_id);
+    receive_output(&mut wallet, bitcoin::Amount::from_sat(25_000), anchor);
+
+    // No recipients, no drain_wallet → should error.
+    let err = wallet.create_psbt(PsbtParams::default()).unwrap_err();
+    assert!(
+        matches!(err, CreatePsbtError::NoRecipients),
+        "expected NoRecipients, got {err:?}"
+    );
+
+    // drain_wallet with an explicit change_script and no recipients should succeed (sweep to
+    // change).
+    let mut params = PsbtParams::default();
+    let change_descriptor = wallet
+        .public_descriptor(KeychainKind::Internal)
+        .at_derivation_index(0)
+        .unwrap();
+    params
+        .drain_wallet()
+        .change_script(ChangeScript::from_descriptor(change_descriptor));
+    wallet
+        .create_psbt(params)
+        .expect("drain_wallet with explicit change_script should succeed");
 }
 
 #[test]
@@ -1138,4 +1181,110 @@ fn test_psbt_multiple_internalkey_signers() {
     // Must verify if we used the correct key to sign
     let verify_res = secp.verify_schnorr(&signature, &message, &xonlykey);
     assert!(verify_res.is_ok(), "The wrong internal key was used");
+}
+
+// When `drain_wallet` is set but the only output (change) would fall below the dust threshold,
+// verify that `create_psbt` surfaces this as an error rather than returning a zero-output
+// PSBT.
+#[test]
+fn test_create_psbt_drain_wallet_change_below_dust_error() {
+    let (desc, change_desc) = get_test_tr_single_sig_xprv_and_change_desc();
+    let mut wallet = Wallet::create(desc, change_desc)
+        .network(Network::Regtest)
+        .create_wallet_no_persist()
+        .unwrap();
+
+    let anchor = ConfirmationBlockTime {
+        block_id: BlockId {
+            height: 100,
+            hash: Hash::hash(b"100"),
+        },
+        confirmation_time: 0,
+    };
+    insert_checkpoint(&mut wallet, anchor.block_id);
+
+    // 200 sats: enough to meet the minimum fee for a P2TR spend,
+    // but after deducting fees for a tx that *includes* a change output the
+    // residual change falls below the dust threshold.
+    receive_output(&mut wallet, Amount::from_sat(200), ReceiveTo::Block(anchor));
+
+    let change_descriptor = wallet
+        .public_descriptor(KeychainKind::Internal)
+        .at_derivation_index(0)
+        .unwrap();
+    let mut params = PsbtParams::default();
+    params
+        .drain_wallet()
+        .change_script(ChangeScript::from_descriptor(change_descriptor));
+
+    let err = wallet.create_psbt(params).unwrap_err();
+    assert!(
+        matches!(err, CreatePsbtError::AllOutputsBelowDust),
+        "expected AllOutputsBelowDust when change is below dust threshold, got {err:?}"
+    );
+}
+
+// Same dust-drop edge case but via `replace_by_fee`. When `drain_wallet` is set
+// and the only output (change) falls below dust, the resulting transaction
+// would have zero outputs. Verify that `replace_by_fee` returns the expected error.
+#[test]
+fn test_replace_by_fee_drain_wallet_change_below_dust_error() {
+    use bdk_wallet::error::ReplaceByFeeError;
+    use bitcoin::transaction;
+
+    let (desc, change_desc) = get_test_tr_single_sig_xprv_and_change_desc();
+    let mut wallet = Wallet::create(desc, change_desc)
+        .network(Network::Regtest)
+        .create_wallet_no_persist()
+        .unwrap();
+
+    let anchor = ConfirmationBlockTime {
+        block_id: BlockId {
+            height: 100,
+            hash: Hash::hash(b"100"),
+        },
+        confirmation_time: 0,
+    };
+    insert_checkpoint(&mut wallet, anchor.block_id);
+
+    // 400 sats: at 1 sat/vb, fees for a P2TR tx with 1 input + 1 change output ≈ 111 sat,
+    // leaving ~289 sat change — below the P2TR dust threshold (~303 sat).
+    let op = receive_output(&mut wallet, Amount::from_sat(400), ReceiveTo::Block(anchor));
+
+    // Build an original unconfirmed tx that spends `op` with RBF enabled.
+    let original_tx = Transaction {
+        version: transaction::Version::TWO,
+        lock_time: absolute::LockTime::ZERO,
+        input: vec![TxIn {
+            previous_output: op,
+            sequence: Sequence::ENABLE_RBF_NO_LOCKTIME,
+            ..Default::default()
+        }],
+        output: vec![TxOut {
+            value: Amount::from_sat(300),
+            script_pubkey: wallet
+                .peek_address(KeychainKind::External, 1)
+                .script_pubkey(),
+        }],
+    };
+    insert_tx(&mut wallet, original_tx.clone());
+
+    // RBF with `drain_wallet`, no recipients, default fee rate (1 sat/vb).
+    // The only possible output (change) falls below dust.
+    let change_descriptor = wallet
+        .public_descriptor(KeychainKind::Internal)
+        .at_derivation_index(0)
+        .unwrap();
+    let mut params = PsbtParams::default().replace_txs([original_tx]);
+    params
+        .drain_wallet()
+        .change_script(ChangeScript::from_descriptor(change_descriptor));
+    let err = wallet.replace_by_fee(params).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            ReplaceByFeeError::CreatePsbt(CreatePsbtError::AllOutputsBelowDust)
+        ),
+        "expected AllOutputsBelowDust when RBF change is below dust threshold, got {err:?}"
+    );
 }

@@ -3091,6 +3091,12 @@ impl Wallet {
         mut params: PsbtParams<CreateTx>,
         rng: &mut impl RngCore,
     ) -> Result<(Psbt, Finalizer), CreatePsbtError> {
+        // Only permit no recipients if we're doing a sweep and an explicit change script is
+        // provided.
+        if params.recipients.is_empty() && !(params.drain_wallet && params.change_script.is_some())
+        {
+            return Err(CreatePsbtError::NoRecipients);
+        }
         let (change_info, change_script) = self.peek_change_info(params.change_script.take());
 
         let (assets, txouts) = self.parse_params(&params);
@@ -3196,6 +3202,12 @@ impl Wallet {
             let e = bdk_tx::CannotMeetTarget;
             CreatePsbtError::Selector(bdk_tx::SelectorError::CannotMeetTarget(e))
         })?;
+
+        // Change fell below the dust threshold and was dropped to fees, leaving
+        // the transaction with no outputs.
+        if selection.outputs().is_empty() {
+            return Err(CreatePsbtError::AllOutputsBelowDust);
+        }
 
         match &params.ordering {
             TxOrdering::Untouched => {}
@@ -3351,6 +3363,12 @@ impl Wallet {
     ) -> Result<(Psbt, Finalizer), ReplaceByFeeError> {
         if params.replace.is_empty() {
             return Err(ReplaceByFeeError::NoOriginalTransactions);
+        }
+        // Only permit no recipients if we're doing a sweep and an explicit change script is
+        // provided.
+        if params.recipients.is_empty() && !(params.drain_wallet && params.change_script.is_some())
+        {
+            return Err(ReplaceByFeeError::CreatePsbt(CreatePsbtError::NoRecipients));
         }
         let (change_info, change_script) = self.peek_change_info(params.change_script.take());
 
