@@ -3398,6 +3398,15 @@ impl Wallet {
 
         let must_spend = self.build_must_spend_inputs(&params, &txouts, &assets)?;
 
+        // Validate that no manually-selected input spends an output of a transaction
+        // in `to_replace`.
+        for input in &must_spend {
+            let op = input.prev_outpoint();
+            if to_replace.contains(&op.txid) {
+                return Err(ReplaceByFeeError::ConflictingInput(op));
+            }
+        }
+
         // Get input candidates
         let mut may_spend: Vec<Input> = if params.manually_selected_only {
             vec![]

@@ -873,6 +873,99 @@ fn test_replace_by_fee_no_original_transactions() {
     );
 }
 
+// Test that `replace_by_fee` rejects a manually-selected input that spends
+// from a descendant of the one being replaced.
+#[test]
+fn test_replace_by_fee_conflicting_input_descendant() {
+    use bdk_tx::Input as BdkInput;
+    use bdk_wallet::error::ReplaceByFeeError;
+    use bitcoin::{psbt as btc_psbt, Sequence};
+
+    let (desc, change_desc) = get_test_wpkh_and_change_desc();
+    let mut wallet = Wallet::create(desc, change_desc)
+        .network(Network::Regtest)
+        .create_wallet_no_persist()
+        .unwrap();
+
+    let addr = wallet.reveal_next_address(KeychainKind::External).address;
+
+    // Fund the wallet so there is a spendable UTXO.
+    let funding_tx = Transaction {
+        input: vec![TxIn {
+            previous_output: OutPoint::new(Hash::hash(b"funding_parent"), 0),
+            ..Default::default()
+        }],
+        output: vec![TxOut {
+            value: Amount::from_sat(500_000),
+            script_pubkey: addr.script_pubkey(),
+        }],
+        ..new_tx(0)
+    };
+    let funding_op = OutPoint::new(funding_tx.compute_txid(), 0);
+    insert_tx(&mut wallet, funding_tx);
+
+    let recip =
+        ScriptBuf::from_hex("5120e8f5c4dc2f5d6a7595e7b108cb063da9c7550312da1e22875d78b9db62b59cd5")
+            .unwrap();
+
+    // tx_parent: the transaction we will eventually replace.
+    let mut params = PsbtParams::default();
+    params
+        .add_utxos(&[funding_op])
+        .add_recipients([(recip.clone(), Amount::from_sat(100_000))]);
+    let tx_parent = wallet.create_psbt(params).unwrap().0.unsigned_tx;
+    let txid_parent = tx_parent.compute_txid();
+    insert_tx(&mut wallet, tx_parent.clone());
+
+    // tx_child: spends one of tx_parent's outputs (a descendant of the tx being replaced).
+    let child_output = TxOut {
+        value: Amount::from_sat(10_000),
+        script_pubkey: ScriptBuf::new_p2wpkh(
+            &bitcoin::WPubkeyHash::from_slice(&[0u8; 20]).unwrap(),
+        ),
+    };
+    let child_op = OutPoint::new(txid_parent, 0);
+    let tx_child = Transaction {
+        input: vec![TxIn {
+            previous_output: child_op,
+            ..Default::default()
+        }],
+        output: vec![child_output.clone()],
+        ..new_tx(1)
+    };
+    let txid_child = tx_child.compute_txid();
+    insert_tx(&mut wallet, tx_child.clone());
+
+    // A planned input that spends an output of tx_child (a descendant of the replaced tx).
+    // This is the indirect conflict that params-level stripping cannot catch.
+    let grandchild_op = OutPoint::new(txid_child, 0);
+    let grandchild_input = BdkInput::from_psbt_input(
+        grandchild_op,
+        Sequence::ENABLE_RBF_NO_LOCKTIME,
+        btc_psbt::Input {
+            witness_utxo: Some(child_output),
+            ..Default::default()
+        },
+        /* satisfaction_weight */ 0,
+        /* status */ None,
+        /* is_coinbase */ false,
+        /* absolute_timelock */ None,
+    )
+    .unwrap();
+
+    // Build replacement for tx_parent, adding the grandchild planned input.
+    let mut params = PsbtParams::default();
+    params.add_planned_input(grandchild_input);
+    params.add_recipients([(recip, Amount::from_sat(50_000))]);
+    let params = params.replace_txs([tx_parent]);
+
+    let result = wallet.replace_by_fee(params);
+    assert!(
+        matches!(result, Err(ReplaceByFeeError::ConflictingInput(op)) if op == grandchild_op),
+        "expected ConflictingInput({grandchild_op}), got: {result:?}",
+    );
+}
+
 #[test]
 fn test_create_psbt_utxo_filter() {
     let (desc, change_desc) = get_test_tr_single_sig_xprv_and_change_desc();
@@ -1286,5 +1379,95 @@ fn test_replace_by_fee_drain_wallet_change_below_dust_error() {
             ReplaceByFeeError::CreatePsbt(CreatePsbtError::AllOutputsBelowDust)
         ),
         "expected AllOutputsBelowDust when RBF change is below dust threshold, got {err:?}"
+    );
+}
+
+#[test]
+fn test_replace_tx_with_planned_input() {
+    let (desc, change_desc) = get_test_wpkh_and_change_desc();
+    let mut wallet = Wallet::create(desc, change_desc)
+        .network(Network::Regtest)
+        .create_wallet_no_persist()
+        .unwrap();
+
+    let addr = wallet.reveal_next_address(KeychainKind::External).address;
+
+    // Fund the wallet with an unconfirmed output.
+    let funding_tx = Transaction {
+        input: vec![TxIn {
+            previous_output: OutPoint::new(Hash::hash(b"funding_parent"), 0),
+            ..Default::default()
+        }],
+        output: vec![TxOut {
+            value: Amount::from_sat(200_000),
+            script_pubkey: addr.script_pubkey(),
+        }],
+        ..new_tx(0)
+    };
+    let funding_op = OutPoint::new(funding_tx.compute_txid(), 0);
+    insert_tx(&mut wallet, funding_tx);
+
+    // Create an unconfirmed tx spending the funded UTXO.
+    let recip =
+        ScriptBuf::from_hex("5120e8f5c4dc2f5d6a7595e7b108cb063da9c7550312da1e22875d78b9db62b59cd5")
+            .unwrap();
+    let op2 = OutPoint::new(Hash::hash(b"txid"), 2);
+    let txout = TxOut {
+        value: Amount::ZERO,
+        script_pubkey: ScriptBuf::new_p2a(),
+    };
+    wallet.insert_txout(op2, txout.clone());
+    let psbt_input = bitcoin::psbt::Input {
+        witness_utxo: Some(txout),
+        ..Default::default()
+    };
+    let planned_input = bdk_tx::Input::from_psbt_input(
+        op2,
+        Sequence::ENABLE_LOCKTIME_NO_RBF,
+        psbt_input,
+        /* satisfaction_weight: */ 0,
+        /* status: */ None,
+        /* is_coinbase: */ false,
+        /* absolute_timelock: */ None,
+    )
+    .unwrap();
+
+    let mut params = PsbtParams::default();
+    params
+        .add_utxos(&[funding_op])
+        .add_planned_input(planned_input.clone())
+        .add_recipients([(recip.clone(), Amount::from_sat(100_000))]);
+    let unconfirmed_tx = wallet.create_psbt(params).unwrap().0.unsigned_tx;
+    insert_tx(&mut wallet, unconfirmed_tx.clone());
+
+    // Add the planned input *before* calling replace_txs. The replace() method
+    // should respect pre-registered planned inputs in the unique set.
+    let mut params = PsbtParams::default();
+    params
+        .add_planned_input(planned_input.clone())
+        .add_recipients([(recip, Amount::from_sat(99_000))]);
+    let params = params.replace_txs([unconfirmed_tx]);
+
+    let (psbt, _) = wallet
+        .replace_by_fee(params)
+        .expect("replacement should succeed");
+    assert_eq!(
+        psbt.unsigned_tx.input.len(),
+        2,
+        "replacement tx must include both the wallet input and the planned input"
+    );
+    assert!(
+        psbt.unsigned_tx
+            .input
+            .iter()
+            .any(|txin| txin.previous_output == funding_op),
+        "replacement must include the wallet-controlled input"
+    );
+    assert!(
+        psbt.unsigned_tx
+            .input
+            .iter()
+            .any(|txin| txin.previous_output == op2),
+        "replacement must include the planned input"
     );
 }

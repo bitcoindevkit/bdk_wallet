@@ -436,6 +436,10 @@ pub enum ReplaceByFeeError {
     NoOriginalTransactions,
     /// The replacement transaction has no inputs from the original transaction.
     NoInputsFromOriginal(Txid),
+    /// A manually-selected input spends an output of a transaction in the replaced set
+    /// (either a direct conflict or one of its descendants); including it would produce
+    /// an invalid transaction.
+    ConflictingInput(OutPoint),
 }
 
 impl fmt::Display for ReplaceByFeeError {
@@ -452,6 +456,12 @@ impl fmt::Display for ReplaceByFeeError {
                 write!(
                     f,
                     "replacement has no inputs from original transaction: {txid}"
+                )
+            }
+            Self::ConflictingInput(outpoint) => {
+                write!(
+                    f,
+                    "manually-selected input {outpoint} conflicts with the replacement set"
                 )
             }
         }

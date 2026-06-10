@@ -30,7 +30,7 @@ pub type Rbf = ReplaceTx;
 // TODO: Can we derive `Clone` for this?
 #[derive(Debug)]
 pub struct PsbtParams<C> {
-    /// Set of selected UTXO outpoints.
+    /// Set of selected UTXO outpoints, `HashSet` ensures uniqueness
     pub(crate) set: HashSet<OutPoint>,
     /// List of UTXO outpoints to spend.
     pub(crate) utxos: Vec<OutPoint>,
@@ -140,13 +140,67 @@ impl PsbtParams<CreateTx> {
         self
     }
 
+    /// Add a planned input.
+    ///
+    /// This can be used to add inputs that come with a [`Plan`] or [`psbt::Input`] provided.
+    /// See [`Input`] for more on how to create inputs manually. Be aware that creating inputs
+    /// in this manner relies on certain assumptions, like the UTXO validity, the satisfaction
+    /// weight, and so on. As such you should only use this method to add inputs you definitely
+    /// trust the values for.
+    ///
+    /// # Warning
+    ///
+    /// When combined with [`replace_txs`], planned inputs must **not** spend outputs of any
+    /// transaction being replaced. The replacement invalidates those outputs, so including them
+    /// would produce a consensus-invalid transaction. The wallet does not validate this — it is
+    /// the caller's responsibility to ensure that all planned inputs spend UTXOs that are
+    /// independent of the replacement set.
+    ///
+    /// [`replace_txs`]: PsbtParams::replace_txs
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use bdk_tx::Input;
+    /// # use bdk_wallet::psbt::PsbtParams;
+    /// # use bitcoin::{psbt, OutPoint, Sequence, TxOut};
+    /// # let outpoint = OutPoint::null();
+    /// # let sequence = Sequence::ENABLE_LOCKTIME_NO_RBF;
+    /// # let psbt_input = psbt::Input::default();
+    /// # let satisfaction_weight = 0;
+    /// # let tx_status = None;
+    /// # let is_coinbase = false;
+    /// let mut params = PsbtParams::default();
+    /// let input = Input::from_psbt_input(
+    ///     outpoint,
+    ///     sequence,
+    ///     psbt_input,
+    ///     satisfaction_weight,
+    ///     tx_status,
+    ///     is_coinbase,
+    ///     None,
+    /// )?;
+    /// params.add_planned_input(input);
+    /// # Ok::<_, anyhow::Error>(())
+    /// ```
+    ///
+    /// [`Plan`]: miniscript::plan::Plan
+    /// [`psbt::Input`]: bitcoin::psbt::Input
+    pub fn add_planned_input(&mut self, input: Input) -> &mut Self {
+        if self.set.insert(input.prev_outpoint()) {
+            self.inputs.push(input);
+        }
+        self
+    }
+
     /// Replace spends of the provided `txs` and return a [`PsbtParams`] populated with the
     /// inputs to spend.
     ///
     /// This merges all of the spends into a single transaction while retaining the parameters
-    /// of `self`. Note that any previously added UTXOs are removed. Call
-    /// [`replace_by_fee_with_rng`](crate::Wallet::replace_by_fee_with_rng) to finish
-    /// building the PSBT.
+    /// of `self`. Any previously added UTXOs (via [`add_utxos`]) are cleared and replaced with
+    /// the inputs of `txs`. Call
+    /// [`replace_by_fee_with_rng`](crate::Wallet::replace_by_fee_with_rng) to finish building
+    /// the PSBT.
     ///
     /// ## Note
     ///
@@ -155,6 +209,13 @@ impl PsbtParams<CreateTx> {
     ///
     /// `txs` must not be empty, or creating the PSBT will return [`NoOriginalTransactions`].
     ///
+    /// If the original transaction included inputs added via [`add_planned_input`], those inputs
+    /// cannot be reconstructed from the transaction alone. To preserve them in the replacement,
+    /// call [`add_planned_input`] with the same [`Input`] values *before* calling `replace_txs`.
+    ///
+    /// [`add_utxos`]: PsbtParams::add_utxos
+    /// [`add_planned_input`]: PsbtParams::add_planned_input
+    /// [`Input`]: bdk_tx::Input
     /// [`NoOriginalTransactions`]: crate::error::ReplaceByFeeError::NoOriginalTransactions
     pub fn replace_txs<T>(self, txs: impl IntoIterator<Item = T>) -> PsbtParams<Rbf>
     where
@@ -349,49 +410,6 @@ impl<C> PsbtParams<C> {
         self
     }
 
-    /// Add a planned input.
-    ///
-    /// This can be used to add inputs that come with a [`Plan`] or [`psbt::Input`] provided.
-    /// See [`Input`] for more on how to create inputs manually. Be aware that creating inputs
-    /// in this manner relies on certain assumptions, like the UTXO validity, the satisfaction
-    /// weight, and so on. As such you should only use this method to add inputs you definitely
-    /// trust the values for.
-    ///
-    /// # Example
-    ///
-    /// ```rust,no_run
-    /// use bdk_tx::Input;
-    /// # use bdk_wallet::psbt::PsbtParams;
-    /// # use bitcoin::{psbt, OutPoint, Sequence, TxOut};
-    /// # let outpoint = OutPoint::null();
-    /// # let sequence = Sequence::ENABLE_LOCKTIME_NO_RBF;
-    /// # let psbt_input = psbt::Input::default();
-    /// # let satisfaction_weight = 0;
-    /// # let tx_status = None;
-    /// # let is_coinbase = false;
-    /// let mut params = PsbtParams::default();
-    /// let input = Input::from_psbt_input(
-    ///     outpoint,
-    ///     sequence,
-    ///     psbt_input,
-    ///     satisfaction_weight,
-    ///     tx_status,
-    ///     is_coinbase,
-    ///     None,
-    /// )?;
-    /// params.add_planned_input(input);
-    /// # Ok::<_, anyhow::Error>(())
-    /// ```
-    ///
-    /// [`Plan`]: miniscript::plan::Plan
-    /// [`psbt::Input`]: bitcoin::psbt::Input
-    pub fn add_planned_input(&mut self, input: Input) -> &mut Self {
-        if self.set.insert(input.prev_outpoint()) {
-            self.inputs.push(input);
-        }
-        self
-    }
-
     /// Only fill in the [`witness_utxo`] field of PSBT inputs which spends funds under segwit (v0).
     ///
     /// This allows opting out of including the [`non_witness_utxo`] for segwit spends. This reduces
@@ -521,8 +539,12 @@ impl PsbtParams<Rbf> {
     where
         T: Into<Arc<Transaction>>,
     {
-        self.utxos.clear();
-        self.set.clear();
+        // We're resetting the inputs, so remove any existing utxos from
+        // the set. Pre existing planned inputs are retained.
+        for outpoint in self.utxos.drain(..) {
+            self.set.remove(&outpoint);
+        }
+
         let mut utxos = vec![];
 
         let mut tx_graph = TxGraph::<BlockId>::default();
@@ -553,6 +575,20 @@ impl PsbtParams<Rbf> {
         }
 
         self.replace = txids_to_replace;
+
+        // Strip any pre-registered planned inputs whose immediate parent is a tx being
+        // replaced. Such an input would spend an output that the replacement invalidates,
+        // which is invalid. The complete descendant walk is deferred to `replace_by_fee_with_rng`
+        // which has access to the TxGraph.
+        self.inputs.retain(|input| {
+            let prev_txid = input.prev_outpoint().txid;
+            let conflicts = self.replace.contains(&prev_txid);
+            if conflicts {
+                self.set.remove(&input.prev_outpoint());
+            }
+            !conflicts
+        });
+
         self.utxos
             .extend(utxos.iter().copied().filter(|&op| self.set.insert(op)));
     }
@@ -707,5 +743,101 @@ mod test {
             "Failed to filter duplicate outpoints"
         );
         assert!(params.utxos.contains(&op));
+    }
+
+    // A pre-registered planned input whose `prev_txid` is in `txids_to_replace` must be
+    // stripped by `replace()`. Retaining it would produce a consensus-invalid transaction
+    // because the replacement invalidates the very output the planned input is trying to spend.
+    #[test]
+    fn test_replace_strips_conflicting_planned_input() {
+        use bdk_tx::Input as BdkInput;
+        use bitcoin::{psbt, Sequence};
+
+        let parent_op = OutPoint::new(Hash::hash(b"parent"), 0);
+
+        // tx_a is the transaction we intend to replace.
+        let tx_a = Transaction {
+            input: vec![TxIn {
+                previous_output: parent_op,
+                ..Default::default()
+            }],
+            output: vec![TxOut {
+                value: Amount::from_sat(50_000),
+                script_pubkey: ScriptBuf::new_p2wpkh(
+                    &bitcoin::WPubkeyHash::from_slice(&[0u8; 20]).unwrap(),
+                ),
+            }],
+            ..new_tx(0)
+        };
+        let txid_a = tx_a.compute_txid();
+
+        // A planned input that spends an output of tx_a — the direct conflict case.
+        let conflicted_op = OutPoint::new(txid_a, 0);
+        let conflicted_input = BdkInput::from_psbt_input(
+            conflicted_op,
+            Sequence::ENABLE_RBF_NO_LOCKTIME,
+            psbt::Input {
+                witness_utxo: Some(tx_a.output[0].clone()),
+                ..Default::default()
+            },
+            /* satisfaction_weight */ 0,
+            /* status */ None,
+            /* is_coinbase */ false,
+            /* absolute_timelock */ None,
+        )
+        .unwrap();
+
+        // An unrelated planned input that is safe to keep.
+        let safe_op = OutPoint::new(Hash::hash(b"unrelated_parent"), 1);
+        let safe_input = BdkInput::from_psbt_input(
+            safe_op,
+            Sequence::ENABLE_RBF_NO_LOCKTIME,
+            psbt::Input {
+                witness_utxo: Some(TxOut {
+                    value: Amount::from_sat(10_000),
+                    script_pubkey: ScriptBuf::new_p2wpkh(
+                        &bitcoin::WPubkeyHash::from_slice(&[1u8; 20]).unwrap(),
+                    ),
+                }),
+                ..Default::default()
+            },
+            /* satisfaction_weight */ 0,
+            /* status */ None,
+            /* is_coinbase */ false,
+            /* absolute_timelock */ None,
+        )
+        .unwrap();
+
+        let mut params = PsbtParams::default();
+        params
+            .add_planned_input(conflicted_input)
+            .add_planned_input(safe_input);
+        let params = params.replace_txs([tx_a]);
+
+        // The conflicting input must have been stripped from both `inputs` and `set`.
+        assert!(
+            !params
+                .inputs
+                .iter()
+                .any(|i| i.prev_outpoint() == conflicted_op),
+            "conflicting planned input must be stripped from inputs"
+        );
+        assert!(
+            !params.set.contains(&conflicted_op),
+            "conflicting outpoint must be removed from the dedup set"
+        );
+
+        // The safe input must be preserved.
+        assert!(
+            params.inputs.iter().any(|i| i.prev_outpoint() == safe_op),
+            "unrelated planned input must be retained"
+        );
+        assert!(params.set.contains(&safe_op));
+
+        // tx_a's own spend must still appear in utxos (the replacement input).
+        assert!(
+            params.utxos.contains(&parent_op),
+            "tx_a's input must be present in replacement utxos"
+        );
     }
 }
