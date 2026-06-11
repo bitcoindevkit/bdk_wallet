@@ -1102,24 +1102,14 @@ impl Wallet {
     /// To iterate over all canonical transactions, including those that are irrelevant, use
     /// [`TxGraph::list_canonical_txs`].
     pub fn transactions<'a>(&'a self) -> impl Iterator<Item = WalletTx<'a>> + 'a {
-        self.transactions_with_params(CanonicalizationParams::default())
-    }
-
-    /// Iterate over relevant and canonical transactions in this wallet.
-    ///
-    /// - `params`: [`CanonicalizationParams`], modifies the wallet's internal logic for determining
-    ///   which transaction is canonical. This can be used to resolve conflicts, or to assert that a
-    ///   particular transaction should be treated as canonical.
-    ///
-    /// See [`Wallet::transactions`] for more.
-    pub fn transactions_with_params<'a>(
-        &'a self,
-        params: CanonicalizationParams,
-    ) -> impl Iterator<Item = WalletTx<'a>> + 'a {
         let tx_graph = self.tx_graph.graph();
         let tx_index = &self.tx_graph.index;
         tx_graph
-            .list_canonical_txs(&self.chain, self.chain.tip().block_id(), params)
+            .list_canonical_txs(
+                &self.chain,
+                self.chain.tip().block_id(),
+                CanonicalizationParams::default(),
+            )
             .filter(|c_tx| tx_index.is_tx_relevant(&c_tx.tx_node.tx))
     }
 
@@ -2525,36 +2515,6 @@ impl Wallet {
         connected_to: BlockId,
     ) -> Result<Vec<WalletEvent>, ApplyHeaderError> {
         self.events_helper(|wallet| wallet.apply_block_connected_to(block, height, connected_to))
-    }
-
-    /// Inserts a transaction into the inner transaction graph, scanning for relevant outputs.
-    ///
-    /// This can be used to inform the wallet of created transactions before they are known to exist
-    /// on chain or in the mempool. Inserting a transaction on its own doesn't affect the balance of
-    /// the wallet until the transaction is seen by the network and the wallet is synced.
-    ///
-    /// The effect of insertion depends on the [relevance] of `tx` as determined by the [indexer].
-    /// If the transaction was newly inserted and an output matches a derived script pubkey, then
-    /// the index is updated with the relevant outpoints. If no outputs are relevant, the
-    /// transaction is kept and the index remains unchanged. If `tx` already exists in the wallet
-    /// under the same txid, then the effect is a no-op.
-    ///
-    /// **You must persist the change set staged as a result of this call.**
-    ///
-    /// [relevance]: Indexer::is_tx_relevant
-    /// [indexer]: Self::spk_index
-    pub fn insert_tx<T>(&mut self, tx: T)
-    where
-        T: Into<Arc<Transaction>>,
-    {
-        let mut tx_update = TxUpdate::default();
-        tx_update.txs = vec![tx.into()];
-        let update = Update {
-            tx_update,
-            ..Default::default()
-        };
-        self.apply_update(update)
-            .expect("Applying a `TxUpdate` should not fail");
     }
 
     /// Apply relevant unconfirmed transactions to the wallet.
