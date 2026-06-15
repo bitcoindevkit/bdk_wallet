@@ -1971,11 +1971,11 @@ impl Wallet {
     /// [`start_sync_with_revealed_spks`](Self::start_sync_with_revealed_spks)
     /// covers the right range without needing a full scan.
     pub fn apply_spk_metadata(&mut self, metadata: &SpkMetadata) {
-        let keychain = self.map_keychain(metadata.keychain);
-        if let Some(&last) = metadata.used_indexes.last() {
+        let keychain = self.map_keychain(metadata.keychain());
+        if let Some(&last) = metadata.used_indexes().last() {
             let _ = self.reveal_addresses_to(keychain, last);
         }
-        for &index in &metadata.used_indexes {
+        for &index in metadata.used_indexes() {
             self.mark_used(keychain, index);
         }
     }
@@ -3132,7 +3132,7 @@ mod test {
         let (wallet, _txid) = get_funded_wallet_wpkh();
 
         let meta = wallet.spk_metadata(KeychainKind::External);
-        assert!(!meta.used_indexes.is_empty());
+        assert!(!meta.used_indexes().is_empty());
     }
 
     #[test]
@@ -3144,6 +3144,6 @@ mod test {
             .unwrap();
 
         let meta = wallet.spk_metadata(KeychainKind::External);
-        assert!(meta.used_indexes.is_empty());
+        assert!(meta.used_indexes().is_empty());
     }
 }

@@ -151,26 +151,62 @@ impl Utxo {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct SpkMetadata {
     /// The keychain this metadata belongs to.
-    pub keychain: KeychainKind,
+    keychain: KeychainKind,
     /// Sorted derivation indexes that have been used (have on-chain `TxOut`s).
-    pub used_indexes: Vec<u32>,
+    used_indexes: Vec<u32>,
 }
 
 impl SpkMetadata {
-    /// Build [`SpkMetadata`] from a [`KeychainTxOutIndex`] for the given `keychain`.
-    pub fn from_index(
-        index: &chain::indexer::keychain_txout::KeychainTxOutIndex<KeychainKind>,
-        keychain: KeychainKind,
-    ) -> Self {
-        let mut used_indexes: Vec<u32> = index
-            .keychain_outpoints(keychain)
-            .map(|(idx, _)| idx)
-            .collect();
+    /// Build script pubkey metadata for a keychain.
+    ///
+    /// The provided indexes are zero-based BDK derivation indexes. They are
+    /// normalized by sorting and removing duplicates.
+    pub fn new(keychain: KeychainKind, used_indexes: impl Into<Vec<u32>>) -> Self {
+        let mut used_indexes = used_indexes.into();
+        used_indexes.sort_unstable();
         used_indexes.dedup();
+
         Self {
             keychain,
             used_indexes,
         }
+    }
+
+    /// Return the keychain this metadata belongs to.
+    pub fn keychain(&self) -> KeychainKind {
+        self.keychain
+    }
+
+    /// Return the sorted zero-based derivation indexes with known wallet activity.
+    pub fn used_indexes(&self) -> &[u32] {
+        &self.used_indexes
+    }
+
+    /// Return whether this metadata contains no used indexes.
+    pub fn is_empty(&self) -> bool {
+        self.used_indexes.is_empty()
+    }
+
+    /// Consume this metadata and return the used indexes.
+    pub fn into_used_indexes(self) -> Vec<u32> {
+        self.used_indexes
+    }
+
+    /// Build [`SpkMetadata`] from a [`KeychainTxOutIndex`] for the given keychain.
+    ///
+    /// The collected indexes are normalized through [`SpkMetadata::new`].
+    ///
+    /// [`KeychainTxOutIndex`]: chain::indexer::keychain_txout::KeychainTxOutIndex
+    pub fn from_index(
+        index: &chain::indexer::keychain_txout::KeychainTxOutIndex<KeychainKind>,
+        keychain: KeychainKind,
+    ) -> Self {
+        let used_indexes: Vec<u32> = index
+            .keychain_outpoints(keychain)
+            .map(|(idx, _)| idx)
+            .collect();
+
+        Self::new(keychain, used_indexes)
     }
 }
 
@@ -216,10 +252,8 @@ impl SpkMetadata {
         let json_bytes = BASE64_STANDARD.decode(b64).ok()?;
         let ef: sux::prelude::EliasFano = serde_json::from_slice(&json_bytes).ok()?;
         let used_indexes: Vec<u32> = ef.into_iter().map(|v| v as u32).collect();
-        Some(Self {
-            keychain,
-            used_indexes,
-        })
+
+        Some(Self::new(keychain, used_indexes))
     }
 }
 
@@ -253,6 +287,8 @@ impl core::error::Error for IndexOutOfBoundsError {}
 
 #[cfg(test)]
 mod tests {
+    use std::vec;
+
     use super::*;
     use bitcoin::{
         absolute, transaction, Amount, OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut,
@@ -275,31 +311,15 @@ mod tests {
 
     #[test]
     fn test_spk_metadata_construction() {
-        let meta = SpkMetadata {
-            keychain: KeychainKind::External,
-            used_indexes: vec![0, 1, 3],
-        };
-        assert_eq!(meta.keychain, KeychainKind::External);
-        assert_eq!(meta.used_indexes, vec![0, 1, 3]);
-    }
-
-    #[test]
-    fn test_spk_metadata_empty() {
-        let meta = SpkMetadata {
-            keychain: KeychainKind::Internal,
-            used_indexes: vec![],
-        };
-        assert_eq!(meta.keychain, KeychainKind::Internal);
-        assert!(meta.used_indexes.is_empty());
+        let meta = SpkMetadata::new(KeychainKind::External, vec![0, 1, 3]);
+        assert_eq!(meta.keychain(), KeychainKind::External);
+        assert_eq!(meta.used_indexes(), &[0, 1, 3]);
     }
 
     #[test]
     #[cfg(feature = "elias-fano")]
     fn test_spk_metadata_elias_fano_round_trip() {
-        let meta = SpkMetadata {
-            keychain: KeychainKind::External,
-            used_indexes: vec![0, 2, 5, 7],
-        };
+        let meta = SpkMetadata::new(KeychainKind::External, vec![0, 2, 5, 7]);
 
         // Encode to EliasFano and verify values
         let ef = meta.encode_elias_fano().unwrap();
@@ -308,18 +328,14 @@ mod tests {
 
         // Round-trip through base64
         let b64 = meta.encode_base64().unwrap();
-        let decoded_meta =
-            SpkMetadata::decode_base64(&b64, KeychainKind::External).unwrap();
+        let decoded_meta = SpkMetadata::decode_base64(&b64, KeychainKind::External).unwrap();
         assert_eq!(decoded_meta, meta);
     }
 
     #[test]
     #[cfg(feature = "elias-fano")]
     fn test_spk_metadata_elias_fano_empty() {
-        let meta = SpkMetadata {
-            keychain: KeychainKind::External,
-            used_indexes: vec![],
-        };
+        let meta = SpkMetadata::new(KeychainKind::External, vec![]);
         assert!(meta.encode_elias_fano().is_none());
         assert!(meta.encode_base64().is_none());
         assert!(SpkMetadata::decode_base64("", KeychainKind::External).is_none());
@@ -374,5 +390,34 @@ mod tests {
             psbt_input: Box::new(psbt::Input::default()),
         };
         utxo.txout();
+    }
+
+    #[test]
+    fn test_spk_metadata_new_normalizes_used_indexes() {
+        let meta = SpkMetadata::new(KeychainKind::External, vec![50, 0, 20, 20]);
+
+        assert_eq!(meta.keychain(), KeychainKind::External);
+        assert_eq!(meta.used_indexes(), &[0, 20, 50]);
+    }
+
+    #[test]
+    fn test_spk_metadata_preserves_zero_based_indexes() {
+        let meta = SpkMetadata::new(KeychainKind::External, vec![0, 1, 3]);
+        assert_eq!(meta.used_indexes(), &[0, 1, 3]);
+    }
+
+    #[test]
+    fn test_spk_metadata_empty() {
+        let meta = SpkMetadata::new(KeychainKind::Internal, Vec::new());
+
+        assert_eq!(meta.keychain(), KeychainKind::Internal);
+        assert!(meta.is_empty());
+    }
+
+    #[test]
+    fn test_spk_metadata_into_used_indexes() {
+        let meta = SpkMetadata::new(KeychainKind::External, vec![3, 1, 1]);
+
+        assert_eq!(meta.into_used_indexes(), vec![1, 3]);
     }
 }
