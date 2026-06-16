@@ -329,7 +329,7 @@ fn test_add_planned_psbt_input() -> anyhow::Result<()> {
     let (mut wallet, _) = get_funded_wallet_wpkh();
     let op1 = wallet.list_unspent().next().unwrap().outpoint;
 
-    // We'll use `PsbtParams` to sweep a foreign anchor output.
+    // We'll add a foreign anchor output as a planned input.
     let op2 = OutPoint::new(Hash::hash(b"txid"), 2);
     let txout = TxOut {
         value: Amount::ZERO,
@@ -352,12 +352,15 @@ fn test_add_planned_psbt_input() -> anyhow::Result<()> {
     let send_to = wallet.reveal_next_address(KeychainKind::External).address;
 
     // Build tx: 2-in / 2-out
-    let mut params = bdk_wallet::PsbtParams::default();
-    params.add_utxos(&[op1]);
-    params.add_planned_input(input);
-    params.add_recipients([(send_to, Amount::from_sat(20_000))]);
+    let mut opts = bdk_wallet::CandidateParams::new();
+    opts.must_spend = [op1].into();
+    let coins = wallet.candidates_with(&opts)?.push_must_select(input)?;
 
-    let (psbt, _) = wallet.create_psbt(params)?;
+    let mut params = bdk_wallet::SelectParams::new();
+    params.recipients = vec![(send_to.script_pubkey(), Amount::from_sat(20_000))];
+
+    let template = wallet.select(coins, params)?;
+    let (psbt, _) = wallet.finish(template, bdk_wallet::psbt::FinishParams::default())?;
 
     assert!(
         psbt.unsigned_tx

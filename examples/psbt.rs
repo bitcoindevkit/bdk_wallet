@@ -5,10 +5,10 @@ use std::str::FromStr;
 
 use bdk_chain::BlockId;
 use bdk_chain::ConfirmationBlockTime;
-use bdk_wallet::psbt::{PsbtParams, SelectionStrategy::*};
+use bdk_wallet::psbt::{FinishParams, SelectParams, SelectionStrategy::*};
 use bdk_wallet::test_utils::*;
 use bdk_wallet::{KeychainKind::External, Wallet};
-use bitcoin::{consensus, secp256k1::rand, Address, Amount, TxIn, TxOut};
+use bitcoin::{consensus, secp256k1::rand, transaction::Version, Address, Amount, TxIn, TxOut};
 use rand::Rng;
 
 // This example shows how to create a PSBT using BDK Wallet.
@@ -41,17 +41,35 @@ fn main() -> anyhow::Result<()> {
         .map(|output| (output.outpoint, output))
         .collect::<HashMap<_, _>>();
 
-    // Build params.
-    let mut params = PsbtParams::default();
+    // Build address.
     let addr = Address::from_str(SEND_TO)?.require_network(NETWORK)?;
-    let feerate = feerate_unchecked(FEERATE);
-    params
-        .add_recipients([(addr, AMOUNT)])
-        .fee_rate(feerate)
-        .coin_selection(SingleRandomDraw);
 
-    // Create PSBT (which also returns the Finalizer).
-    let (mut psbt, finalizer) = wallet.create_psbt(params)?;
+    // Stage 1: resolve the spendable candidates.
+    let coins = wallet.candidates()?;
+
+    // Stage 2: run coin selection, yielding a `TxTemplate`.
+    let template = wallet.select(
+        coins,
+        SelectParams {
+            recipients: vec![(addr.script_pubkey(), AMOUNT)],
+            coin_selection: LowestFee {
+                longterm_feerate: feerate_unchecked(3.0),
+                max_rounds: 500_000,
+            },
+            fee_rate: feerate_unchecked(FEERATE),
+            ..Default::default()
+        },
+    )?;
+
+    // Shape the template before emitting. We pin the tx version, and — importantly — shuffle the
+    // outputs so the change output is not left in its default, trivially-identifiable position
+    // (`select` returns an *unshuffled* template). Other shaping (locktime, anti-fee-sniping,
+    // input ordering) is likewise done on the template.
+    let mut rng = rand::thread_rng();
+    let template = template.set_version(Version(3))?.shuffle_outputs(&mut rng);
+
+    // Stage 3: emit the PSBT (which also returns the Finalizer).
+    let (mut psbt, finalizer) = wallet.finish(template, FinishParams::default())?;
 
     let tx = &psbt.unsigned_tx;
     for txin in &tx.input {

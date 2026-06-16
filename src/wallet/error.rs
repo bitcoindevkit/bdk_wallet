@@ -367,17 +367,71 @@ impl fmt::Display for BuildFeeBumpError {
 
 impl core::error::Error for BuildFeeBumpError {}
 
+/// Error when resolving the spendable [`CandidateSet`] (PSBT-building stage 1).
+///
+/// [`CandidateSet`]: crate::psbt::CandidateSet
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum CandidatesError {
+    /// The UTXO of outpoint could not be found.
+    UnknownUtxo(OutPoint),
+    /// Failed to create a spending plan for a manually selected output.
+    Plan(OutPoint),
+    /// A transaction to be replaced (RBF) is already confirmed.
+    TransactionConfirmed(Txid),
+    /// A transaction being replaced (RBF) could not be found.
+    MissingTransaction(Txid),
+    /// The wallet controls none of the inputs of a transaction to be replaced (RBF), so it cannot
+    /// build a replacement that conflicts with (and therefore evicts) it.
+    CannotReplace(Txid),
+    /// A manually-selected input spends an output of a transaction in the replaced (RBF) set
+    /// (a direct conflict or one of its descendants); including it would produce an invalid
+    /// transaction.
+    ConflictingInput(OutPoint),
+    /// Failed to compute the fee of a transaction being replaced (RBF).
+    PreviousFee(bdk_chain::tx_graph::CalculateFeeError),
+}
+
+impl fmt::Display for CandidatesError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnknownUtxo(op) => write!(f, "unknown UTXO: {op}"),
+            Self::Plan(op) => write!(f, "failed to create a plan for txout with outpoint {op}"),
+            Self::TransactionConfirmed(txid) => {
+                write!(f, "transaction already confirmed: {txid}")
+            }
+            Self::MissingTransaction(txid) => write!(f, "missing transaction: {txid}"),
+            Self::CannotReplace(txid) => {
+                write!(
+                    f,
+                    "cannot replace transaction {txid}: the wallet controls none of its inputs"
+                )
+            }
+            Self::ConflictingInput(outpoint) => {
+                write!(
+                    f,
+                    "manually-selected input {outpoint} conflicts with the replacement set"
+                )
+            }
+            Self::PreviousFee(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl core::error::Error for CandidatesError {}
+
 /// Error when creating a PSBT.
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum CreatePsbtError {
     /// No Bnb solution.
     Bnb(bdk_coin_select::NoBnbSolution),
-    /// No output destinations were configured. At least one recipient, or
-    /// [`drain_wallet`] with an explicit [`change_script`], is required.
+    /// No recipients were configured with a non-drain coin selection. A [`select`] requires at
+    /// least one recipient; to send all funds to a single destination, use
+    /// [`SelectionStrategy::DrainAll`] with no recipients.
     ///
-    /// [`drain_wallet`]: crate::PsbtParams::drain_wallet
-    /// [`change_script`]: crate::PsbtParams::change_script
+    /// [`select`]: crate::Wallet::select
+    /// [`SelectionStrategy::DrainAll`]: crate::psbt::SelectionStrategy::DrainAll
     NoRecipients,
     /// After coin selection, all outputs fell below the dust threshold and were
     /// dropped to fees.
@@ -387,18 +441,12 @@ pub enum CreatePsbtError {
     /// In order to use the [`add_global_xpubs`] option, every extended key in the descriptor must
     /// either be a master key itself, having a depth of 0, or have an explicit origin provided.
     ///
-    /// [`add_global_xpubs`]: crate::psbt::PsbtParams::add_global_xpubs
+    /// [`add_global_xpubs`]: crate::psbt::FinishParams::add_global_xpubs
     MissingKeyOrigin(bitcoin::bip32::Xpub),
-    /// Failed to create a spending plan for a manually selected output.
-    Plan(OutPoint),
-    /// Failed to create PSBT.
-    Psbt(bdk_tx::CreatePsbtError),
+    /// Failed to build the PSBT.
+    Build(bdk_tx::BuildPsbtError),
     /// Selector error.
     Selector(bdk_tx::SelectorError),
-    /// The UTXO of outpoint could not be found.
-    UnknownUtxo(OutPoint),
-    /// Failed to set the sequence on an input.
-    Sequence(bdk_tx::SetSequenceError),
 }
 
 impl fmt::Display for CreatePsbtError {
@@ -409,69 +457,10 @@ impl fmt::Display for CreatePsbtError {
             Self::NoRecipients => write!(f, "no output destinations were configured"),
             Self::AllOutputsBelowDust => write!(f, "all outputs are below the dust threshold",),
             Self::MissingKeyOrigin(e) => write!(f, "missing key origin: {e}"),
-            Self::Plan(op) => write!(f, "failed to create a plan for txout with outpoint {op}"),
-            Self::Psbt(e) => write!(f, "{e}"),
+            Self::Build(e) => write!(f, "{e}"),
             Self::Selector(e) => write!(f, "{e}"),
-            Self::UnknownUtxo(op) => write!(f, "unknown UTXO: {op}"),
-            Self::Sequence(e) => write!(f, "invalid sequence: {e}"),
         }
     }
 }
 
 impl core::error::Error for CreatePsbtError {}
-
-/// Error when creating a Replace-By-Fee transaction.
-#[derive(Debug)]
-#[non_exhaustive]
-pub enum ReplaceByFeeError {
-    /// There was a problem creating the PSBT
-    CreatePsbt(CreatePsbtError),
-    /// Failed to compute the fee of an original transaction
-    PreviousFee(bdk_chain::tx_graph::CalculateFeeError),
-    /// Original transaction could not be found
-    MissingTransaction(Txid),
-    /// One of the transactions to be replaced is already confirmed
-    TransactionConfirmed(Txid),
-    /// No original transactions were specified.
-    NoOriginalTransactions,
-    /// The replacement transaction has no inputs from the original transaction.
-    NoInputsFromOriginal(Txid),
-    /// A manually-selected input spends an output of a transaction in the replaced set
-    /// (either a direct conflict or one of its descendants); including it would produce
-    /// an invalid transaction.
-    ConflictingInput(OutPoint),
-}
-
-impl fmt::Display for ReplaceByFeeError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::CreatePsbt(e) => write!(f, "{e}"),
-            Self::PreviousFee(e) => write!(f, "{e}"),
-            Self::MissingTransaction(txid) => write!(f, "missing transaction: {txid}"),
-            Self::TransactionConfirmed(txid) => {
-                write!(f, "transaction already confirmed: {txid}")
-            }
-            Self::NoOriginalTransactions => write!(f, "no original transactions were specified"),
-            Self::NoInputsFromOriginal(txid) => {
-                write!(
-                    f,
-                    "replacement has no inputs from original transaction: {txid}"
-                )
-            }
-            Self::ConflictingInput(outpoint) => {
-                write!(
-                    f,
-                    "manually-selected input {outpoint} conflicts with the replacement set"
-                )
-            }
-        }
-    }
-}
-
-impl core::error::Error for ReplaceByFeeError {}
-
-impl From<CreatePsbtError> for ReplaceByFeeError {
-    fn from(e: CreatePsbtError) -> Self {
-        Self::CreatePsbt(e)
-    }
-}

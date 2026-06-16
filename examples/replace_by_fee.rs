@@ -3,14 +3,13 @@
 use std::sync::Arc;
 
 use bdk_chain::BlockId;
-use bdk_tx::ChangeScript;
-use bdk_wallet::psbt::PsbtParams;
+use bdk_wallet::psbt::{FinishParams, SelectParams};
 use bdk_wallet::test_utils::*;
 use bdk_wallet::{KeychainKind, Wallet};
 use bitcoin::{Amount, FeeRate, TxIn, TxOut};
 use miniscript::{DefiniteDescriptorKey, Descriptor};
 
-// This example demonstrates creating a sweep transaction using PsbtParams and replacing it with a
+// This example demonstrates creating a transaction with `SelectParams` and replacing it with a
 // higher feerate.
 
 const NETWORK: bitcoin::Network = bitcoin::Network::Regtest;
@@ -42,16 +41,19 @@ fn main() -> anyhow::Result<()> {
         "Wallet funded with {}\n",
         wallet.balance().total().display_dynamic()
     );
-    println!("Creating first sweep transaction (tx1)...");
+    println!("Creating first transaction (tx1)...");
 
-    // Create tx1: sweep all funds to our own address at a low feerate
-    let mut params = PsbtParams::new();
-    params
-        .drain_wallet()
-        .change_script(ChangeScript::from_descriptor(derived_descriptor.clone()))
-        .fee_rate(FeeRate::from_sat_per_vb(2).expect("valid feerate"));
-
-    let (mut psbt1, finalizer1) = wallet.create_psbt(params)?;
+    // Create tx1: pay an amount to our own derived address at a low feerate.
+    let coins = wallet.candidates()?;
+    let template1 = wallet.select(
+        coins,
+        SelectParams {
+            recipients: vec![(derived_descriptor.script_pubkey(), Amount::from_sat(10_000))],
+            fee_rate: FeeRate::from_sat_per_vb(2).expect("valid feerate"),
+            ..Default::default()
+        },
+    )?;
+    let (mut psbt1, finalizer1) = wallet.finish(template1, FinishParams::default())?;
 
     // Sign and finalize tx1
     let _ = psbt1
@@ -78,16 +80,18 @@ fn main() -> anyhow::Result<()> {
 
     println!("\nCreating RBF replacement transaction (tx2)...");
 
-    // Create tx2: Replace tx1 at a higher feerate using PsbtParams
-    let mut rbf_params = PsbtParams::new().replace_txs([Arc::clone(&tx1)]);
-
-    // Set higher feerate for the replacement
-    rbf_params.fee_rate(FeeRate::from_sat_per_vb(5).expect("valid feerate"));
-
-    // Retain the original sweep destination
-    rbf_params.change_script(ChangeScript::from_descriptor(derived_descriptor));
-
-    let (mut psbt2, finalizer2) = wallet.replace_by_fee(rbf_params)?;
+    // Create tx2: Replace tx1 at a higher feerate, paying the same recipient. Seed a candidate set
+    // with the tx to replace, then shape the output with bumped fee rate.
+    let coins = wallet.rbf_candidates(&[tx1.compute_txid()])?;
+    let template2 = wallet.select(
+        coins,
+        SelectParams {
+            recipients: vec![(derived_descriptor.script_pubkey(), Amount::from_sat(10_000))],
+            fee_rate: FeeRate::from_sat_per_vb(5).expect("valid feerate"),
+            ..Default::default()
+        },
+    )?;
+    let (mut psbt2, finalizer2) = wallet.finish(template2, FinishParams::default())?;
 
     // Sign and finalize tx2
     let _ = psbt2

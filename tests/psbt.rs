@@ -3,7 +3,12 @@ use bdk_tx::bdk_coin_select;
 use bdk_tx::ChangeScript;
 use bdk_wallet::bitcoin;
 use bdk_wallet::test_utils::*;
-use bdk_wallet::{error::CreatePsbtError, psbt, KeychainKind, PsbtParams, SignOptions, Wallet};
+use bdk_wallet::{
+    error::{CandidatesError, CreatePsbtError},
+    psbt,
+    psbt::FinishParams,
+    CandidateParams, KeychainKind, SelectParams, SignOptions, Wallet,
+};
 use bitcoin::{
     absolute, hashes::Hash, Address, Amount, FeeRate, Network, OutPoint, Psbt, ScriptBuf, Sequence,
     Transaction, TxIn, TxOut,
@@ -47,21 +52,28 @@ fn test_create_psbt() {
         .unwrap();
 
     let addr = wallet.reveal_next_address(KeychainKind::External);
-    let mut params = PsbtParams::default();
+    let mut params = SelectParams::new();
     let feerate = FeeRate::from_sat_per_vb(4).unwrap();
     let selection_strategy = psbt::SelectionStrategy::LowestFee {
         longterm_feerate: FeeRate::from_sat_per_vb(2).unwrap(),
         max_rounds: 1000,
     };
-    params
-        .version(bitcoin::transaction::Version(3))
-        .coin_selection(selection_strategy)
-        .add_recipients([(addr.script_pubkey(), Amount::from_btc(0.42).unwrap())])
-        .change_script(ChangeScript::from_descriptor(change_descriptor))
-        .fee_rate(feerate)
-        .add_global_xpubs();
+    params.coin_selection = selection_strategy;
+    params.recipients = vec![(addr.script_pubkey(), Amount::from_btc(0.42).unwrap())];
+    params.change_script = Some(ChangeScript::from_descriptor(change_descriptor));
+    params.fee_rate = feerate;
 
-    let (psbt, _) = wallet.create_psbt(params).unwrap();
+    let coins = wallet.candidates().unwrap();
+    let template = wallet
+        .select(coins, params)
+        .unwrap()
+        .set_version(bitcoin::transaction::Version(3))
+        .unwrap();
+    let finish_params = FinishParams {
+        add_global_xpubs: true,
+        ..Default::default()
+    };
+    let (psbt, _) = wallet.finish(template, finish_params).unwrap();
     let tx = &psbt.unsigned_tx;
     assert_eq!(tx.version.0, 3);
     assert_eq!(tx.lock_time.to_consensus_u32(), 0);
@@ -108,10 +120,11 @@ fn test_create_psbt_insufficient_funds_error() {
 
     let addr = wallet.reveal_next_address(KeychainKind::External);
 
-    let mut params = PsbtParams::default();
-    params.add_recipients([(addr.script_pubkey(), Amount::from_sat(10_000))]);
+    let mut params = SelectParams::new();
+    params.recipients = vec![(addr.script_pubkey(), Amount::from_sat(10_000))];
 
-    let result = wallet.create_psbt(params);
+    let coins = wallet.candidates().unwrap();
+    let result = wallet.select(coins, params);
     assert!(matches!(
         result,
         Err(CreatePsbtError::InsufficientFunds(
@@ -149,21 +162,25 @@ fn test_create_psbt_maturity_height() {
     insert_tx_anchor(&mut wallet, tx, block_1);
 
     // The output is still immature at height = 99.
-    let mut p = PsbtParams::default();
-    p.add_recipients([(send_to_address.clone(), Amount::from_sat(58_000))])
-        .maturity_height(bitcoin::absolute::Height::from_consensus(99).unwrap());
+    let mut cp = CandidateParams::new();
+    cp.maturity_height = Some(bitcoin::absolute::Height::from_consensus(99).unwrap());
+    let coins = wallet.candidates_with(&cp).unwrap();
+    let mut p = SelectParams::new();
+    p.recipients = vec![(send_to_address.script_pubkey(), Amount::from_sat(58_000))];
 
     let _ = wallet
-        .create_psbt(p)
+        .select(coins, p)
         .expect_err("immature output must not be selected");
 
     // We can use the params to coerce the coinbase maturity.
-    let mut p = PsbtParams::default();
-    p.add_recipients([(send_to_address.clone(), Amount::from_sat(58_000))])
-        .maturity_height(bitcoin::absolute::Height::from_consensus(100).unwrap());
+    let mut cp = CandidateParams::new();
+    cp.maturity_height = Some(bitcoin::absolute::Height::from_consensus(100).unwrap());
+    let coins = wallet.candidates_with(&cp).unwrap();
+    let mut p = SelectParams::new();
+    p.recipients = vec![(send_to_address.script_pubkey(), Amount::from_sat(58_000))];
 
     let _ = wallet
-        .create_psbt(p)
+        .select(coins, p)
         .expect("`maturity_height` should enable selection");
 
     // The output is eligible for selection once the wallet tip reaches maturity height minus 1
@@ -173,11 +190,12 @@ fn test_create_psbt_maturity_height() {
         hash: Hash::hash(b"100"),
     };
     insert_checkpoint(&mut wallet, block_100);
-    let mut p = PsbtParams::default();
-    p.add_recipients([(send_to_address.clone(), Amount::from_sat(58_000))]);
+    let coins = wallet.candidates().unwrap();
+    let mut p = SelectParams::new();
+    p.recipients = vec![(send_to_address.script_pubkey(), Amount::from_sat(58_000))];
 
     let _ = wallet
-        .create_psbt(p)
+        .select(coins, p)
         .expect("mature coinbase should be selected");
 }
 
@@ -206,25 +224,25 @@ fn test_create_psbt_cltv() {
 
     // No assets fail
     {
-        let mut params = PsbtParams::default();
-        params
-            .add_utxos(&[op])
-            .add_recipients([(addr.script_pubkey(), Amount::from_btc(0.42).unwrap())]);
-        let res = wallet.create_psbt(params);
+        let mut cp = CandidateParams::new();
+        cp.must_spend = [op].into();
+        let res = wallet.candidates_with(&cp);
         assert!(
-            matches!(res, Err(CreatePsbtError::Plan(err)) if err == op),
+            matches!(res, Err(CandidatesError::Plan(err)) if err == op),
             "UTXO requires CLTV but the assets are insufficient",
         );
     }
 
     // Add assets ok
     {
-        let mut params = PsbtParams::default();
-        params
-            .add_utxos(&[op])
-            .add_assets(Assets::new().after(LockTime::from_consensus(100_000)))
-            .add_recipients([(addr.script_pubkey(), Amount::from_btc(0.42).unwrap())]);
-        let (psbt, _) = wallet.create_psbt(params).unwrap();
+        let mut cp = CandidateParams::new();
+        cp.must_spend = [op].into();
+        cp.assets = Assets::new().after(LockTime::from_consensus(100_000));
+        let coins = wallet.candidates_with(&cp).unwrap();
+        let mut params = SelectParams::new();
+        params.recipients = vec![(addr.script_pubkey(), Amount::from_btc(0.42).unwrap())];
+        let template = wallet.select(coins, params).unwrap();
+        let (psbt, _) = wallet.finish(template, FinishParams::default()).unwrap();
         assert_eq!(psbt.unsigned_tx.lock_time.to_consensus_u32(), 100_000);
     }
 
@@ -236,23 +254,30 @@ fn test_create_psbt_cltv() {
         };
         insert_checkpoint(&mut wallet, block_id);
 
-        let mut params = PsbtParams::default();
-        params
-            .add_utxos(&[op])
-            .add_recipients([(addr.script_pubkey(), Amount::from_btc(0.42).unwrap())]);
-        let (psbt, _) = wallet.create_psbt(params).unwrap();
+        let mut cp = CandidateParams::new();
+        cp.must_spend = [op].into();
+        let coins = wallet.candidates_with(&cp).unwrap();
+        let mut params = SelectParams::new();
+        params.recipients = vec![(addr.script_pubkey(), Amount::from_btc(0.42).unwrap())];
+        let template = wallet.select(coins, params).unwrap();
+        let (psbt, _) = wallet.finish(template, FinishParams::default()).unwrap();
         assert_eq!(psbt.unsigned_tx.lock_time.to_consensus_u32(), 100_000);
     }
 
     // Locktime greater than required
     {
-        let mut params = PsbtParams::default();
-        params
-            .add_utxos(&[op])
-            .locktime(LockTime::from_consensus(200_000))
-            .add_recipients([(addr.script_pubkey(), Amount::from_btc(0.42).unwrap())]);
+        let mut cp = CandidateParams::new();
+        cp.must_spend = [op].into();
+        let coins = wallet.candidates_with(&cp).unwrap();
+        let mut params = SelectParams::new();
+        params.recipients = vec![(addr.script_pubkey(), Amount::from_btc(0.42).unwrap())];
 
-        let (psbt, _) = wallet.create_psbt(params).unwrap();
+        let template = wallet
+            .select(coins, params)
+            .unwrap()
+            .set_locktime(LockTime::from_consensus(200_000))
+            .unwrap();
+        let (psbt, _) = wallet.finish(template, FinishParams::default()).unwrap();
         assert_eq!(psbt.unsigned_tx.lock_time.to_consensus_u32(), 200_000);
     }
 }
@@ -275,25 +300,25 @@ fn test_create_psbt_cltv_timestamp() {
 
     // No assets fail
     {
-        let mut params = PsbtParams::default();
-        params
-            .add_utxos(&[op])
-            .add_recipients([(addr.script_pubkey(), Amount::from_btc(0.42).unwrap())]);
-        let res = wallet.create_psbt(params);
+        let mut cp = CandidateParams::new();
+        cp.must_spend = [op].into();
+        let res = wallet.candidates_with(&cp);
         assert!(
-            matches!(res, Err(CreatePsbtError::Plan(err)) if err == op),
+            matches!(res, Err(CandidatesError::Plan(err)) if err == op),
             "UTXO requires CLTV but the assets are insufficient",
         );
     }
 
     // Add assets ok
     {
-        let mut params = PsbtParams::default();
-        params
-            .add_utxos(&[op])
-            .add_assets(Assets::new().after(lock_time))
-            .add_recipients([(addr.script_pubkey(), Amount::from_btc(0.42).unwrap())]);
-        let (psbt, _) = wallet.create_psbt(params).unwrap();
+        let mut cp = CandidateParams::new();
+        cp.must_spend = [op].into();
+        cp.assets = Assets::new().after(lock_time);
+        let coins = wallet.candidates_with(&cp).unwrap();
+        let mut params = SelectParams::new();
+        params.recipients = vec![(addr.script_pubkey(), Amount::from_btc(0.42).unwrap())];
+        let template = wallet.select(coins, params).unwrap();
+        let (psbt, _) = wallet.finish(template, FinishParams::default()).unwrap();
         assert_eq!(psbt.unsigned_tx.lock_time, lock_time);
     }
 
@@ -301,14 +326,19 @@ fn test_create_psbt_cltv_timestamp() {
     {
         let new_lock_time = 1772167108;
         assert!(new_lock_time > lock_time.to_consensus_u32());
-        let mut params = PsbtParams::default();
-        params
-            .add_utxos(&[op])
-            .add_assets(Assets::new().after(lock_time))
-            .locktime(LockTime::from_consensus(new_lock_time))
-            .add_recipients([(addr.script_pubkey(), Amount::from_btc(0.42).unwrap())]);
+        let mut cp = CandidateParams::new();
+        cp.must_spend = [op].into();
+        cp.assets = Assets::new().after(lock_time);
+        let coins = wallet.candidates_with(&cp).unwrap();
+        let mut params = SelectParams::new();
+        params.recipients = vec![(addr.script_pubkey(), Amount::from_btc(0.42).unwrap())];
 
-        let (psbt, _) = wallet.create_psbt(params).unwrap();
+        let template = wallet
+            .select(coins, params)
+            .unwrap()
+            .set_locktime(LockTime::from_consensus(new_lock_time))
+            .unwrap();
+        let (psbt, _) = wallet.finish(template, FinishParams::default()).unwrap();
         assert_eq!(psbt.unsigned_tx.lock_time.to_consensus_u32(), new_lock_time);
     }
 }
@@ -339,26 +369,26 @@ fn test_create_psbt_csv() {
 
     // No assets fail
     {
-        let mut params = PsbtParams::default();
-        params
-            .add_utxos(&[op])
-            .add_recipients([(addr.script_pubkey(), Amount::from_btc(0.42).unwrap())]);
-        let res = wallet.create_psbt(params);
+        let mut cp = CandidateParams::new();
+        cp.must_spend = [op].into();
+        let res = wallet.candidates_with(&cp);
         assert!(
-            matches!(res, Err(CreatePsbtError::Plan(err)) if err == op),
+            matches!(res, Err(CandidatesError::Plan(err)) if err == op),
             "UTXO requires CSV but the assets are insufficient",
         );
     }
 
     // Add assets ok
     {
-        let mut params = PsbtParams::default();
         let rel_locktime = relative::LockTime::from_consensus(6).unwrap();
-        params
-            .add_utxos(&[op])
-            .add_assets(Assets::new().older(rel_locktime))
-            .add_recipients([(addr.script_pubkey(), Amount::from_btc(0.42).unwrap())]);
-        let (psbt, _) = wallet.create_psbt(params).unwrap();
+        let mut cp = CandidateParams::new();
+        cp.must_spend = [op].into();
+        cp.assets = Assets::new().older(rel_locktime);
+        let coins = wallet.candidates_with(&cp).unwrap();
+        let mut params = SelectParams::new();
+        params.recipients = vec![(addr.script_pubkey(), Amount::from_btc(0.42).unwrap())];
+        let template = wallet.select(coins, params).unwrap();
+        let (psbt, _) = wallet.finish(template, FinishParams::default()).unwrap();
         assert_eq!(psbt.unsigned_tx.input[0].sequence, Sequence(6));
     }
 
@@ -372,11 +402,13 @@ fn test_create_psbt_csv() {
             confirmation_time: 1234567000,
         };
         insert_checkpoint(&mut wallet, anchor.block_id);
-        let mut params = PsbtParams::default();
-        params
-            .add_utxos(&[op])
-            .add_recipients([(addr.script_pubkey(), Amount::from_btc(0.42).unwrap())]);
-        let (psbt, _) = wallet.create_psbt(params).unwrap();
+        let mut cp = CandidateParams::new();
+        cp.must_spend = [op].into();
+        let coins = wallet.candidates_with(&cp).unwrap();
+        let mut params = SelectParams::new();
+        params.recipients = vec![(addr.script_pubkey(), Amount::from_btc(0.42).unwrap())];
+        let template = wallet.select(coins, params).unwrap();
+        let (psbt, _) = wallet.finish(template, FinishParams::default()).unwrap();
         assert_eq!(psbt.unsigned_tx.input[0].sequence, Sequence(6));
     }
 }
@@ -387,11 +419,14 @@ fn test_create_psbt_csv() {
 fn test_create_psbt_fallback_sequence_applied_to_coin_selected_input() {
     let (mut wallet, _) = get_funded_wallet_wpkh();
     let addr = wallet.next_unused_address(KeychainKind::External);
-    let mut params = PsbtParams::default();
-    params
-        .add_recipients([(addr.script_pubkey(), Amount::from_sat(25_000))])
-        .fallback_sequence(Sequence::ENABLE_RBF_NO_LOCKTIME);
-    let psbt = wallet.create_psbt(params).unwrap().0;
+    let coins = wallet.candidates().unwrap();
+    let mut params = SelectParams::new();
+    params.recipients = vec![(addr.script_pubkey(), Amount::from_sat(25_000))];
+    let template = wallet
+        .select(coins, params)
+        .unwrap()
+        .set_fallback_sequence(Sequence::ENABLE_RBF_NO_LOCKTIME);
+    let psbt = wallet.finish(template, FinishParams::default()).unwrap().0;
     assert_eq!(
         psbt.unsigned_tx.input[0].sequence,
         Sequence::ENABLE_RBF_NO_LOCKTIME
@@ -423,13 +458,17 @@ fn test_create_psbt_fallback_sequence_skipped_for_csv_input() {
 
     let addr = wallet.next_unused_address(KeychainKind::External);
     let rel_locktime = relative::LockTime::from_consensus(6).unwrap();
-    let mut params = PsbtParams::default();
-    params
-        .add_utxos(&[op])
-        .add_assets(Assets::new().older(rel_locktime))
-        .add_recipients([(addr.script_pubkey(), Amount::from_sat(25_000))])
-        .fallback_sequence(Sequence::ENABLE_RBF_NO_LOCKTIME);
-    let psbt = wallet.create_psbt(params).unwrap().0;
+    let mut cp = CandidateParams::new();
+    cp.must_spend = [op].into();
+    cp.assets = Assets::new().older(rel_locktime);
+    let coins = wallet.candidates_with(&cp).unwrap();
+    let mut params = SelectParams::new();
+    params.recipients = vec![(addr.script_pubkey(), Amount::from_sat(25_000))];
+    let template = wallet
+        .select(coins, params)
+        .unwrap()
+        .set_fallback_sequence(Sequence::ENABLE_RBF_NO_LOCKTIME);
+    let psbt = wallet.finish(template, FinishParams::default()).unwrap().0;
     // CSV descriptor requires older(6); fallback must not clobber the CSV-derived sequence.
     assert_eq!(psbt.unsigned_tx.input[0].sequence, Sequence(6));
 }
@@ -440,13 +479,19 @@ fn test_create_psbt_sequence_override_manually_selected_input() {
     let (mut wallet, txid) = get_funded_wallet_wpkh();
     let utxo = OutPoint::new(txid, 0);
     let addr = wallet.next_unused_address(KeychainKind::External);
-    let mut params = PsbtParams::default();
-    params
-        .add_recipients([(addr.script_pubkey(), Amount::from_sat(25_000))])
-        .add_utxos(&[utxo])
-        .manually_selected_only()
-        .sequence_override(utxo, Sequence(42));
-    let psbt = wallet.create_psbt(params).unwrap().0;
+    let mut cp = CandidateParams::new();
+    cp.must_spend = [utxo].into();
+    cp.manually_selected_only = true;
+    let coins = wallet.candidates_with(&cp).unwrap();
+    let mut params = SelectParams::new();
+    params.recipients = vec![(addr.script_pubkey(), Amount::from_sat(25_000))];
+    let mut template = wallet.select(coins, params).unwrap();
+    template
+        .input_mut(utxo)
+        .unwrap()
+        .set_sequence(Sequence(42))
+        .unwrap();
+    let psbt = wallet.finish(template, FinishParams::default()).unwrap().0;
     assert_eq!(psbt.unsigned_tx.input[0].sequence, Sequence(42));
 }
 
@@ -456,18 +501,26 @@ fn test_create_psbt_sequence_override_takes_precedence_over_fallback() {
     let (mut wallet, txid) = get_funded_wallet_wpkh();
     let utxo = OutPoint::new(txid, 0);
     let addr = wallet.next_unused_address(KeychainKind::External);
-    let mut params = PsbtParams::default();
-    params
-        .add_recipients([(addr.script_pubkey(), Amount::from_sat(25_000))])
-        .add_utxos(&[utxo])
-        .manually_selected_only()
-        .sequence_override(utxo, Sequence(42))
-        .fallback_sequence(Sequence::ENABLE_RBF_NO_LOCKTIME);
-    let psbt = wallet.create_psbt(params).unwrap().0;
+    let mut cp = CandidateParams::new();
+    cp.must_spend = [utxo].into();
+    cp.manually_selected_only = true;
+    let coins = wallet.candidates_with(&cp).unwrap();
+    let mut params = SelectParams::new();
+    params.recipients = vec![(addr.script_pubkey(), Amount::from_sat(25_000))];
+    let mut template = wallet
+        .select(coins, params)
+        .unwrap()
+        .set_fallback_sequence(Sequence::ENABLE_RBF_NO_LOCKTIME);
+    template
+        .input_mut(utxo)
+        .unwrap()
+        .set_sequence(Sequence(42))
+        .unwrap();
+    let psbt = wallet.finish(template, FinishParams::default()).unwrap().0;
     assert_eq!(psbt.unsigned_tx.input[0].sequence, Sequence(42));
 }
 
-/// A sequence override that violates the CSV requirement returns a Sequence error.
+/// Setting a template input sequence that violates the CSV requirement is rejected.
 #[test]
 fn test_create_psbt_sequence_override_csv_conflict_returns_error() {
     use bitcoin::relative;
@@ -491,15 +544,20 @@ fn test_create_psbt_sequence_override_csv_conflict_returns_error() {
 
     let addr = wallet.next_unused_address(KeychainKind::External);
     let rel_locktime = relative::LockTime::from_consensus(6).unwrap();
-    let mut params = PsbtParams::default();
-    params
-        .add_utxos(&[op])
-        .add_assets(Assets::new().older(rel_locktime))
-        .add_recipients([(addr.script_pubkey(), Amount::from_sat(25_000))])
-        .manually_selected_only()
-        .sequence_override(op, Sequence(3)); // CSV requires >= 6
-    let result = wallet.create_psbt(params);
-    assert!(matches!(result, Err(CreatePsbtError::Sequence(_))));
+    let mut cp = CandidateParams::new();
+    cp.must_spend = [op].into();
+    cp.assets = Assets::new().older(rel_locktime);
+    cp.manually_selected_only = true;
+    let coins = wallet.candidates_with(&cp).unwrap();
+    let mut params = SelectParams::new();
+    params.recipients = vec![(addr.script_pubkey(), Amount::from_sat(25_000))];
+    let mut template = wallet.select(coins, params).unwrap();
+    // CSV requires older(6); setting a lower sequence on the template input is rejected.
+    let res = template.input_mut(op).unwrap().set_sequence(Sequence(3));
+    assert!(matches!(
+        res,
+        Err(bdk_tx::SetSequenceError::RelativeTimelockNotSatisfied { .. })
+    ));
 }
 
 // Test that replacing two unconfirmed txs A, B results in a transaction
@@ -562,30 +620,42 @@ fn test_replace_by_fee_and_recipients() {
     let recip =
         ScriptBuf::from_hex("5120e8f5c4dc2f5d6a7595e7b108cb063da9c7550312da1e22875d78b9db62b59cd5")
             .unwrap();
-    let mut params = PsbtParams::default();
-    params
-        .add_utxos(&[op0])
-        .add_recipients([(recip.clone(), Amount::from_sat(16_000))]);
-    let txa = wallet.create_psbt(params).unwrap().0.unsigned_tx;
+    let mut cp = CandidateParams::new();
+    cp.must_spend = [op0].into();
+    let coins = wallet.candidates_with(&cp).unwrap();
+    let mut params = SelectParams::new();
+    params.recipients = vec![(recip.clone(), Amount::from_sat(16_000))];
+    let template = wallet.select(coins, params).unwrap();
+    let txa = wallet
+        .finish(template, FinishParams::default())
+        .unwrap()
+        .0
+        .unsigned_tx;
     insert_tx(&mut wallet, txa.clone());
 
     // Create tx B (unconfirmed)
-    let mut params = PsbtParams::default();
-    params
-        .add_utxos(&[op1])
-        .add_recipients([(recip.clone(), Amount::from_sat(42_000))]);
-    let txb = wallet.create_psbt(params).unwrap().0.unsigned_tx;
+    let mut cp = CandidateParams::new();
+    cp.must_spend = [op1].into();
+    let coins = wallet.candidates_with(&cp).unwrap();
+    let mut params = SelectParams::new();
+    params.recipients = vec![(recip.clone(), Amount::from_sat(42_000))];
+    let template = wallet.select(coins, params).unwrap();
+    let txb = wallet
+        .finish(template, FinishParams::default())
+        .unwrap()
+        .0
+        .unsigned_tx;
     insert_tx(&mut wallet, txb.clone());
 
     // Now create RBF tx
-    let psbt = wallet
-        .replace_by_fee_and_recipients(
-            [txa, txb],
-            FeeRate::from_sat_per_vb(4).unwrap(),
-            vec![(recip, Amount::from_btc(1.99).unwrap())],
-        )
-        .unwrap()
-        .0;
+    let coins = wallet
+        .rbf_candidates(&[txa.compute_txid(), txb.compute_txid()])
+        .unwrap();
+    let mut params = SelectParams::new();
+    params.recipients = vec![(recip, Amount::from_btc(1.99).unwrap())];
+    params.fee_rate = FeeRate::from_sat_per_vb(4).unwrap();
+    let template = wallet.select(coins, params).unwrap();
+    let psbt = wallet.finish(template, FinishParams::default()).unwrap().0;
 
     // Expect replace inputs of A, B
     assert_eq!(
@@ -717,12 +787,15 @@ fn test_replace_by_fee_replaces_descendant_fees() {
 
     // Build replacement A'. The wallet walks A's descendants (B and C) so their
     // fees are included in the minimum required replacement fee.
+    let coins = wallet.rbf_candidates(&[a_txid]).unwrap();
+    let mut params = SelectParams::new();
+    params.recipients = vec![(external, Amount::from_sat(100_000))];
+    params.fee_rate = FeeRate::from_sat_per_vb(4).unwrap();
+    let template = wallet
+        .select(coins, params)
+        .expect("should select for replacement psbt");
     let (psbt, _) = wallet
-        .replace_by_fee_and_recipients(
-            [tx_a],
-            FeeRate::from_sat_per_vb(4).unwrap(),
-            vec![(external, Amount::from_sat(100_000))],
-        )
+        .finish(template, FinishParams::default())
         .expect("should create replacement psbt");
 
     let replacement_fee = wallet
@@ -735,10 +808,9 @@ fn test_replace_by_fee_replaces_descendant_fees() {
     );
 }
 
-// Test that `replace_by_fee`` rejects a confirmed original tx
+// Test that RBF rejects a confirmed original tx
 #[test]
 fn test_replace_by_fee_confirmed_tx_error() {
-    use bdk_wallet::error::ReplaceByFeeError;
     use KeychainKind::*;
 
     let (desc, change_desc) = get_test_wpkh_and_change_desc();
@@ -769,11 +841,17 @@ fn test_replace_by_fee_confirmed_tx_error() {
     let recip =
         ScriptBuf::from_hex("5120e8f5c4dc2f5d6a7595e7b108cb063da9c7550312da1e22875d78b9db62b59cd5")
             .unwrap();
-    let mut params = PsbtParams::default();
-    params
-        .add_utxos(&[funding_op])
-        .add_recipients([(recip.clone(), Amount::from_sat(100_000))]);
-    let unconfirmed_tx = wallet.create_psbt(params).unwrap().0.unsigned_tx;
+    let mut cp = CandidateParams::new();
+    cp.must_spend = [funding_op].into();
+    let coins = wallet.candidates_with(&cp).unwrap();
+    let mut params = SelectParams::new();
+    params.recipients = vec![(recip.clone(), Amount::from_sat(100_000))];
+    let template = wallet.select(coins, params).unwrap();
+    let unconfirmed_tx = wallet
+        .finish(template, FinishParams::default())
+        .unwrap()
+        .0
+        .unsigned_tx;
     insert_tx(&mut wallet, unconfirmed_tx.clone());
 
     // Now confirm that tx.
@@ -785,23 +863,19 @@ fn test_replace_by_fee_confirmed_tx_error() {
     insert_tx_anchor(&mut wallet, unconfirmed_tx.clone(), confirm_block);
 
     // Attempting to replace the now-confirmed tx should return TransactionConfirmed.
-    let result = wallet.replace_by_fee_and_recipients(
-        [unconfirmed_tx],
-        FeeRate::from_sat_per_vb(10).unwrap(),
-        vec![(recip, Amount::from_sat(10_000))],
-    );
+    let result = wallet.rbf_candidates(&[confirmed_txid]);
 
     assert!(
-        matches!(result, Err(ReplaceByFeeError::TransactionConfirmed(txid)) if txid == confirmed_txid),
+        matches!(result, Err(CandidatesError::TransactionConfirmed(txid)) if txid == confirmed_txid),
         "expected TransactionConfirmed error, got: {result:?}",
     );
 }
 
-// Test that `replace_by_fee` errors when all original inputs have been removed via
-// `remove_utxo`, leaving the replacement with no inputs from the replaced transaction.
+// Test that a replacement derived from the wallet graph keeps the original transaction's inputs
+// as the must-spend set. (In the reshaped API the replaced txs' inputs are re-derived from the
+// wallet graph, so the replacement always retains at least one input from each replaced tx.)
 #[test]
-fn test_replace_by_fee_no_inputs_from_original() {
-    use bdk_wallet::error::ReplaceByFeeError;
+fn test_replace_by_fee_keeps_original_inputs() {
     use KeychainKind::*;
 
     let (desc, change_desc) = get_test_wpkh_and_change_desc();
@@ -831,54 +905,36 @@ fn test_replace_by_fee_no_inputs_from_original() {
     let recip =
         ScriptBuf::from_hex("5120e8f5c4dc2f5d6a7595e7b108cb063da9c7550312da1e22875d78b9db62b59cd5")
             .unwrap();
-    let mut params = PsbtParams::default();
-    params
-        .add_utxos(&[funding_op])
-        .add_recipients([(recip.clone(), Amount::from_sat(100_000))]);
-    let unconfirmed_tx = wallet.create_psbt(params).unwrap().0.unsigned_tx;
+    let mut cp = CandidateParams::new();
+    cp.must_spend = [funding_op].into();
+    let coins = wallet.candidates_with(&cp).unwrap();
+    let mut params = SelectParams::new();
+    params.recipients = vec![(recip, Amount::from_sat(100_000))];
+    let template = wallet.select(coins, params).unwrap();
+    let unconfirmed_tx = wallet
+        .finish(template, FinishParams::default())
+        .unwrap()
+        .0
+        .unsigned_tx;
     let unconfirmed_txid = unconfirmed_tx.compute_txid();
     insert_tx(&mut wallet, unconfirmed_tx.clone());
 
-    // Build replacement params with a recipient but remove the original inputs.
-    let mut params = PsbtParams::default().replace_txs([unconfirmed_tx]);
-    params
-        .remove_utxo(&funding_op)
-        .add_recipients([(recip, Amount::from_sat(50_000))]);
-
-    let result = wallet.replace_by_fee(params);
+    // The replacement set re-derives the original tx's inputs as must-spend candidates.
+    let coins = wallet.rbf_candidates(&[unconfirmed_txid]).unwrap();
+    assert!(coins.is_rbf());
     assert!(
-        matches!(result, Err(ReplaceByFeeError::NoInputsFromOriginal(txid)) if txid == unconfirmed_txid),
-        "expected NoInputsFromOriginal error, got: {result:?}",
+        coins
+            .inputs()
+            .any(|input| input.prev_outpoint() == funding_op),
+        "the replacement must keep the original transaction's input",
     );
 }
 
-// Test that `replace_by_fee` returns `NoOriginalTransactions` when `replace_txs` is called
-// with an empty list, i.e. no transactions were provided for replacement.
-#[test]
-fn test_replace_by_fee_no_original_transactions() {
-    use bdk_wallet::error::ReplaceByFeeError;
-
-    let (desc, change_desc) = get_test_wpkh_and_change_desc();
-    let mut wallet = Wallet::create(desc, change_desc)
-        .network(Network::Regtest)
-        .create_wallet_no_persist()
-        .unwrap();
-
-    // replace_txs with an empty iterator produces PsbtParams<Rbf> with an empty replace set.
-    let params = PsbtParams::default().replace_txs(core::iter::empty::<Transaction>());
-    let result = wallet.replace_by_fee(params);
-    assert!(
-        matches!(result, Err(ReplaceByFeeError::NoOriginalTransactions)),
-        "expected NoOriginalTransactions, got: {result:?}",
-    );
-}
-
-// Test that `replace_by_fee` rejects a manually-selected input that spends
+// Test that RBF rejects a manually-selected input that spends
 // from a descendant of the one being replaced.
 #[test]
 fn test_replace_by_fee_conflicting_input_descendant() {
     use bdk_tx::Input as BdkInput;
-    use bdk_wallet::error::ReplaceByFeeError;
     use bitcoin::{psbt as btc_psbt, Sequence};
 
     let (desc, change_desc) = get_test_wpkh_and_change_desc();
@@ -909,11 +965,17 @@ fn test_replace_by_fee_conflicting_input_descendant() {
             .unwrap();
 
     // tx_parent: the transaction we will eventually replace.
-    let mut params = PsbtParams::default();
-    params
-        .add_utxos(&[funding_op])
-        .add_recipients([(recip.clone(), Amount::from_sat(100_000))]);
-    let tx_parent = wallet.create_psbt(params).unwrap().0.unsigned_tx;
+    let mut cp = CandidateParams::new();
+    cp.must_spend = [funding_op].into();
+    let coins = wallet.candidates_with(&cp).unwrap();
+    let mut params = SelectParams::new();
+    params.recipients = vec![(recip.clone(), Amount::from_sat(100_000))];
+    let template = wallet.select(coins, params).unwrap();
+    let tx_parent = wallet
+        .finish(template, FinishParams::default())
+        .unwrap()
+        .0
+        .unsigned_tx;
     let txid_parent = tx_parent.compute_txid();
     insert_tx(&mut wallet, tx_parent.clone());
 
@@ -953,16 +1015,49 @@ fn test_replace_by_fee_conflicting_input_descendant() {
     )
     .unwrap();
 
-    // Build replacement for tx_parent, adding the grandchild planned input.
-    let mut params = PsbtParams::default();
-    params.add_planned_input(grandchild_input);
-    params.add_recipients([(recip, Amount::from_sat(50_000))]);
-    let params = params.replace_txs([tx_parent]);
-
-    let result = wallet.replace_by_fee(params);
+    // Build replacement for tx_parent, then try to add the grandchild foreign input — it spends
+    // an output of a replaced tx, so the push is rejected.
+    let mut cp = CandidateParams::new();
+    cp.replace = vec![txid_parent];
+    let coins = wallet.candidates_with(&cp).unwrap();
+    let result = coins.push_must_select(grandchild_input);
     assert!(
-        matches!(result, Err(ReplaceByFeeError::ConflictingInput(op)) if op == grandchild_op),
+        matches!(&result, Err(CandidatesError::ConflictingInput(op)) if *op == grandchild_op),
         "expected ConflictingInput({grandchild_op}), got: {result:?}",
+    );
+}
+
+// Replacing a tx whose inputs the wallet doesn't control is rejected — the wallet couldn't build a
+// replacement that conflicts with (and evicts) it.
+#[test]
+fn test_replace_uncontrolled_tx_errors() {
+    let (desc, change_desc) = get_test_wpkh_and_change_desc();
+    let mut wallet = Wallet::create(desc, change_desc)
+        .network(Network::Regtest)
+        .create_wallet_no_persist()
+        .unwrap();
+
+    // A foreign, unconfirmed tx in the graph that spends no wallet-owned output.
+    let foreign_tx = Transaction {
+        input: vec![TxIn {
+            previous_output: OutPoint::new(Hash::hash(b"not_ours"), 0),
+            ..Default::default()
+        }],
+        output: vec![TxOut {
+            value: Amount::from_sat(50_000),
+            script_pubkey: ScriptBuf::new_p2a(),
+        }],
+        ..new_tx(0)
+    };
+    let foreign_txid = foreign_tx.compute_txid();
+    insert_tx(&mut wallet, foreign_tx);
+
+    let mut cp = CandidateParams::new();
+    cp.replace = vec![foreign_txid];
+    let result = wallet.candidates_with(&cp);
+    assert!(
+        matches!(result, Err(CandidatesError::CannotReplace(txid)) if txid == foreign_txid),
+        "expected CannotReplace({foreign_txid}), got: {result:?}",
     );
 }
 
@@ -993,22 +1088,24 @@ fn test_create_psbt_utxo_filter() {
     assert_eq!(wallet.list_unspent().count(), 4);
     assert_eq!(wallet.balance().total().to_sat(), 2100);
 
-    let mut params = PsbtParams::default();
-    params.fee_rate(FeeRate::ZERO);
-    // Avoid selection of dust utxos
-    params.filter_utxos(|txo| {
-        let min_non_dust = txo.txout.script_pubkey.minimal_non_dust(); // 330
-        txo.txout.value >= min_non_dust
-    });
     let change_script = ChangeScript::from_descriptor(
         wallet
             .public_descriptor(KeychainKind::Internal)
             .at_derivation_index(0)
             .unwrap(),
     );
-    params.change_script(change_script);
-    params.drain_wallet();
-    let (psbt, _) = wallet.create_psbt(params).unwrap();
+    // Avoid selection of dust utxos
+    let coins = wallet.candidates().unwrap().filter(|input| {
+        let txout = input.prev_txout();
+        let min_non_dust = txout.script_pubkey.minimal_non_dust(); // 330
+        txout.value >= min_non_dust
+    });
+    let mut params = SelectParams::new();
+    params.coin_selection = psbt::SelectionStrategy::DrainAll;
+    params.change_script = Some(change_script);
+    params.fee_rate = FeeRate::ZERO;
+    let template = wallet.select(coins, params).unwrap();
+    let (psbt, _) = wallet.finish(template, FinishParams::default()).unwrap();
     assert_eq!(psbt.unsigned_tx.input.len(), 2);
     assert_eq!(psbt.unsigned_tx.output.len(), 1);
     assert_eq!(
@@ -1038,26 +1135,137 @@ fn test_create_psbt_no_recipients_error() {
     insert_checkpoint(&mut wallet, anchor.block_id);
     receive_output(&mut wallet, bitcoin::Amount::from_sat(25_000), anchor);
 
-    // No recipients, no drain_wallet → should error.
-    let err = wallet.create_psbt(PsbtParams::default()).unwrap_err();
+    // No recipients on `select` → should error.
+    let coins = wallet.candidates().unwrap();
+    let err = wallet.select(coins, SelectParams::new()).unwrap_err();
     assert!(
         matches!(err, CreatePsbtError::NoRecipients),
         "expected NoRecipients, got {err:?}"
     );
 
-    // drain_wallet with an explicit change_script and no recipients should succeed (sweep to
-    // change).
-    let mut params = PsbtParams::default();
+    // Sending everything to a single destination is expressed via `DrainAll` with no recipients.
     let change_descriptor = wallet
         .public_descriptor(KeychainKind::Internal)
         .at_derivation_index(0)
         .unwrap();
-    params
-        .drain_wallet()
-        .change_script(ChangeScript::from_descriptor(change_descriptor));
-    wallet
-        .create_psbt(params)
-        .expect("drain_wallet with explicit change_script should succeed");
+    let coins = wallet.candidates().unwrap();
+    let mut params = SelectParams::new();
+    params.coin_selection = psbt::SelectionStrategy::DrainAll;
+    params.change_script = Some(ChangeScript::from_descriptor(change_descriptor));
+    let _template = wallet
+        .select(coins, params)
+        .expect("drain to an explicit destination should succeed");
+}
+
+// A drain with no explicit change script makes the wallet auto-derive and *reveal* an internal
+// change address (it becomes the sole sweep destination). A drain to an explicit change script
+// must not reveal anything new on the internal keychain.
+#[test]
+fn test_drain_reveals_auto_change() {
+    // (1) Auto-change drain reveals an internal change address.
+    let (mut wallet, _) = get_funded_wallet_wpkh();
+    let before = wallet.derivation_index(KeychainKind::Internal);
+    let coins = wallet.candidates().unwrap();
+    let mut params = SelectParams::new();
+    params.coin_selection = psbt::SelectionStrategy::DrainAll;
+    let _template = wallet
+        .select(coins, params)
+        .expect("auto-change drain should succeed");
+    assert!(
+        wallet.derivation_index(KeychainKind::Internal) > before,
+        "auto-change drain must reveal an internal change address (before={before:?})"
+    );
+
+    // (2) Drain to an explicit change script reveals nothing new internally.
+    let (mut wallet, _) = get_funded_wallet_wpkh();
+    let before = wallet.derivation_index(KeychainKind::Internal);
+    let change_descriptor = wallet
+        .public_descriptor(KeychainKind::Internal)
+        .at_derivation_index(0)
+        .unwrap();
+    let coins = wallet.candidates().unwrap();
+    let mut params = SelectParams::new();
+    params.coin_selection = psbt::SelectionStrategy::DrainAll;
+    params.change_script = Some(ChangeScript::from_descriptor(change_descriptor));
+    let _template = wallet
+        .select(coins, params)
+        .expect("explicit-destination drain should succeed");
+    assert_eq!(
+        wallet.derivation_index(KeychainKind::Internal),
+        before,
+        "drain to an explicit change script must not reveal a new internal address"
+    );
+}
+
+// Manually-selected coins are de-duplicated when the `CandidateSet` is resolved.
+#[test]
+fn test_candidates_dedup_manual_inputs() {
+    let (wallet, txid) = get_funded_wallet_wpkh();
+    let op = OutPoint::new(txid, 0);
+
+    // (1) An outpoint listed more than once in `must_spend` resolves to a single input.
+    let mut cp = CandidateParams::new();
+    cp.must_spend = [op, op, op].into();
+    let coins = wallet.candidates_with(&cp).unwrap();
+    assert_eq!(
+        coins.inputs().filter(|i| i.prev_outpoint() == op).count(),
+        1,
+        "duplicate must-spend outpoints must resolve to a single input"
+    );
+
+    // (2) Pushing a foreign input whose outpoint is already a must-spend candidate is de-duplicated
+    // (the existing candidate is kept; its contents are irrelevant here).
+    let psbt_input = bitcoin::psbt::Input {
+        witness_utxo: Some(TxOut {
+            value: Amount::from_sat(50_000),
+            script_pubkey: ScriptBuf::new_p2a(),
+        }),
+        ..Default::default()
+    };
+    let foreign = bdk_tx::Input::from_psbt_input(
+        op,
+        Sequence::ENABLE_LOCKTIME_NO_RBF,
+        psbt_input,
+        /* satisfaction_weight: */ 0,
+        /* status: */ None,
+        /* is_coinbase: */ false,
+        /* absolute_timelock: */ None,
+    )
+    .unwrap();
+    let mut cp = CandidateParams::new();
+    cp.must_spend = [op].into();
+    let coins = wallet
+        .candidates_with(&cp)
+        .unwrap()
+        .push_must_select(foreign)
+        .unwrap();
+    assert_eq!(
+        coins.inputs().filter(|i| i.prev_outpoint() == op).count(),
+        1,
+        "an outpoint that is both a must-spend and a pushed foreign input resolves once"
+    );
+}
+
+// Draining a wallet with no spendable value cannot even cover fees, so selection fails rather than
+// producing an empty/invalid transaction.
+#[test]
+fn test_drain_empty_wallet_errors() {
+    let (desc, change_desc) = get_test_wpkh_and_change_desc();
+    let mut wallet = Wallet::create(desc, change_desc)
+        .network(Network::Regtest)
+        .create_wallet_no_persist()
+        .unwrap();
+
+    let coins = wallet.candidates().unwrap();
+    assert!(coins.is_empty(), "fresh wallet has no candidates");
+
+    let mut params = SelectParams::new();
+    params.coin_selection = psbt::SelectionStrategy::DrainAll;
+    let err = wallet.select(coins, params).unwrap_err();
+    assert!(
+        matches!(err, CreatePsbtError::Selector(_)),
+        "empty-wallet drain should fail to meet target, got {err:?}"
+    );
 }
 
 #[test]
@@ -1276,11 +1484,10 @@ fn test_psbt_multiple_internalkey_signers() {
     assert!(verify_res.is_ok(), "The wrong internal key was used");
 }
 
-// When `drain_wallet` is set but the only output (change) would fall below the dust threshold,
-// verify that `create_psbt` surfaces this as an error rather than returning a zero-output
-// PSBT.
+// When a sweep's only output would fall below the dust threshold, verify that `sweep`
+// surfaces this as an error rather than returning a zero-output PSBT.
 #[test]
-fn test_create_psbt_drain_wallet_change_below_dust_error() {
+fn test_sweep_change_below_dust_error() {
     let (desc, change_desc) = get_test_tr_single_sig_xprv_and_change_desc();
     let mut wallet = Wallet::create(desc, change_desc)
         .network(Network::Regtest)
@@ -1305,80 +1512,15 @@ fn test_create_psbt_drain_wallet_change_below_dust_error() {
         .public_descriptor(KeychainKind::Internal)
         .at_derivation_index(0)
         .unwrap();
-    let mut params = PsbtParams::default();
-    params
-        .drain_wallet()
-        .change_script(ChangeScript::from_descriptor(change_descriptor));
+    let coins = wallet.candidates().unwrap();
+    let mut params = SelectParams::new();
+    params.coin_selection = psbt::SelectionStrategy::DrainAll;
+    params.change_script = Some(ChangeScript::from_descriptor(change_descriptor));
 
-    let err = wallet.create_psbt(params).unwrap_err();
+    let err = wallet.select(coins, params).unwrap_err();
     assert!(
         matches!(err, CreatePsbtError::AllOutputsBelowDust),
-        "expected AllOutputsBelowDust when change is below dust threshold, got {err:?}"
-    );
-}
-
-// Same dust-drop edge case but via `replace_by_fee`. When `drain_wallet` is set
-// and the only output (change) falls below dust, the resulting transaction
-// would have zero outputs. Verify that `replace_by_fee` returns the expected error.
-#[test]
-fn test_replace_by_fee_drain_wallet_change_below_dust_error() {
-    use bdk_wallet::error::ReplaceByFeeError;
-    use bitcoin::transaction;
-
-    let (desc, change_desc) = get_test_tr_single_sig_xprv_and_change_desc();
-    let mut wallet = Wallet::create(desc, change_desc)
-        .network(Network::Regtest)
-        .create_wallet_no_persist()
-        .unwrap();
-
-    let anchor = ConfirmationBlockTime {
-        block_id: BlockId {
-            height: 100,
-            hash: Hash::hash(b"100"),
-        },
-        confirmation_time: 0,
-    };
-    insert_checkpoint(&mut wallet, anchor.block_id);
-
-    // 400 sats: at 1 sat/vb, fees for a P2TR tx with 1 input + 1 change output ≈ 111 sat,
-    // leaving ~289 sat change — below the P2TR dust threshold (~303 sat).
-    let op = receive_output(&mut wallet, Amount::from_sat(400), ReceiveTo::Block(anchor));
-
-    // Build an original unconfirmed tx that spends `op` with RBF enabled.
-    let original_tx = Transaction {
-        version: transaction::Version::TWO,
-        lock_time: absolute::LockTime::ZERO,
-        input: vec![TxIn {
-            previous_output: op,
-            sequence: Sequence::ENABLE_RBF_NO_LOCKTIME,
-            ..Default::default()
-        }],
-        output: vec![TxOut {
-            value: Amount::from_sat(300),
-            script_pubkey: wallet
-                .peek_address(KeychainKind::External, 1)
-                .script_pubkey(),
-        }],
-    };
-    insert_tx(&mut wallet, original_tx.clone());
-
-    // RBF with `drain_wallet`, no recipients, default fee rate (1 sat/vb).
-    // The only possible output (change) falls below dust.
-    let change_descriptor = wallet
-        .public_descriptor(KeychainKind::Internal)
-        .at_derivation_index(0)
-        .unwrap();
-    let mut params = PsbtParams::default().replace_txs([original_tx]);
-    params
-        .drain_wallet()
-        .change_script(ChangeScript::from_descriptor(change_descriptor));
-    let err = wallet.replace_by_fee(params).unwrap_err();
-    assert!(
-        matches!(
-            err,
-            ReplaceByFeeError::CreatePsbt(CreatePsbtError::AllOutputsBelowDust)
-        ),
-        "expected AllOutputsBelowDust when RBF change is below dust threshold, got {err:?}"
+        "expected AllOutputsBelowDust when swept output is below dust threshold, got {err:?}"
     );
 }
 
@@ -1432,25 +1574,40 @@ fn test_replace_tx_with_planned_input() {
     )
     .unwrap();
 
-    let mut params = PsbtParams::default();
-    params
-        .add_utxos(&[funding_op])
-        .add_planned_input(planned_input.clone())
-        .add_recipients([(recip.clone(), Amount::from_sat(100_000))]);
-    let unconfirmed_tx = wallet.create_psbt(params).unwrap().0.unsigned_tx;
+    let mut cp = CandidateParams::new();
+    cp.must_spend = [funding_op].into();
+    let coins = wallet
+        .candidates_with(&cp)
+        .unwrap()
+        .push_must_select(planned_input.clone())
+        .unwrap();
+    let mut params = SelectParams::new();
+    params.recipients = vec![(recip.clone(), Amount::from_sat(100_000))];
+    let template = wallet.select(coins, params).unwrap();
+    let unconfirmed_tx = wallet
+        .finish(template, FinishParams::default())
+        .unwrap()
+        .0
+        .unsigned_tx;
+    let unconfirmed_txid = unconfirmed_tx.compute_txid();
     insert_tx(&mut wallet, unconfirmed_tx.clone());
 
-    // Add the planned input *before* calling replace_txs. The replace() method
-    // should respect pre-registered planned inputs in the unique set.
-    let mut params = PsbtParams::default();
-    params
-        .add_planned_input(planned_input.clone())
-        .add_recipients([(recip, Amount::from_sat(99_000))]);
-    let params = params.replace_txs([unconfirmed_tx]);
+    // Add the foreign input alongside the replacement. The pushed foreign input must be respected
+    // (and de-duplicated) in the replacement's candidate set.
+    let mut cp = CandidateParams::new();
+    cp.replace = vec![unconfirmed_txid];
+    let coins = wallet
+        .candidates_with(&cp)
+        .unwrap()
+        .push_must_select(planned_input.clone())
+        .unwrap();
+    let mut params = SelectParams::new();
+    params.recipients = vec![(recip, Amount::from_sat(99_000))];
 
-    let (psbt, _) = wallet
-        .replace_by_fee(params)
+    let template = wallet
+        .select(coins, params)
         .expect("replacement should succeed");
+    let (psbt, _) = wallet.finish(template, FinishParams::default()).unwrap();
     assert_eq!(
         psbt.unsigned_tx.input.len(),
         2,
@@ -1469,5 +1626,85 @@ fn test_replace_tx_with_planned_input() {
             .iter()
             .any(|txin| txin.previous_output == op2),
         "replacement must include the planned input"
+    );
+}
+
+// Test that a Replace-By-Fee candidate set can be fed to `sweep` (now newly possible):
+// create + broadcast an unconfirmed tx, then sweep-replace it at a higher feerate and
+// assert the replacement spends the same input.
+#[test]
+fn test_sweep_replace_by_fee() {
+    use KeychainKind::*;
+
+    let (desc, change_desc) = get_test_wpkh_and_change_desc();
+    let mut wallet = Wallet::create(desc, change_desc)
+        .network(Network::Regtest)
+        .create_wallet_no_persist()
+        .unwrap();
+
+    let block = BlockId {
+        height: 100,
+        hash: Hash::hash(b"100"),
+    };
+    let addr = wallet.reveal_next_address(External).address;
+
+    // Fund the wallet with a confirmed output.
+    let funding_tx = Transaction {
+        input: vec![TxIn::default()],
+        output: vec![TxOut {
+            value: Amount::from_sat(1_000_000),
+            script_pubkey: addr.script_pubkey(),
+        }],
+        ..new_tx(0)
+    };
+    let funding_op = OutPoint::new(funding_tx.compute_txid(), 0);
+    insert_tx_anchor(&mut wallet, funding_tx, block);
+
+    // Create + "broadcast" (insert) an unconfirmed tx paying an external recipient at a low
+    // feerate.
+    let recip =
+        ScriptBuf::from_hex("5120e8f5c4dc2f5d6a7595e7b108cb063da9c7550312da1e22875d78b9db62b59cd5")
+            .unwrap();
+    let mut cp = CandidateParams::new();
+    cp.must_spend = [funding_op].into();
+    let coins = wallet.candidates_with(&cp).unwrap();
+    let mut params = SelectParams::new();
+    params.recipients = vec![(recip.clone(), Amount::from_sat(100_000))];
+    params.fee_rate = FeeRate::from_sat_per_vb(1).unwrap();
+    let template = wallet.select(coins, params).unwrap();
+    let original_tx = wallet
+        .finish(template, FinishParams::default())
+        .unwrap()
+        .0
+        .unsigned_tx;
+    let original_txid = original_tx.compute_txid();
+    insert_tx(&mut wallet, original_tx.clone());
+
+    // Sweep-replace the original tx at a higher feerate, draining everything to a single
+    // destination.
+    let dest = ChangeScript::from_descriptor(
+        wallet
+            .public_descriptor(Internal)
+            .at_derivation_index(0)
+            .unwrap(),
+    );
+    let coins = wallet.rbf_candidates(&[original_txid]).unwrap();
+    assert!(coins.is_rbf(), "candidate set should carry RBF context");
+    let mut sweep_params = SelectParams::new();
+    sweep_params.coin_selection = psbt::SelectionStrategy::DrainAll;
+    sweep_params.change_script = Some(dest);
+    sweep_params.fee_rate = FeeRate::from_sat_per_vb(10).unwrap();
+    let template = wallet
+        .select(coins, sweep_params)
+        .expect("sweep replacement should succeed");
+    let (psbt, _) = wallet.finish(template, FinishParams::default()).unwrap();
+
+    // The replacement must spend the same input as the original tx.
+    assert!(
+        psbt.unsigned_tx
+            .input
+            .iter()
+            .any(|txin| txin.previous_output == funding_op),
+        "sweep replacement must spend the original input"
     );
 }
