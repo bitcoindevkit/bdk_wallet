@@ -222,9 +222,16 @@ impl SpkMetadata {
         if n == 0 {
             return None;
         }
-        let upper_bound = *self.used_indexes.last().unwrap() as usize + 1;
+
+        let upper_bound = self
+            .used_indexes
+            .last()
+            .copied()
+            .expect("metadata is not empty") as usize
+            + 1;
 
         let mut efb = EliasFanoBuilder::new(n, upper_bound);
+
         for &idx in &self.used_indexes {
             efb.push(idx as usize);
         }
@@ -234,28 +241,88 @@ impl SpkMetadata {
     /// Encode `used_indexes` as an Elias-Fano representation serialized to a
     /// base64 string.
     ///
-    /// Returns `None` if there are no used indexes.
-    pub fn encode_base64(&self) -> Option<String> {
+    /// Returns `Ok(None)` if there are no used indexes.
+    pub fn encode_base64(&self) -> Result<Option<String>, SpkMetadataEncodingError> {
         use bitcoin::base64::prelude::{Engine as _, BASE64_STANDARD};
 
-        let ef = self.encode_elias_fano()?;
-        let json = serde_json::to_vec(&ef).expect("EliasFano serialization must not fail");
-        Some(BASE64_STANDARD.encode(&json))
+        let payload = match self.encode_elias_fano_payload()? {
+            Some(payload) => payload,
+            None => return Ok(None),
+        };
+
+        Ok(Some(BASE64_STANDARD.encode(payload)))
     }
 
     /// Decode a base64-encoded Elias-Fano representation back into [`SpkMetadata`].
     ///
-    /// Returns `None` if the input is empty or decoding fails.
-    pub fn decode_base64(b64: &str, keychain: KeychainKind) -> Option<Self> {
+    /// Returns an error if the input is not valid base64 or does not contain a valid
+    /// Elias-Fano payload.
+    pub fn decode_base64(
+        b64: &str,
+        keychain: KeychainKind,
+    ) -> Result<Self, SpkMetadataEncodingError> {
         use bitcoin::base64::prelude::{Engine as _, BASE64_STANDARD};
 
-        let json_bytes = BASE64_STANDARD.decode(b64).ok()?;
-        let ef: sux::prelude::EliasFano = serde_json::from_slice(&json_bytes).ok()?;
-        let used_indexes: Vec<u32> = ef.into_iter().map(|v| v as u32).collect();
+        let payload = BASE64_STANDARD
+            .decode(b64)
+            .map_err(SpkMetadataEncodingError::Base64)?;
 
-        Some(Self::new(keychain, used_indexes))
+        Self::decode_elias_fano_payload(&payload, keychain)
+    }
+
+    fn encode_elias_fano_payload(&self) -> Result<Option<Vec<u8>>, SpkMetadataEncodingError> {
+        let elias_fano = match self.encode_elias_fano() {
+            Some(elias_fano) => elias_fano,
+            None => return Ok(None),
+        };
+
+        serde_json::to_vec(&elias_fano)
+            .map(Some)
+            .map_err(SpkMetadataEncodingError::Json)
+    }
+
+    fn decode_elias_fano_payload(
+        payload: &[u8],
+        keychain: KeychainKind,
+    ) -> Result<Self, SpkMetadataEncodingError> {
+        let elias_fano: sux::prelude::EliasFano =
+            serde_json::from_slice(payload).map_err(SpkMetadataEncodingError::Json)?;
+
+        let used_indexes = elias_fano
+            .into_iter()
+            .map(|idx| u32::try_from(idx).map_err(|_| SpkMetadataEncodingError::IndexOverflow(idx)))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Self::new(keychain, used_indexes))
     }
 }
+
+/// Error returned when encoding or decoding [`SpkMetadata`] transport formats.
+#[cfg(feature = "elias-fano")]
+#[derive(Debug)]
+pub enum SpkMetadataEncodingError {
+    /// Failed to decode a base64 transport string.
+    Base64(bitcoin::base64::DecodeError),
+    /// Failed to serialize or deserialize the Elias-Fano JSON payload.
+    Json(serde_json::Error),
+    /// Decoded index does not fit in a BDK `u32` derivation index.
+    IndexOverflow(usize),
+}
+
+#[cfg(feature = "elias-fano")]
+impl fmt::Display for SpkMetadataEncodingError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Base64(err) => write!(f, "base64 decoding error: {err}"),
+            Self::Json(err) => write!(f, "Elias-Fano JSON payload error: {err}"),
+            Self::IndexOverflow(idx) => {
+                write!(f, "decoded derivation index {idx} does not fit in u32")
+            }
+        }
+    }
+}
+
+#[cfg(feature = "elias-fano")]
+impl core::error::Error for SpkMetadataEncodingError {}
 
 /// Index out of bounds error.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -322,14 +389,36 @@ mod tests {
         let meta = SpkMetadata::new(KeychainKind::External, vec![0, 2, 5, 7]);
 
         // Encode to EliasFano and verify values
-        let ef = meta.encode_elias_fano().unwrap();
+        let ef = meta
+            .encode_elias_fano()
+            .expect("non-empty metadata should encode");
         let decoded: Vec<usize> = ef.into_iter().collect();
         assert_eq!(decoded, vec![0, 2, 5, 7]);
+    }
 
-        // Round-trip through base64
-        let b64 = meta.encode_base64().unwrap();
-        let decoded_meta = SpkMetadata::decode_base64(&b64, KeychainKind::External).unwrap();
-        assert_eq!(decoded_meta, meta);
+    #[test]
+    #[cfg(feature = "elias-fano")]
+    fn test_spk_metadata_base64_round_trip() {
+        let meta = SpkMetadata::new(KeychainKind::External, vec![0, 2, 5, 7]);
+
+        let encoded = meta
+            .encode_base64()
+            .expect("metadata encoding should succeed")
+            .expect("non-empty metadata should produce base64");
+
+        let decoded = SpkMetadata::decode_base64(&encoded, KeychainKind::External)
+            .expect("encoded metadata should decode");
+
+        assert_eq!(decoded, meta);
+    }
+
+    #[test]
+    #[cfg(feature = "elias-fano")]
+    fn test_spk_metadata_decode_base64_rejects_invalid_input() {
+        let err = SpkMetadata::decode_base64("not base64!", KeychainKind::External)
+            .expect_err("invalid base64 should fail");
+
+        assert!(matches!(err, SpkMetadataEncodingError::Base64(_)));
     }
 
     #[test]
@@ -337,8 +426,11 @@ mod tests {
     fn test_spk_metadata_elias_fano_empty() {
         let meta = SpkMetadata::new(KeychainKind::External, vec![]);
         assert!(meta.encode_elias_fano().is_none());
-        assert!(meta.encode_base64().is_none());
-        assert!(SpkMetadata::decode_base64("", KeychainKind::External).is_none());
+        assert_eq!(
+            meta.encode_base64()
+                .expect("empty metadata encoding should succeed"),
+            None
+        );
     }
 
     #[test]

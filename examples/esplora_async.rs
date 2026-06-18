@@ -99,7 +99,7 @@ async fn main() -> Result<(), anyhow::Error> {
     // Export SpkMetadata to base64 for future runs.
     let external_meta = wallet.spk_metadata(KeychainKind::External);
     let internal_meta = wallet.spk_metadata(KeychainKind::Internal);
-    save_spk_metadata(&external_meta, &internal_meta);
+    save_spk_metadata(&external_meta, &internal_meta)?;
     println!("Exported SpkMetadata to {METADATA_PATH}");
 
     let balance = wallet.balance();
@@ -214,7 +214,7 @@ async fn main() -> Result<(), anyhow::Error> {
     // Re-export metadata after sync so next run picks up any new used indexes.
     let external_meta = wallet.spk_metadata(KeychainKind::External);
     let internal_meta = wallet.spk_metadata(KeychainKind::Internal);
-    save_spk_metadata(&external_meta, &internal_meta);
+    save_spk_metadata(&external_meta, &internal_meta)?;
 
     wallet.persist(&mut db)?;
 
@@ -230,12 +230,14 @@ async fn main() -> Result<(), anyhow::Error> {
 }
 
 /// Save SpkMetadata for both keychains as base64-encoded Elias-Fano to a JSON file.
-fn save_spk_metadata(external: &SpkMetadata, internal: &SpkMetadata) {
+fn save_spk_metadata(external: &SpkMetadata, internal: &SpkMetadata) -> Result<(), anyhow::Error> {
     let data = serde_json::json!({
-        "external": external.encode_base64(),
-        "internal": internal.encode_base64(),
+        "external": external.encode_base64()?,
+        "internal": internal.encode_base64()?,
     });
-    std::fs::write(METADATA_PATH, data.to_string()).expect("failed to write metadata");
+    std::fs::write(METADATA_PATH, data.to_string())?;
+
+    Ok(())
 }
 
 /// Load SpkMetadata from a previously saved JSON file with base64-encoded Elias-Fano.
@@ -246,12 +248,12 @@ fn load_spk_metadata() -> Option<Vec<SpkMetadata>> {
     let mut result = Vec::new();
 
     if let Some(b64) = data["external"].as_str() {
-        if let Some(meta) = SpkMetadata::decode_base64(b64, KeychainKind::External) {
+        if let Ok(meta) = SpkMetadata::decode_base64(b64, KeychainKind::External) {
             result.push(meta);
         }
     }
     if let Some(b64) = data["internal"].as_str() {
-        if let Some(meta) = SpkMetadata::decode_base64(b64, KeychainKind::Internal) {
+        if let Ok(meta) = SpkMetadata::decode_base64(b64, KeychainKind::Internal) {
             result.push(meta);
         }
     }
