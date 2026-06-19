@@ -211,6 +211,9 @@ impl SpkMetadata {
 }
 
 #[cfg(feature = "elias-fano")]
+const SPK_METADATA_BECH32_HRP: &str = "spkmeta";
+
+#[cfg(feature = "elias-fano")]
 impl SpkMetadata {
     /// Encode `used_indexes` as an Elias-Fano representation.
     ///
@@ -270,6 +273,46 @@ impl SpkMetadata {
         Self::decode_elias_fano_payload(&payload, keychain)
     }
 
+    /// Encode `used_indexes` as bech32-encoded Elias-Fano metadata.
+    ///
+    /// The encoded string uses the `spkmeta` human-readable part. Returns
+    /// `Ok(None)` if there are no used indexes.
+    pub fn encode_bech32(&self) -> Result<Option<String>, SpkMetadataEncodingError> {
+        use bitcoin::bech32::{self, Bech32, Hrp};
+
+        let payload = match self.encode_elias_fano_payload()? {
+            Some(payload) => payload,
+            None => return Ok(None),
+        };
+
+        let hrp = Hrp::parse_unchecked(SPK_METADATA_BECH32_HRP);
+
+        bech32::encode::<Bech32>(hrp, &payload)
+            .map(Some)
+            .map_err(SpkMetadataEncodingError::Bech32Encode)
+    }
+
+    /// Decode bech32-encoded Elias-Fano metadata.
+    ///
+    /// Returns an error if the input is not valid bech32, if the human-readable
+    /// part is not `spkmeta`, or if the payload is not valid Elias-Fano metadata.
+    pub fn decode_bech32(
+        encoded: &str,
+        keychain: KeychainKind,
+    ) -> Result<Self, SpkMetadataEncodingError> {
+        let (hrp, payload) =
+            bitcoin::bech32::decode(encoded).map_err(SpkMetadataEncodingError::Bech32Decode)?;
+
+        if hrp.as_str() != SPK_METADATA_BECH32_HRP {
+            return Err(SpkMetadataEncodingError::InvalidBech32Hrp {
+                expected: SPK_METADATA_BECH32_HRP,
+                actual: String::from(hrp.as_str()),
+            });
+        }
+
+        Self::decode_elias_fano_payload(&payload, keychain)
+    }
+
     fn encode_elias_fano_payload(&self) -> Result<Option<Vec<u8>>, SpkMetadataEncodingError> {
         let elias_fano = match self.encode_elias_fano() {
             Some(elias_fano) => elias_fano,
@@ -304,6 +347,17 @@ pub enum SpkMetadataEncodingError {
     Base64(bitcoin::base64::DecodeError),
     /// Failed to serialize or deserialize the Elias-Fano JSON payload.
     Json(serde_json::Error),
+    /// Failed to encode a bech32 transport string.
+    Bech32Encode(bitcoin::bech32::EncodeError),
+    /// Failed to decode a bech32 transport string.
+    Bech32Decode(bitcoin::bech32::DecodeError),
+    /// Bech32 human-readable part does not match the expected metadata HRP.
+    InvalidBech32Hrp {
+        /// Expected bech32 human-readable part.
+        expected: &'static str,
+        /// Actual bech32 human-readable part found in the encoded string.
+        actual: String,
+    },
     /// Decoded index does not fit in a BDK `u32` derivation index.
     IndexOverflow(usize),
 }
@@ -314,6 +368,11 @@ impl fmt::Display for SpkMetadataEncodingError {
         match self {
             Self::Base64(err) => write!(f, "base64 decoding error: {err}"),
             Self::Json(err) => write!(f, "Elias-Fano JSON payload error: {err}"),
+            Self::Bech32Encode(err) => write!(f, "bech32 encoding error: {err}"),
+            Self::Bech32Decode(err) => write!(f, "bech32 decoding error: {err}"),
+            Self::InvalidBech32Hrp { expected, actual } => {
+                write!(f, "invalid bech32 HRP: expected {expected}, got {actual}")
+            }
             Self::IndexOverflow(idx) => {
                 write!(f, "decoded derivation index {idx} does not fit in u32")
             }
@@ -410,6 +469,70 @@ mod tests {
             .expect("encoded metadata should decode");
 
         assert_eq!(decoded, meta);
+    }
+
+    #[test]
+    #[cfg(feature = "elias-fano")]
+    fn test_spk_metadata_bech32_round_trip() {
+        let meta = SpkMetadata::new(KeychainKind::External, vec![0, 20, 50]);
+
+        let encoded = meta
+            .encode_bech32()
+            .expect("metadata encoding should succeed")
+            .expect("non-empty metadata should produce bech32");
+
+        let decoded = SpkMetadata::decode_bech32(&encoded, KeychainKind::External)
+            .expect("encoded metadata should decode");
+
+        assert_eq!(decoded, meta);
+    }
+
+    #[test]
+    #[cfg(feature = "elias-fano")]
+    fn test_spk_metadata_bech32_empty() {
+        let meta = SpkMetadata::new(KeychainKind::External, vec![]);
+
+        assert_eq!(
+            meta.encode_bech32()
+                .expect("empty metadata encoding should succeed"),
+            None
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "elias-fano")]
+    fn test_spk_metadata_decode_bech32_rejects_invalid_input() {
+        let err = SpkMetadata::decode_bech32("not bech32!", KeychainKind::External)
+            .expect_err("invalid bech32 should fail");
+
+        assert!(matches!(err, SpkMetadataEncodingError::Bech32Decode(_)));
+    }
+
+    #[test]
+    #[cfg(feature = "elias-fano")]
+    fn test_spk_metadata_decode_bech32_rejects_invalid_hrp() {
+        use bitcoin::bech32::{self, Bech32, Hrp};
+
+        let meta = SpkMetadata::new(KeychainKind::External, vec![0, 20, 50]);
+
+        let encoded = meta
+            .encode_bech32()
+            .expect("metadata encoding should succeed")
+            .expect("non-empty metadata should produce bech32");
+
+        let (_, payload) =
+            bech32::decode(&encoded).expect("encoded metadata should be valid bech32");
+        let wrong_hrp = Hrp::parse_unchecked("badmeta");
+        let wrong_hrp_encoded =
+            bech32::encode::<Bech32>(wrong_hrp, &payload).expect("re-encoding should succeed");
+
+        let err = SpkMetadata::decode_bech32(&wrong_hrp_encoded, KeychainKind::External)
+            .expect_err("wrong HRP should fail");
+
+        assert!(matches!(
+            err,
+            SpkMetadataEncodingError::InvalidBech32Hrp { .. }
+        ));
     }
 
     #[test]
