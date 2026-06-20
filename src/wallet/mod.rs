@@ -1853,6 +1853,17 @@ impl Wallet {
         }
     }
 
+    /// Returns a combined [`KeyMap`] from all signing keys loaded in the wallet.
+    ///
+    /// The map merges keys from both the external (receive) and internal (change) keychains.
+    /// It can be used with [`miniscript::descriptor::KeyMapWrapper`] to sign a PSBT via
+    /// [`Wallet::sign_psbt`] using the wallet's own keys.
+    pub fn get_keymap(&self) -> KeyMap {
+        let mut keymap = self.signers.as_key_map(&self.secp);
+        keymap.extend(self.change_signers.as_key_map(&self.secp));
+        keymap
+    }
+
     /// Sign a PSBT using an external key provider via [`bitcoin::Psbt::sign`].
     ///
     /// This is a thin wrapper around [`bitcoin::Psbt::sign`] that supplies the wallet's
@@ -1866,6 +1877,23 @@ impl Wallet {
     /// or the `tap_key_origins` fields (for taproot inputs) in each PSBT input to locate
     /// the correct child keys. PSBTs received from external coordinator tools or
     /// hardware wallet flows typically carry this metadata already.
+    ///
+    /// # Signing with the wallet's own keys
+    ///
+    /// Use [`Wallet::get_keymap`] together with [`miniscript::descriptor::KeyMapWrapper`] to sign
+    /// with the keys already loaded in the wallet:
+    ///
+    /// ```rust,no_run
+    /// # use bdk_wallet::Wallet;
+    /// # use bdk_wallet::bitcoin::Psbt;
+    /// # use miniscript::descriptor::KeyMapWrapper;
+    /// # fn example(wallet: &Wallet, psbt: &mut Psbt) -> Result<(), Box<dyn std::error::Error>> {
+    /// let keymap = wallet.get_keymap();
+    /// let wrapper = KeyMapWrapper::from(keymap);
+    /// wallet.sign_psbt(psbt, &wrapper).map_err(|(_, e)| format!("{e:?}"))?;
+    /// # Ok(())
+    /// # }
+    /// ```
     ///
     /// # Returns
     ///
@@ -3184,5 +3212,34 @@ mod test {
         // Wallet name should be main_checksum + change_checksum
         let wallet_name = result_with_change.unwrap();
         assert_eq!(wallet_name, "vn4aqs37jgrerlc3");
+    }
+
+    #[test]
+    fn test_get_keymap() {
+        use crate::test_utils::get_test_wpkh_and_change_desc;
+        let (external_desc, internal_desc) = get_test_wpkh_and_change_desc();
+        let wallet = Wallet::create(external_desc, internal_desc)
+            .network(Network::Testnet)
+            .create_wallet_no_persist()
+            .unwrap();
+
+        let keymap = wallet.get_keymap();
+        assert!(!keymap.is_empty());
+
+        let external_keymap = wallet
+            .get_signers(KeychainKind::External)
+            .as_key_map(wallet.secp_ctx());
+        let internal_keymap = wallet
+            .get_signers(KeychainKind::Internal)
+            .as_key_map(wallet.secp_ctx());
+
+        assert_eq!(keymap.len(), external_keymap.len() + internal_keymap.len());
+
+        for (pubkey, _) in external_keymap.iter() {
+            assert!(keymap.contains_key(pubkey));
+        }
+        for (pubkey, _) in internal_keymap.iter() {
+            assert!(keymap.contains_key(pubkey));
+        }
     }
 }

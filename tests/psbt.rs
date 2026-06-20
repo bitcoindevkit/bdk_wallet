@@ -282,3 +282,23 @@ fn test_sign_psbt_with_wrong_key_signs_nothing() {
         );
     }
 }
+
+#[test]
+fn test_sign_psbt_with_wallet_keymap() {
+    use miniscript::descriptor::KeyMapWrapper;
+    let mut psbt = Psbt::from_str(WPKH_PSBT_WITH_DERIVATION).unwrap();
+    let (desc, change_desc) = get_test_wpkh_and_change_desc();
+    let (wallet, _) = get_funded_wallet(desc, change_desc);
+
+    let keymap = wallet.get_keymap();
+    let wrapper = KeyMapWrapper::from(keymap);
+
+    let signing_keys = wallet
+        .sign_psbt(&mut psbt, &wrapper)
+        .expect("sign_psbt should succeed with wallet keymap");
+
+    assert!(
+        !signing_keys.is_empty(),
+        "expected at least one input to be signed using wallet keymap"
+    );
+}
