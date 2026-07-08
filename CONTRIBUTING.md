@@ -48,6 +48,16 @@ hesitate to split it into multiple small, focused PRs.
 
 The Minimum Supported Rust Version is **1.85.0** (enforced by our CI).
 
+Updating MSRV Lockfiles
+-----------------------
+If you add, remove, or bump a dependency in `Cargo.toml`, regenerate the committed lockfiles using `cargo-rbmt`:
+
+```bash
+./ci/install-rbmt.sh
+cargo rbmt toolchains
+cargo rbmt lock
+```
+
 Commits should cover both the issue fixed and the solution's rationale.
 These [guidelines](https://chris.beams.io/posts/git-commit/) should be kept in mind. Commit messages follow the ["Conventional Commits 1.0.0"](https://www.conventionalcommits.org/en/v1.0.0/) to make commit histories easier to read by humans and automated tools. All commits must be [GPG signed](https://docs.github.com/en/authentication/managing-commit-signature-verification/signing-commits).
 
