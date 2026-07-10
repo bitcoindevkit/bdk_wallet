@@ -1,5 +1,8 @@
 //! Utilities for testing custom persistence backends for `bdk_wallet`
 
+use bitcoin::{hashes::Hash, BlockHash};
+use chain::BlockId;
+
 use crate::{
     bitcoin::{
         absolute, key::Secp256k1, transaction, Address, Amount, Network, OutPoint, ScriptBuf,
@@ -168,6 +171,7 @@ where
         descriptor: Some(descriptor.clone()),
         change_descriptor: Some(change_descriptor.clone()),
         network: Some(Network::Testnet),
+        birthday: None,
         local_chain: local_chain_changeset,
         tx_graph: tx_graph_changeset,
         indexer: keychain_txout_changeset,
@@ -227,6 +231,7 @@ where
         descriptor: None,
         change_descriptor: None,
         network: None,
+        birthday: None,
         local_chain: local_chain_changeset,
         tx_graph: tx_graph_changeset,
         indexer: keychain_txout_changeset,
@@ -349,6 +354,41 @@ where
         WalletPersister::initialize(&mut store).expect("should load persisted changeset");
 
     assert_eq!(changeset_read.network, Some(Network::Bitcoin));
+}
+
+/// Test whether the `birthday` is persisted correctly.
+pub fn persist_birthday<Store, CreateStore>(filename: &str, create_store: CreateStore)
+where
+    CreateStore: Fn(&Path) -> anyhow::Result<Store>,
+    Store: WalletPersister,
+    Store::Error: Debug,
+{
+    // Create store
+    let temp_dir = tempfile::tempdir().expect("must create tempdir");
+    let file_path = temp_dir.path().join(filename);
+    let mut store = create_store(&file_path).expect("store should get created");
+
+    // Initialize store
+    let changeset = WalletPersister::initialize(&mut store)
+        .expect("should initialize and load empty changeset");
+    assert_eq!(changeset, ChangeSet::default());
+
+    let birthday = BlockId {
+        height: 42,
+        hash: BlockHash::all_zeros(),
+    };
+    let changeset = ChangeSet {
+        birthday: Some(birthday),
+        ..Default::default()
+    };
+
+    WalletPersister::persist(&mut store, &changeset).expect("should persist birthday");
+
+    // Load the birthday
+    let changeset_read =
+        WalletPersister::initialize(&mut store).expect("should read persisted changeset");
+
+    assert_eq!(changeset_read.birthday, Some(birthday));
 }
 
 /// tests if descriptors are being persisted correctly
