@@ -1193,6 +1193,9 @@ impl Wallet {
     /// This returns a blank [`TxBuilder`] from which you can specify the parameters for the
     /// transaction.
     ///
+    /// Coin selection uses [`DefaultCoinSelectionAlgorithm`] unless overridden via
+    /// [`TxBuilder::coin_selection`]. See [`TxBuilder`] for details on the default behavior.
+    ///
     /// ## Example
     ///
     /// ```
@@ -1554,6 +1557,9 @@ impl Wallet {
     /// Returns an error if the transaction is already confirmed or doesn't explicitly signal
     /// *replace by fee* (RBF). If the transaction can be fee bumped then it returns a [`TxBuilder`]
     /// pre-populated with the inputs and outputs of the original transaction.
+    ///
+    /// Coin selection uses [`DefaultCoinSelectionAlgorithm`] unless overridden via
+    /// [`TxBuilder::coin_selection`]. See [`TxBuilder`] for details on the default behavior.
     ///
     /// ## Example
     ///

@@ -99,12 +99,25 @@ use crate::{KeychainKind, LocalOutput, Utxo, WeightedUtxo};
 /// # Ok::<(), anyhow::Error>(())
 /// ```
 ///
+/// ## Default Coin Selection
+///
+/// If [`coin_selection`] is not called, [`DefaultCoinSelectionAlgorithm`] is used, which
+/// is [`BranchAndBoundCoinSelection`] with [`SingleRandomDraw`] as the fallback algorithm.
+/// Branch and bound attempts to find an input set that avoids creating a change output;
+/// if no such combination is found within the search limit, it falls back to
+/// [`SingleRandomDraw`], which pulls UTXOs at random until the target is met.
+///
+/// To override this, call [`coin_selection`] on the builder before calling [`finish`].
+///
 /// At the moment [`coin_selection`] is an exception to the rule as it consumes `self`.
 /// This means it is usually best to call [`coin_selection`] on the return value of `build_tx`
 /// before assigning it.
 ///
 /// For further examples see [this module](super::tx_builder)'s documentation;
 ///
+/// [`DefaultCoinSelectionAlgorithm`]: crate::wallet::coin_selection::DefaultCoinSelectionAlgorithm
+/// [`BranchAndBoundCoinSelection`]: crate::wallet::coin_selection::BranchAndBoundCoinSelection
+/// [`SingleRandomDraw`]: crate::wallet::coin_selection::SingleRandomDraw
 /// [`build_tx`]: Wallet::build_tx
 /// [`build_fee_bump`]: Wallet::build_fee_bump
 /// [`finish`]: Self::finish
@@ -613,10 +626,17 @@ impl<'a, Cs> TxBuilder<'a, Cs> {
 
     /// Choose the coin selection algorithm
     ///
-    /// Overrides the [`CoinSelectionAlgorithm`].
+    /// Overrides the default [`CoinSelectionAlgorithm`], which is
+    /// [`DefaultCoinSelectionAlgorithm`] (i.e. [`BranchAndBoundCoinSelection`] with a
+    /// [`SingleRandomDraw`] fallback). See the [`TxBuilder`] struct-level docs for details on
+    /// the default behavior.
     ///
     /// Note that this function consumes the builder and returns it so it is usually best to put
     /// this as the first call on the builder.
+    ///
+    /// [`DefaultCoinSelectionAlgorithm`]: crate::wallet::coin_selection::DefaultCoinSelectionAlgorithm
+    /// [`BranchAndBoundCoinSelection`]: crate::wallet::coin_selection::BranchAndBoundCoinSelection
+    /// [`SingleRandomDraw`]: crate::wallet::coin_selection::SingleRandomDraw
     pub fn coin_selection<P: CoinSelectionAlgorithm>(self, coin_selection: P) -> TxBuilder<'a, P> {
         TxBuilder {
             wallet: self.wallet,
