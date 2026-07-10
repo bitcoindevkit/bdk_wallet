@@ -7,6 +7,12 @@ Contributors do not need to change this file but do need to add changelog detail
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Changed
+
+- docs(wallet): remove outdated xpub-only restriction for two-path multipath descriptors ([#511](https://github.com/bitcoindevkit/bdk_wallet/issues/511))
+
 ## [v3.1.0]
 
 ### Added
