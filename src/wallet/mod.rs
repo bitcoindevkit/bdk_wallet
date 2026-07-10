@@ -30,7 +30,7 @@ use bdk_chain::{
         FullScanRequest, FullScanRequestBuilder, FullScanResponse, SyncRequest, SyncRequestBuilder,
         SyncResponse,
     },
-    tx_graph::{CalculateFeeError, CanonicalTx, TxGraph, TxUpdate},
+    tx_graph::{CalculateFeeError, TxGraph, TxNode, TxUpdate},
     BlockId, CanonicalizationParams, ChainPosition, ConfirmationBlockTime, DescriptorExt,
     FullTxOut, Indexed, IndexedTxGraph, Indexer, Merge,
 };
@@ -42,7 +42,7 @@ use bitcoin::{
     secp256k1::Secp256k1,
     sighash::{EcdsaSighashType, TapSighashType},
     transaction, Address, Amount, Block, FeeRate, Network, NetworkKind, OutPoint, Psbt, ScriptBuf,
-    Sequence, SignedAmount, Transaction, TxOut, Txid, Weight, Witness,
+    Sequence, Transaction, TxOut, Txid, Weight, Witness,
 };
 use miniscript::{
     descriptor::KeyMap,
@@ -64,7 +64,7 @@ pub mod signer;
 pub mod tx_builder;
 pub(crate) mod utils;
 
-use crate::collections::{BTreeMap, HashMap, HashSet};
+use crate::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use crate::descriptor::{
     check_wallet_descriptor, checksum::calc_checksum, error::Error as DescriptorError,
     policy::BuildSatisfaction, DerivedDescriptor, DescriptorMeta, ExtendedDescriptor,
@@ -83,7 +83,7 @@ use crate::wallet::{
 // re-exports
 pub use bdk_chain::Balance;
 pub use changeset::ChangeSet;
-pub use error::{LoadError, LoadMismatch};
+pub use error::{LoadError, LoadMismatch, UnknownTransaction};
 pub use event::*;
 pub use params::*;
 pub use persisted::*;
@@ -181,8 +181,24 @@ impl fmt::Display for AddressInfo {
     }
 }
 
-/// A `CanonicalTx` managed by a `Wallet`.
-pub type WalletTx<'a> = CanonicalTx<'a, Arc<Transaction>, ConfirmationBlockTime>;
+/// A wallet-relevant transaction and its metadata.
+#[derive(Clone, Debug)]
+pub struct TransactionInfo {
+    /// Wallet-specific amounts, fees, and chain position.
+    pub details: TxDetails,
+    /// Blocks that the transaction is anchored in.
+    pub anchors: BTreeSet<ConfirmationBlockTime>,
+    /// The first-seen unix timestamp of the transaction as unconfirmed.
+    pub first_seen: Option<u64>,
+    /// The last-seen unix timestamp of the transaction as unconfirmed.
+    pub last_seen: Option<u64>,
+    /// Latest backend observation that this tx was absent from the mempool.
+    pub evicted_at: Option<u64>,
+    /// Direct conflicts spending the same inputs.
+    ///
+    /// See [`Wallet::conflicts`] for ancestor-aware conflicts with chain positions.
+    pub conflicts: Vec<Txid>,
+}
 
 impl Wallet {
     /// Build a new single descriptor [`Wallet`].
@@ -789,33 +805,6 @@ impl Wallet {
             .map(|((k, i), full_txo)| new_local_utxo(k, i, full_txo))
     }
 
-    /// Get the [`TxDetails`] of a wallet transaction.
-    ///
-    /// If the transaction with txid [`Txid`] cannot be found in the wallet's transactions, `None`
-    /// is returned.
-    pub fn tx_details(&self, txid: Txid) -> Option<TxDetails> {
-        let tx: WalletTx = self.transactions().find(|c| c.tx_node.txid == txid)?;
-
-        let (sent, received) = self.sent_and_received(&tx.tx_node.tx);
-        let fee: Option<Amount> = self.calculate_fee(&tx.tx_node.tx).ok();
-        let fee_rate: Option<FeeRate> = self.calculate_fee_rate(&tx.tx_node.tx).ok();
-        let balance_delta: SignedAmount = self.tx_graph.index.net_value(&tx.tx_node.tx, ..);
-        let chain_position = tx.chain_position;
-
-        let tx_details: TxDetails = TxDetails {
-            txid,
-            received,
-            sent,
-            fee,
-            fee_rate,
-            balance_delta,
-            chain_position,
-            tx: tx.tx_node.tx,
-        };
-
-        Some(tx_details)
-    }
-
     /// List all relevant outputs (includes both spent and unspent, confirmed and unconfirmed).
     ///
     /// To list only unspent outputs (UTXOs), use [`Wallet::list_unspent`] instead.
@@ -923,7 +912,7 @@ impl Wallet {
     /// # use bdk_wallet::Wallet;
     /// # let mut wallet: Wallet = todo!();
     /// # let txid:Txid = todo!();
-    /// let tx = wallet.get_tx(txid).expect("transaction").tx_node.tx;
+    /// let tx = wallet.get_tx(txid).expect("transaction").details.tx;
     /// let fee = wallet.calculate_fee(&tx).expect("fee");
     /// ```
     ///
@@ -954,7 +943,7 @@ impl Wallet {
     /// # use bdk_wallet::Wallet;
     /// # let mut wallet: Wallet = todo!();
     /// # let txid:Txid = todo!();
-    /// let tx = wallet.get_tx(txid).expect("transaction").tx_node.tx;
+    /// let tx = wallet.get_tx(txid).expect("transaction").details.tx;
     /// let fee_rate = wallet.calculate_fee_rate(&tx).expect("fee rate");
     /// ```
     ///
@@ -984,7 +973,7 @@ impl Wallet {
     /// # use bdk_wallet::Wallet;
     /// # let mut wallet: Wallet = todo!();
     /// # let txid:Txid = todo!();
-    /// let tx = wallet.get_tx(txid).expect("tx exists").tx_node.tx;
+    /// let tx = wallet.get_tx(txid).expect("tx exists").details.tx;
     /// let (sent, received) = wallet.sent_and_received(&tx);
     /// ```
     ///
@@ -1000,95 +989,208 @@ impl Wallet {
         self.tx_graph.index.sent_and_received(tx, ..)
     }
 
-    /// Get a single transaction from the wallet as a [`WalletTx`] (if the transaction exists).
+    /// Create transaction info metadata.
+    fn build_transaction_info(
+        &self,
+        tx_node: TxNode<'_, Arc<Transaction>, ConfirmationBlockTime>,
+        chain_position: Option<ChainPosition<ConfirmationBlockTime>>,
+    ) -> TransactionInfo {
+        let txid = tx_node.txid;
+        let (sent, received) = self.sent_and_received(&tx_node.tx);
+        let fee = self.calculate_fee(&tx_node.tx).ok();
+        let fee_rate = self.calculate_fee_rate(&tx_node.tx).ok();
+        let balance_delta = self.tx_graph.index.net_value(&tx_node.tx, ..);
+        let conflicts = self
+            .tx_graph
+            .graph()
+            .direct_conflicts(&tx_node.tx)
+            .map(|(_, conflict_txid)| conflict_txid)
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        let evicted_at = self.tx_graph.graph().get_last_evicted(txid);
+
+        TransactionInfo {
+            details: TxDetails {
+                txid,
+                received,
+                sent,
+                fee,
+                fee_rate,
+                balance_delta,
+                chain_position,
+                tx: tx_node.tx.clone(),
+            },
+            anchors: tx_node.anchors.clone(),
+            first_seen: tx_node.first_seen,
+            last_seen: tx_node.last_seen,
+            evicted_at,
+            conflicts,
+        }
+    }
+
+    /// Get a single wallet-relevant transaction as [`TransactionInfo`] if it is known.
     ///
-    /// `WalletTx` contains the full transaction alongside meta-data such as:
+    /// [`TransactionInfo`] contains the full transaction alongside metadata such as:
     /// * Blocks that the transaction is [`Anchor`]ed in. These may or may not be blocks that exist
     ///   in the best chain.
-    /// * The [`ChainPosition`] of the transaction in the best chain - whether the transaction is
-    ///   confirmed or unconfirmed. If the transaction is confirmed, the anchor which proves the
-    ///   confirmation is provided. If the transaction is unconfirmed, the unix timestamp of when
-    ///   the transaction was last seen in the mempool is provided.
+    /// * Wallet-specific amounts, fees, and chain position.
+    /// * Direct conflicts spending the same inputs.
     ///
     /// ```rust, no_run
     /// use bdk_chain::Anchor;
-    /// use bdk_wallet::{chain::ChainPosition, Wallet};
+    /// use bdk_wallet::Wallet;
     /// # let wallet: Wallet = todo!();
     /// # let my_txid: bitcoin::Txid = todo!();
     ///
-    /// let wallet_tx = wallet.get_tx(my_txid).expect("panic if tx does not exist");
+    /// let tx_info = wallet.get_tx(my_txid).expect("panic if tx does not exist");
     ///
     /// // get reference to full transaction
-    /// println!("my tx: {:#?}", wallet_tx.tx_node.tx);
+    /// println!("my tx: {:#?}", tx_info.details.tx);
     ///
     /// // list all transaction anchors
-    /// for anchor in wallet_tx.tx_node.anchors {
+    /// for anchor in &tx_info.anchors {
     ///     println!(
     ///         "tx is anchored by block of hash {}",
     ///         anchor.anchor_block().hash
     ///     );
     /// }
-    ///
-    /// // get confirmation status of transaction
-    /// match wallet_tx.chain_position {
-    ///     ChainPosition::Confirmed {
-    ///         anchor,
-    ///         transitively: None,
-    ///     } => println!(
-    ///         "tx is confirmed at height {}, we know this since {}:{} is in the best chain",
-    ///         anchor.block_id.height, anchor.block_id.height, anchor.block_id.hash,
-    ///     ),
-    ///     ChainPosition::Confirmed {
-    ///         anchor,
-    ///         transitively: Some(_),
-    ///     } => println!(
-    ///         "tx is an ancestor of a tx anchored in {}:{}",
-    ///         anchor.block_id.height, anchor.block_id.hash,
-    ///     ),
-    ///     ChainPosition::Unconfirmed { first_seen, last_seen } => println!(
-    ///         "tx is first seen at {:?}, last seen at {:?}, it is unconfirmed as it is not anchored in the best chain",
-    ///         first_seen, last_seen
-    ///     ),
-    /// }
     /// ```
     ///
     /// [`Anchor`]: bdk_chain::Anchor
-    pub fn get_tx(&self, txid: Txid) -> Option<WalletTx<'_>> {
+    pub fn get_tx(&self, txid: Txid) -> Option<TransactionInfo> {
         let graph = self.tx_graph.graph();
-        graph
+        let tx_node = graph.get_tx_node(txid)?;
+
+        if !self.tx_graph.index.is_tx_relevant(&tx_node.tx) {
+            return None;
+        }
+
+        let maybe_chain_position = graph
             .list_canonical_txs(
                 &self.chain,
                 self.chain.tip().block_id(),
                 CanonicalizationParams::default(),
             )
-            .find(|tx| tx.tx_node.txid == txid)
+            .find(|canonical_tx| canonical_tx.tx_node.txid == txid)
+            .map(|canonical_tx| canonical_tx.chain_position);
+
+        Some(self.build_transaction_info(tx_node, maybe_chain_position))
     }
 
-    /// Iterate over relevant and canonical transactions in the wallet.
+    /// Get the [`TxDetails`] of a wallet transaction.
+    ///
+    /// If the transaction with txid [`Txid`] cannot be found in the wallet's transactions, `None`
+    /// is returned.
+    ///
+    /// Convenience for [`Wallet::get_tx`]'s `details` field.
+    pub fn tx_details(&self, txid: Txid) -> Option<TxDetails> {
+        self.get_tx(txid).map(|info| info.details)
+    }
+
+    /// Return conflicts of a wallet-relevant transaction, including conflicts of its non-canonical
+    /// ancestors.
+    ///
+    /// Direct conflicts of `txid` are included, as well as direct conflicts of any non-canonical
+    /// ancestor of `txid`. Ancestors are checked because a transaction can be non-canonical when
+    /// one of its ancestors was replaced.
+    ///
+    /// Returns [`UnknownTransaction`] if `txid` is unknown or not wallet-relevant. Returns
+    /// an empty list if `txid` is canonical or no conflicts are known.
+    #[allow(clippy::type_complexity)]
+    pub fn conflicts(
+        &self,
+        txid: Txid,
+    ) -> Result<Vec<(Txid, Option<ChainPosition<ConfirmationBlockTime>>)>, UnknownTransaction> {
+        let graph = self.tx_graph.graph();
+        let tx_node = graph.get_tx_node(txid).ok_or(UnknownTransaction)?;
+
+        if !self.tx_graph.index.is_tx_relevant(&tx_node.tx) {
+            return Err(UnknownTransaction);
+        }
+
+        let canonical_positions: HashMap<Txid, ChainPosition<ConfirmationBlockTime>> = graph
+            .list_canonical_txs(
+                &self.chain,
+                self.chain.tip().block_id(),
+                CanonicalizationParams::default(),
+            )
+            .map(|canonical_tx| (canonical_tx.tx_node.txid, canonical_tx.chain_position))
+            .collect();
+
+        if canonical_positions.contains_key(&txid) {
+            return Ok(Vec::new());
+        }
+
+        let tx = tx_node.tx.clone();
+        let candidates = core::iter::once(tx.clone())
+            .chain(graph.walk_ancestors(tx, |_, ancestor| Some(ancestor)))
+            .filter(|tx| !canonical_positions.contains_key(&tx.compute_txid()));
+
+        let conflicts = candidates
+            .flat_map(|candidate_tx| {
+                graph
+                    .direct_conflicts(&candidate_tx)
+                    .map(|(_, conflict_txid)| conflict_txid)
+                    .collect::<Vec<_>>()
+            })
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .map(|conflict_txid| {
+                (
+                    conflict_txid,
+                    canonical_positions.get(&conflict_txid).cloned(),
+                )
+            })
+            .collect();
+
+        Ok(conflicts)
+    }
+
+    /// Iterate over relevant transactions in the wallet.
     ///
     /// A transaction is relevant when it spends from or spends to at least one tracked output. A
     /// transaction is canonical when it is confirmed in the best chain, or does not conflict
-    /// with any transaction confirmed in the best chain.
+    /// with any transaction confirmed in the best chain. Non-canonical transactions are included
+    /// too if they remain wallet-relevant.
     ///
-    /// To iterate over all transactions, including those that are irrelevant and not canonical, use
+    /// To iterate over all transactions, including those that are irrelevant, use
     /// [`TxGraph::full_txs`].
     ///
     /// To iterate over all canonical transactions, including those that are irrelevant, use
     /// [`TxGraph::list_canonical_txs`].
-    pub fn transactions(&self) -> impl Iterator<Item = WalletTx<'_>> + '_ {
+    pub fn transactions(&self) -> impl Iterator<Item = TransactionInfo> + '_ {
         let tx_graph = self.tx_graph.graph();
         let tx_index = &self.tx_graph.index;
-        tx_graph
+
+        let canonical_txs: Vec<_> = tx_graph
             .list_canonical_txs(
                 &self.chain,
                 self.chain.tip().block_id(),
                 CanonicalizationParams::default(),
             )
+            .collect();
+
+        let canonical_txids: HashSet<_> = canonical_txs
+            .iter()
+            .map(|canonical_tx| canonical_tx.tx_node.txid)
+            .collect();
+
+        let canonical = canonical_txs
+            .into_iter()
             .filter(|c_tx| tx_index.is_tx_relevant(&c_tx.tx_node.tx))
+            .map(|c_tx| self.build_transaction_info(c_tx.tx_node, Some(c_tx.chain_position)));
+
+        let non_canonical = tx_graph
+            .full_txs()
+            .filter(move |tx_node| !canonical_txids.contains(&tx_node.txid))
+            .filter(|tx_node| tx_index.is_tx_relevant(&tx_node.tx))
+            .map(|tx_node| self.build_transaction_info(tx_node, None));
+
+        canonical.chain(non_canonical)
     }
 
-    /// Array of relevant and canonical transactions in the wallet sorted with a comparator
-    /// function.
+    /// Array of relevant transactions in the wallet sorted with a comparator function.
     ///
     /// This is a helper method equivalent to collecting the result of [`Wallet::transactions`]
     /// into a [`Vec`] and then sorting it.
@@ -1096,18 +1198,19 @@ impl Wallet {
     /// # Example
     ///
     /// ```rust,no_run
-    /// # use bdk_wallet::{LoadParams, Wallet, WalletTx};
+    /// # use bdk_wallet::{LoadParams, TransactionInfo, Wallet};
     /// # let mut wallet:Wallet = todo!();
     /// // Transactions by chain position: first unconfirmed then descending by confirmed height.
-    /// let sorted_txs: Vec<WalletTx> =
-    ///     wallet.transactions_sort_by(|tx1, tx2| tx2.chain_position.cmp(&tx1.chain_position));
+    /// let sorted_txs: Vec<TransactionInfo> = wallet.transactions_sort_by(|tx1, tx2| {
+    ///     tx2.details.chain_position.cmp(&tx1.details.chain_position)
+    /// });
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    pub fn transactions_sort_by<F>(&self, compare: F) -> Vec<WalletTx<'_>>
+    pub fn transactions_sort_by<F>(&self, compare: F) -> Vec<TransactionInfo>
     where
-        F: FnMut(&WalletTx, &WalletTx) -> Ordering,
+        F: FnMut(&TransactionInfo, &TransactionInfo) -> Ordering,
     {
-        let mut txs: Vec<WalletTx> = self.transactions().collect();
+        let mut txs: Vec<TransactionInfo> = self.transactions().collect();
         txs.sort_unstable_by(compare);
         txs
     }
@@ -2652,10 +2755,9 @@ impl Wallet {
     /// Apply evictions of the given transaction IDs with their associated timestamps.
     ///
     /// This function is used to mark specific unconfirmed transactions as evicted from the mempool.
-    /// Eviction means that these transactions are not considered canonical by default, and will
-    /// no longer be part of the wallet's [`transactions`] set. This can happen for example when
-    /// a transaction is dropped from the mempool due to low fees or conflicts with another
-    /// transaction.
+    /// Eviction means that these transactions are not considered canonical by default. This can
+    /// happen for example when a transaction is dropped from the mempool due to low fees or
+    /// conflicts with another transaction.
     ///
     /// Only transactions that are currently unconfirmed and canonical are considered for eviction.
     /// Transactions that are not relevant to the wallet are ignored. Note that an evicted
@@ -2773,14 +2875,14 @@ impl Wallet {
     {
         // Snapshot of chain tip and transactions before
         let chain_tip1 = self.chain.tip().block_id();
-        let wallet_txs1 = self.map_transactions();
+        let wallet_txs1 = self.map_canonical_transactions();
 
         // Call `f` on self
         f(self)?;
 
         // Chain tip and transactions after
         let chain_tip2 = self.chain.tip().block_id();
-        let wallet_txs2 = self.map_transactions();
+        let wallet_txs2 = self.map_canonical_transactions();
 
         Ok(wallet_events(
             self,
@@ -2806,14 +2908,21 @@ impl Wallet {
     /// Returns a map of canonical transactions keyed by txid.
     ///
     /// This is used internally to help generate [`WalletEvent`]s.
-    fn map_transactions(
+    fn map_canonical_transactions(
         &self,
     ) -> BTreeMap<Txid, (Arc<Transaction>, ChainPosition<ConfirmationBlockTime>)> {
-        self.transactions()
-            .map(|wtx| {
+        self.tx_graph
+            .graph()
+            .list_canonical_txs(
+                &self.chain,
+                self.chain.tip().block_id(),
+                CanonicalizationParams::default(),
+            )
+            .filter(|c_tx| self.tx_graph.index.is_tx_relevant(&c_tx.tx_node.tx))
+            .map(|c_tx| {
                 (
-                    wtx.tx_node.txid,
-                    (wtx.tx_node.tx.clone(), wtx.chain_position),
+                    c_tx.tx_node.txid,
+                    (c_tx.tx_node.tx.clone(), c_tx.chain_position),
                 )
             })
             .collect()

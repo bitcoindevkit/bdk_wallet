@@ -365,3 +365,15 @@ impl fmt::Display for BuildFeeBumpError {
 }
 
 impl core::error::Error for BuildFeeBumpError {}
+
+/// The transaction is unknown or not relevant to this wallet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UnknownTransaction;
+
+impl fmt::Display for UnknownTransaction {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "transaction is unknown or not wallet-relevant")
+    }
+}
+
+impl core::error::Error for UnknownTransaction {}
