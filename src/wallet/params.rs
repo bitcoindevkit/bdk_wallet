@@ -121,6 +121,8 @@ impl CreateParams {
     /// This function parses a two-path descriptor (receive and change) and creates parameters
     /// using the existing receive and change wallet creation logic.
     ///
+    /// Both public (`xpub`/`tpub`) and private (`xprv`/`tprv`) extended keys are supported.
+    ///
     /// Default values:
     /// * `network` = [`Network::Bitcoin`]
     /// * `genesis_hash` = `None`
@@ -275,8 +277,8 @@ impl LoadParams {
     ///
     /// # Note
     ///
-    /// The provided descriptor may only contain extended public keys (`xpub`) with exactly 2 paths,
-    /// or an error will occur at load time.
+    /// The descriptor must contain exactly 2 paths (receive and change). Both public (`xpub`)
+    /// and private (`xprv`) extended keys are supported.
     pub fn two_path_descriptor<D>(mut self, expected_descriptor: D) -> Self
     where
         D: IntoWalletDescriptor + Send + Clone + 'static,

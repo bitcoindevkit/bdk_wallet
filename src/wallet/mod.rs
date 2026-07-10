@@ -270,8 +270,10 @@ impl Wallet {
     /// Build a new [`Wallet`] from a two-path descriptor.
     ///
     /// This function parses a multipath descriptor with exactly 2 paths and creates a wallet
-    /// using the existing receive and change wallet creation logic. Note that you can only use this
-    /// method with public extended keys (`xpub` prefix) to create watch-only wallets.
+    /// using the existing receive and change wallet creation logic.
+    ///
+    /// Both public (`xpub`/`tpub`) and private (`xprv`/`tprv`) extended keys are supported.
+    /// An `xpub` descriptor creates a watch-only wallet; an `xprv` descriptor enables signing.
     ///
     /// Multipath descriptors follow [BIP 389] and allow defining both receive and change
     /// derivation paths in a single descriptor using the `<0;1>` syntax.
@@ -279,8 +281,7 @@ impl Wallet {
     /// If you have previously created a wallet, use [`load`](Self::load) instead.
     ///
     /// # Errors
-    /// Returns an error if the descriptor is invalid, not a 2-path multipath descriptor, or if
-    /// the descriptor provided contains an extended private key (`xprv` prefix).
+    /// Returns an error if the descriptor is invalid or not a 2-path multipath descriptor.
     ///
     /// # Synopsis
     ///
@@ -3164,9 +3165,8 @@ mod test {
         let wallet = params.network(Network::Testnet).create_wallet_no_persist();
         assert!(matches!(wallet, Err(DescriptorError::MultiPath)));
 
-        // Test with a private descriptor
-        // You get a Miniscript(Unexpected("Can't make an extended private key with multiple paths
-        // into a public key.")) error.
+        // With miniscript 12.x, private multipath descriptors fail at parse time. This assertion
+        // documents current behavior; remove when miniscript 13.1.0+ is available (see #511).
         let private_multipath_descriptor = "wpkh(tprv8ZgxMBicQKsPdWAHbugK2tjtVtRjKGixYVZUdL7xLHMgXZS6BFbFi1UDb1CHT25Z5PU1F9j7wGxwUiRhqz9E3nZRztikGUV6HoRDYcqPhM4/84'/1'/0'/<0;1>/*)";
         let params = Wallet::create_from_two_path_descriptor(private_multipath_descriptor);
         let wallet = params.network(Network::Testnet).create_wallet_no_persist();
@@ -3187,6 +3187,25 @@ mod test {
         let wallet = params.network(Network::Testnet).create_wallet_no_persist();
         assert!(wallet.is_err());
     }
+
+    #[test]
+    #[ignore = "requires miniscript 13.1.0; enable when bdk_chain 0.24.0 is released (#511)"]
+    fn test_create_two_path_wallet_private_multipath() {
+        let desc_private = "tr(tprv8ZgxMBicQKsPdfqH2fGKQkBAMXpqCpC6v6WhYnEZC7TbpcEavC1N27tHbFP16eLm9XdFDW6cqnGChit8gWXyyT1zQ3xFqUWgHTS9XBQw3j5/1'/2'/0/<0;1>/*)";
+
+        let wallet = Wallet::create_from_two_path_descriptor(desc_private)
+            .network(Network::Testnet)
+            .create_wallet_no_persist()
+            .expect("private multipath descriptor should create wallet");
+
+        let keychains: Vec<_> = wallet.keychains().collect();
+        assert_eq!(keychains.len(), 2);
+
+        let external_addr = wallet.peek_address(KeychainKind::External, 0);
+        let internal_addr = wallet.peek_address(KeychainKind::Internal, 0);
+        assert_ne!(external_addr.address, internal_addr.address);
+    }
+
     #[test]
     fn test_wallet_name_from_descriptor_public_key_check() {
         let secp = SecpCtx::new();
