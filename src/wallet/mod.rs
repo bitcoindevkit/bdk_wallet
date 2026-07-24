@@ -32,7 +32,7 @@ use bdk_chain::{
     },
     tx_graph::{CalculateFeeError, CanonicalTx, TxGraph, TxUpdate},
     BlockId, CanonicalizationParams, ChainPosition, ConfirmationBlockTime, DescriptorExt,
-    FullTxOut, Indexed, IndexedTxGraph, Indexer, Merge,
+    Eligibility, FullTxOut, Indexed, IndexedTxGraph, Indexer, Merge, Trust,
 };
 use bitcoin::{
     absolute,
@@ -1153,14 +1153,52 @@ impl Wallet {
 
     /// Return the balance, separated into available, trusted-pending, untrusted-pending, and
     /// immature values.
+    ///
+    /// A pending output is trusted only when its entire unconfirmed ancestry spends coins we own.
+    /// If any unconfirmed ancestor pulls in a foreign or unknown output, the output is untrusted.
+    ///
+    // NOTE: depends on `CanonicalView` (bitcoindevkit/bdk#2246), not yet in a published
+    // `bdk_chain` release.
     pub fn balance(&self) -> Balance {
-        self.tx_graph.graph().balance(
-            &self.chain,
-            self.chain.tip().block_id(),
-            CanonicalizationParams::default(),
-            self.tx_graph.index.outpoints().iter().cloned(),
-            |&(k, _), _| k == KeychainKind::Internal,
-        )
+        let graph = self.tx_graph.graph();
+        let index = &self.tx_graph.index;
+        let chain_tip = self.chain.tip().block_id();
+
+        // A tx pulls in untrusted funds if any of its inputs spends an output we don't own
+        // (foreign spk, or unknown to our graph). Transitive taint through unconfirmed ancestry
+        // is handled by `classify_outpoints`, which calls this on every unsettled ancestor.
+        let does_taint = |ctx: &CanonicalTx<ChainPosition<ConfirmationBlockTime>>| {
+            ctx.tx.input.iter().any(|txin| {
+                let op = txin.previous_output;
+                !op.is_null()
+                    && graph
+                        .get_txout(op)
+                        .map(|txo| index.index_of_spk(txo.script_pubkey.clone()).is_none())
+                        .unwrap_or(true)
+            })
+        };
+
+        let view = self
+            .chain
+            .canonical_view(graph, chain_tip, CanonicalParams::default());
+
+        let mut balance = Balance::default();
+        for (txout, eligibility) in view.classify_outpoints(
+            index.outpoints().iter().map(|(_, op)| *op),
+            does_taint,
+            |pos| pos.is_confirmed(),
+        ) {
+            let bucket = match eligibility {
+                Eligibility::Settled => &mut balance.confirmed,
+                Eligibility::Immature => &mut balance.immature,
+                Eligibility::Unsettled(Trust::Trusted) => &mut balance.trusted_pending,
+                Eligibility::Unsettled(Trust::Untrusted | Trust::Unknown) => {
+                    &mut balance.untrusted_pending
+                }
+            };
+            *bucket += txout.txout.value;
+        }
+        balance
     }
 
     /// Add an external signer
