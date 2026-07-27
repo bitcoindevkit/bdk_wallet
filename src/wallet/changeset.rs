@@ -417,3 +417,116 @@ impl From<locked_outpoints::ChangeSet> for ChangeSet {
         }
     }
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use alloc::string::ToString;
+    use bdk_chain::Merge;
+    use bitcoin::Network;
+
+    /// Helper to get public descriptors via a temporary wallet.
+    fn test_descriptors() -> (
+        Descriptor<DescriptorPublicKey>,
+        Descriptor<DescriptorPublicKey>,
+    ) {
+        let (desc, change_desc) = crate::test_utils::get_test_wpkh_and_change_desc();
+        let wallet = crate::Wallet::create(desc.to_string(), change_desc.to_string())
+            .network(Network::Regtest)
+            .create_wallet_no_persist()
+            .unwrap();
+        (
+            wallet
+                .public_descriptor(crate::KeychainKind::External)
+                .clone(),
+            wallet
+                .public_descriptor(crate::KeychainKind::Internal)
+                .clone(),
+        )
+    }
+
+    #[test]
+    fn test_default_is_empty() {
+        let cs = ChangeSet::default();
+        assert!(cs.is_empty());
+    }
+
+    #[test]
+    fn test_is_empty_with_descriptor() {
+        let (desc, _) = test_descriptors();
+        let cs = ChangeSet {
+            descriptor: Some(desc),
+            ..Default::default()
+        };
+        assert!(!cs.is_empty());
+    }
+
+    #[test]
+    fn test_is_empty_with_network() {
+        let cs = ChangeSet {
+            network: Some(Network::Regtest),
+            ..Default::default()
+        };
+        assert!(!cs.is_empty());
+    }
+
+    #[test]
+    fn test_merge_sets_descriptor() {
+        let (desc, _) = test_descriptors();
+        let mut cs = ChangeSet::default();
+        let other = ChangeSet {
+            descriptor: Some(desc.clone()),
+            ..Default::default()
+        };
+        cs.merge(other);
+        assert_eq!(cs.descriptor, Some(desc));
+    }
+
+    #[test]
+    fn test_merge_sets_network() {
+        let mut cs = ChangeSet::default();
+        let other = ChangeSet {
+            network: Some(Network::Regtest),
+            ..Default::default()
+        };
+        cs.merge(other);
+        assert_eq!(cs.network, Some(Network::Regtest));
+    }
+
+    #[test]
+    fn test_merge_same_descriptor_is_ok() {
+        let (desc, _) = test_descriptors();
+        let mut cs = ChangeSet {
+            descriptor: Some(desc.clone()),
+            ..Default::default()
+        };
+        let other = ChangeSet {
+            descriptor: Some(desc.clone()),
+            ..Default::default()
+        };
+        cs.merge(other);
+        assert_eq!(cs.descriptor, Some(desc));
+    }
+
+    #[test]
+    fn test_merge_empty_into_non_empty() {
+        let (desc, change_desc) = test_descriptors();
+        let mut cs = ChangeSet {
+            descriptor: Some(desc),
+            change_descriptor: Some(change_desc),
+            network: Some(Network::Regtest),
+            ..Default::default()
+        };
+        let snapshot = cs.clone();
+        cs.merge(ChangeSet::default());
+        assert_eq!(cs, snapshot);
+    }
+
+    #[test]
+    fn test_from_local_chain() {
+        let chain_cs = local_chain::ChangeSet::default();
+        let cs = ChangeSet::from(chain_cs);
+        assert!(cs.descriptor.is_none());
+        assert!(cs.network.is_none());
+    }
+}
