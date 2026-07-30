@@ -73,9 +73,12 @@
 //!
 //! let descriptor = "wpkh(tpubD6NzVbkrYhZ4Xferm7Pz4VnjdcDPFyjVu5K4iZXQ4pVN8Cks4pHVowTBXBKRhX64pkRyJZJN5xAKj4UDNnLPb5p2sSKXhewoYx5GbTdUFWq/0/*)";
 //! let change_descriptor = "wpkh(tpubD6NzVbkrYhZ4Xferm7Pz4VnjdcDPFyjVu5K4iZXQ4pVN8Cks4pHVowTBXBKRhX64pkRyJZJN5xAKj4UDNnLPb5p2sSKXhewoYx5GbTdUFWq/1/*)";
-//! let wallet = Wallet::create(descriptor, change_descriptor)
-//!     .network(Network::Testnet)
-//!     .create_wallet_no_persist()?;
+//! let mut keyring = KeyRing::new(Network::Testnet, KeychainKind::External, descriptor)
+//!     .expect("valid descriptor");
+//! keyring
+//!     .add_descriptor(KeychainKind::Internal, change_descriptor)
+//!     .expect("valid change descriptor");
+//! let wallet = Wallet::create(keyring).create_wallet_no_persist();
 //! let mut external_signers = SignersContainer::new();
 //! external_signers.add_external(
 //!     custom_signer.id(wallet.secp_ctx()),

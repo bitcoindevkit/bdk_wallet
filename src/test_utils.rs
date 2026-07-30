@@ -10,18 +10,24 @@ use bitcoin::{
     absolute, hashes::Hash, transaction,
 };
 
-use crate::{KeychainKind, Update, Wallet};
+use crate::{KeyRing, KeychainKind, Update, Wallet};
 
 /// Return a fake wallet that appears to be funded for testing.
 ///
 /// The funded wallet contains a tx with a 76_000 sats input and two outputs, one spending 25_000
 /// to a foreign address and one returning 50_000 back to the wallet. The remaining 1000
 /// sats are the transaction fee.
-pub fn get_funded_wallet(descriptor: &str, change_descriptor: &str) -> (Wallet, Txid) {
+pub fn get_funded_wallet(
+    descriptor: &str,
+    change_descriptor: &str,
+) -> (Wallet<KeychainKind>, Txid) {
     new_funded_wallet(descriptor, Some(change_descriptor))
 }
 
-fn new_funded_wallet(descriptor: &str, change_descriptor: Option<&str>) -> (Wallet, Txid) {
+fn new_funded_wallet(
+    descriptor: &str,
+    change_descriptor: Option<&str>,
+) -> (Wallet<KeychainKind>, Txid) {
     let (mut wallet, txid, update) = new_wallet_and_funding_update(descriptor, change_descriptor);
     wallet.apply_update(update).unwrap();
     (wallet, txid)
@@ -32,12 +38,12 @@ fn new_funded_wallet(descriptor: &str, change_descriptor: Option<&str>) -> (Wall
 /// The funded wallet contains a tx with a 76_000 sats input and two outputs, one spending 25_000
 /// to a foreign address and one returning 50_000 back to the wallet. The remaining 1000
 /// sats are the transaction fee.
-pub fn get_funded_wallet_single(descriptor: &str) -> (Wallet, Txid) {
+pub fn get_funded_wallet_single(descriptor: &str) -> (Wallet<KeychainKind>, Txid) {
     new_funded_wallet(descriptor, None)
 }
 
 /// Get funded segwit wallet
-pub fn get_funded_wallet_wpkh() -> (Wallet, Txid) {
+pub fn get_funded_wallet_wpkh() -> (Wallet<KeychainKind>, Txid) {
     let (desc, change_desc) = get_test_wpkh_and_change_desc();
     get_funded_wallet(desc, change_desc)
 }
@@ -50,17 +56,21 @@ pub fn get_funded_wallet_wpkh() -> (Wallet, Txid) {
 pub fn new_wallet_and_funding_update(
     descriptor: &str,
     change_descriptor: Option<&str>,
-) -> (Wallet, Txid, Update) {
-    let params = if let Some(change_desc) = change_descriptor {
-        Wallet::create(descriptor.to_string(), change_desc.to_string())
-    } else {
-        Wallet::create_single(descriptor.to_string())
-    };
+) -> (Wallet<KeychainKind>, Txid, Update<KeychainKind>) {
+    let mut keyring = KeyRing::new(
+        Network::Regtest,
+        KeychainKind::External,
+        descriptor.to_string(),
+    )
+    .expect("descriptor must be valid");
 
-    let wallet = params
-        .network(Network::Regtest)
-        .create_wallet_no_persist()
-        .expect("descriptors must be valid");
+    if let Some(change_desc) = change_descriptor {
+        keyring
+            .add_descriptor(KeychainKind::Internal, change_desc.to_string())
+            .expect("change descriptor must be valid");
+    }
+
+    let wallet = Wallet::create(keyring).create_wallet_no_persist();
 
     let receive_address = wallet.peek_address(KeychainKind::External, 0).address;
     let sendto_address = Address::from_str("bcrt1q3qtze4ys45tgdvguj66zrk4fu6hq3a3v9pfly5")
@@ -257,7 +267,10 @@ impl From<ConfirmationBlockTime> for ReceiveTo {
 }
 
 /// Receive a tx output with the given value in the latest block
-pub fn receive_output_in_latest_block(wallet: &mut Wallet, value: Amount) -> OutPoint {
+pub fn receive_output_in_latest_block(
+    wallet: &mut Wallet<KeychainKind>,
+    value: Amount,
+) -> OutPoint {
     let latest_cp = wallet.latest_checkpoint();
     let height = latest_cp.height();
     assert!(height > 0, "cannot receive tx into genesis block");
@@ -273,7 +286,7 @@ pub fn receive_output_in_latest_block(wallet: &mut Wallet, value: Amount) -> Out
 
 /// Receive a tx output with the given value and chain position
 pub fn receive_output(
-    wallet: &mut Wallet,
+    wallet: &mut Wallet<KeychainKind>,
     value: Amount,
     receive_to: impl Into<ReceiveTo>,
 ) -> OutPoint {
@@ -283,7 +296,7 @@ pub fn receive_output(
 
 /// Receive a tx output to an address with the given value and chain position
 pub fn receive_output_to_address(
-    wallet: &mut Wallet,
+    wallet: &mut Wallet<KeychainKind>,
     addr: Address,
     value: Amount,
     receive_to: impl Into<ReceiveTo>,
@@ -312,7 +325,7 @@ pub fn receive_output_to_address(
 /// Insert a checkpoint into the wallet. This can be used to extend the wallet's local chain
 /// or to insert a block that did not exist previously. Note that if replacing a block with
 /// a different one at the same height, then all later blocks are evicted as well.
-pub fn insert_checkpoint(wallet: &mut Wallet, block: BlockId) {
+pub fn insert_checkpoint(wallet: &mut Wallet<KeychainKind>, block: BlockId) {
     let mut cp = wallet.latest_checkpoint();
     cp = cp.insert(block);
     wallet
@@ -328,7 +341,7 @@ pub fn insert_checkpoint(wallet: &mut Wallet, block: BlockId) {
 /// must always appear confirmed.
 ///
 /// This will also insert the anchor `block_id`. See [`insert_anchor`] for more.
-pub fn insert_tx_anchor(wallet: &mut Wallet, tx: Transaction, block_id: BlockId) {
+pub fn insert_tx_anchor(wallet: &mut Wallet<KeychainKind>, tx: Transaction, block_id: BlockId) {
     insert_checkpoint(wallet, block_id);
     let anchor = ConfirmationBlockTime {
         block_id,
@@ -351,7 +364,7 @@ pub fn insert_tx_anchor(wallet: &mut Wallet, tx: Transaction, block_id: BlockId)
 /// Inserts a transaction into the local view, assuming it is currently present in the mempool.
 ///
 /// This can be used, for example, to track a transaction immediately after it is broadcast.
-pub fn insert_tx(wallet: &mut Wallet, tx: Transaction) {
+pub fn insert_tx(wallet: &mut Wallet<KeychainKind>, tx: Transaction) {
     let txid = tx.compute_txid();
     let seen_at = std::time::UNIX_EPOCH.elapsed().unwrap().as_secs();
     let mut tx_update = TxUpdate::default();
@@ -368,7 +381,7 @@ pub fn insert_tx(wallet: &mut Wallet, tx: Transaction) {
 /// Simulates confirming a tx with `txid` by applying an update to the wallet containing
 /// the given `anchor`. Note: to be considered confirmed the anchor block must exist in
 /// the current active chain.
-pub fn insert_anchor(wallet: &mut Wallet, txid: Txid, anchor: ConfirmationBlockTime) {
+pub fn insert_anchor(wallet: &mut Wallet<KeychainKind>, txid: Txid, anchor: ConfirmationBlockTime) {
     let mut tx_update = TxUpdate::default();
     tx_update.anchors = [(anchor, txid)].into();
     wallet
@@ -380,7 +393,7 @@ pub fn insert_anchor(wallet: &mut Wallet, txid: Txid, anchor: ConfirmationBlockT
 }
 
 /// Marks the given `txid` seen as unconfirmed at `seen_at`
-pub fn insert_seen_at(wallet: &mut Wallet, txid: Txid, seen_at: u64) {
+pub fn insert_seen_at(wallet: &mut Wallet<KeychainKind>, txid: Txid, seen_at: u64) {
     let mut tx_update = TxUpdate::default();
     tx_update.seen_ats = [(txid, seen_at)].into();
     wallet

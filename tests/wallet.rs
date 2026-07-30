@@ -7,14 +7,14 @@ use bdk_wallet::KeychainKind;
 use bdk_wallet::coin_selection;
 use bdk_wallet::coin_selection::InsufficientFunds;
 use bdk_wallet::descriptor::policy::BuildSatisfaction;
-use bdk_wallet::descriptor::{DescriptorError, ExtractPolicy, IntoWalletDescriptor, calc_checksum};
+use bdk_wallet::descriptor::{ExtractPolicy, IntoWalletDescriptor, calc_checksum};
 use bdk_wallet::error::CreateTxError;
 use bdk_wallet::psbt::PsbtUtils;
 use bdk_wallet::signer::{SignOptions, SignerError, SignersContainer};
 use bdk_wallet::test_utils::*;
 use bdk_wallet::{
-    AddressInfo, Balance, FinalizeInputOutcome, IndexOutOfBoundsError, PersistedWallet, Update,
-    Wallet, WalletTx,
+    AddressInfo, Balance, FinalizeInputOutcome, IndexOutOfBoundsError, KeyRing, PersistedWallet,
+    Update, Wallet, WalletTx, keyring::KeyRingError,
 };
 use bitcoin::constants::COINBASE_MATURITY;
 use bitcoin::hashes::Hash;
@@ -35,22 +35,22 @@ use common::signers_from_descriptor;
 fn test_error_external_and_internal_are_the_same() {
     // identical descriptors should fail to create wallet
     let desc = get_test_wpkh();
-    let err = Wallet::create(desc, desc)
-        .network(Network::Testnet)
-        .create_wallet_no_persist();
+    let mut keyring =
+        KeyRing::new(Network::Testnet, KeychainKind::External, desc).expect("valid descriptor");
+    let err = keyring.add_descriptor(KeychainKind::Internal, desc);
     assert!(
-        matches!(&err, Err(DescriptorError::ExternalAndInternalAreTheSame)),
+        matches!(&err, Err(KeyRingError::DescriptorAlreadyAssigned(..))),
         "expected same descriptors error, got {err:?}",
     );
 
     // public + private of same descriptor should fail to create wallet
     let desc = "wpkh(tprv8ZgxMBicQKsPdcAqYBpzAFwU5yxBUo88ggoBqu1qPcHUfSbKK1sKMLmC7EAk438btHQrSdu3jGGQa6PA71nvH5nkDexhLteJqkM4dQmWF9g/84'/1'/0'/0/*)";
     let change_desc = "wpkh([3c31d632/84'/1'/0']tpubDCYwFkks2cg78N7eoYbBatsFEGje8vW8arSKW4rLwD1AU1s9KJMDRHE32JkvYERuiFjArrsH7qpWSpJATed5ShZbG9KsskA5Rmi6NSYgYN2/0/*)";
-    let err = Wallet::create(desc, change_desc)
-        .network(Network::Testnet)
-        .create_wallet_no_persist();
+    let mut keyring =
+        KeyRing::new(Network::Testnet, KeychainKind::External, desc).expect("valid descriptor");
+    let err = keyring.add_descriptor(KeychainKind::Internal, change_desc);
     assert!(
-        matches!(err, Err(DescriptorError::ExternalAndInternalAreTheSame)),
+        matches!(err, Err(KeyRingError::DescriptorAlreadyAssigned(..))),
         "expected same descriptors error, got {err:?}",
     );
 }
@@ -1074,10 +1074,12 @@ fn test_create_tx_policy_path_required() {
 #[test]
 fn test_create_tx_policy_path_no_csv() {
     let (descriptor, change_descriptor) = get_test_wpkh_and_change_desc();
-    let mut wallet = Wallet::create(descriptor, change_descriptor)
-        .network(Network::Regtest)
-        .create_wallet_no_persist()
-        .expect("wallet");
+    let mut keyring = KeyRing::new(Network::Regtest, KeychainKind::External, descriptor)
+        .expect("valid descriptor");
+    keyring
+        .add_descriptor(KeychainKind::Internal, change_descriptor)
+        .expect("valid change descriptor");
+    let mut wallet = Wallet::create(keyring).create_wallet_no_persist();
 
     let tx = Transaction {
         version: transaction::Version::non_standard(0),
@@ -1282,18 +1284,26 @@ fn test_create_tx_increment_change_index() {
         // create wallet
         let (params, change_keychain) = match test.change_descriptor {
             Some(change_desc) => (
-                Wallet::create(test.descriptor, change_desc),
+                Wallet::create({
+                    let mut keyring =
+                        KeyRing::new(Network::Regtest, KeychainKind::External, test.descriptor)
+                            .expect("valid descriptor");
+                    keyring
+                        .add_descriptor(KeychainKind::Internal, change_desc)
+                        .expect("valid change descriptor");
+                    keyring
+                }),
                 KeychainKind::Internal,
             ),
             None => (
-                Wallet::create_single(test.descriptor),
+                Wallet::create(
+                    KeyRing::new(Network::Regtest, KeychainKind::External, test.descriptor)
+                        .expect("valid descriptors"),
+                ),
                 KeychainKind::External,
             ),
         };
-        let mut wallet = params
-            .network(Network::Regtest)
-            .create_wallet_no_persist()
-            .unwrap();
+        let mut wallet = params.create_wallet_no_persist();
         // fund wallet
         receive_output(&mut wallet, amount, ReceiveTo::Mempool(0));
         // create tx
@@ -2097,10 +2107,12 @@ fn test_sign_nonstandard_sighash() {
 fn test_unused_address() {
     let descriptor = "wpkh(tpubEBr4i6yk5nf5DAaJpsi9N2pPYBeJ7fZ5Z9rmN4977iYLCGco1VyjB9tvvuvYtfZzjD5A8igzgw3HeWeeKFmanHYqksqZXYXGsw5zjnj7KM9/*)";
     let change_descriptor = get_test_wpkh();
-    let mut wallet = Wallet::create(descriptor, change_descriptor)
-        .network(Network::Testnet)
-        .create_wallet_no_persist()
-        .expect("wallet");
+    let mut keyring = KeyRing::new(Network::Testnet, KeychainKind::External, descriptor)
+        .expect("valid descriptor");
+    keyring
+        .add_descriptor(KeychainKind::Internal, change_descriptor)
+        .expect("valid change descriptor");
+    let mut wallet = Wallet::create(keyring).create_wallet_no_persist();
 
     // `list_unused_addresses` should be empty if we haven't revealed any
     assert!(
@@ -2130,10 +2142,12 @@ fn test_unused_address() {
 fn test_next_unused_address() {
     let descriptor = "wpkh(tpubEBr4i6yk5nf5DAaJpsi9N2pPYBeJ7fZ5Z9rmN4977iYLCGco1VyjB9tvvuvYtfZzjD5A8igzgw3HeWeeKFmanHYqksqZXYXGsw5zjnj7KM9/*)";
     let change_descriptor = get_test_wpkh();
-    let mut wallet = Wallet::create(descriptor, change_descriptor)
-        .network(Network::Testnet)
-        .create_wallet_no_persist()
-        .expect("wallet");
+    let mut keyring = KeyRing::new(Network::Testnet, KeychainKind::External, descriptor)
+        .expect("valid descriptor");
+    keyring
+        .add_descriptor(KeychainKind::Internal, change_descriptor)
+        .expect("valid change descriptor");
+    let mut wallet = Wallet::create(keyring).create_wallet_no_persist();
     assert_eq!(wallet.derivation_index(KeychainKind::External), None);
 
     assert_eq!(
@@ -2180,10 +2194,12 @@ fn test_next_unused_address() {
 fn test_peek_address_at_index() {
     let descriptor = "wpkh(tpubEBr4i6yk5nf5DAaJpsi9N2pPYBeJ7fZ5Z9rmN4977iYLCGco1VyjB9tvvuvYtfZzjD5A8igzgw3HeWeeKFmanHYqksqZXYXGsw5zjnj7KM9/*)";
     let change_descriptor = get_test_wpkh();
-    let mut wallet = Wallet::create(descriptor, change_descriptor)
-        .network(Network::Testnet)
-        .create_wallet_no_persist()
-        .expect("wallet");
+    let mut keyring = KeyRing::new(Network::Testnet, KeychainKind::External, descriptor)
+        .expect("valid descriptor");
+    keyring
+        .add_descriptor(KeychainKind::Internal, change_descriptor)
+        .expect("valid change descriptor");
+    let mut wallet = Wallet::create(keyring).create_wallet_no_persist();
 
     assert_eq!(
         wallet.peek_address(KeychainKind::External, 1).to_string(),
@@ -2219,10 +2235,12 @@ fn test_peek_address_at_index() {
 #[test]
 fn test_peek_address_at_index_not_derivable() {
     let descriptor = "wpkh(tpubEBr4i6yk5nf5DAaJpsi9N2pPYBeJ7fZ5Z9rmN4977iYLCGco1VyjB9tvvuvYtfZzjD5A8igzgw3HeWeeKFmanHYqksqZXYXGsw5zjnj7KM9/1)";
-    let wallet = Wallet::create(descriptor, get_test_wpkh())
-        .network(Network::Testnet)
-        .create_wallet_no_persist()
-        .unwrap();
+    let mut keyring = KeyRing::new(Network::Testnet, KeychainKind::External, descriptor)
+        .expect("valid descriptor");
+    keyring
+        .add_descriptor(KeychainKind::Internal, get_test_wpkh())
+        .expect("valid change descriptor");
+    let wallet = Wallet::create(keyring).create_wallet_no_persist();
 
     assert_eq!(
         wallet.peek_address(KeychainKind::External, 1).to_string(),
@@ -2243,10 +2261,12 @@ fn test_peek_address_at_index_not_derivable() {
 #[test]
 fn test_returns_index_and_address() {
     let descriptor = "wpkh(tpubEBr4i6yk5nf5DAaJpsi9N2pPYBeJ7fZ5Z9rmN4977iYLCGco1VyjB9tvvuvYtfZzjD5A8igzgw3HeWeeKFmanHYqksqZXYXGsw5zjnj7KM9/*)";
-    let mut wallet = Wallet::create(descriptor, get_test_wpkh())
-        .network(Network::Testnet)
-        .create_wallet_no_persist()
-        .unwrap();
+    let mut keyring = KeyRing::new(Network::Testnet, KeychainKind::External, descriptor)
+        .expect("valid descriptor");
+    keyring
+        .add_descriptor(KeychainKind::Internal, get_test_wpkh())
+        .expect("valid change descriptor");
+    let mut wallet = Wallet::create(keyring).create_wallet_no_persist();
 
     // new index 0
     assert_eq!(
@@ -2312,13 +2332,16 @@ fn test_sending_to_bip350_bech32m_address() {
 fn test_get_address() {
     use bdk_wallet::descriptor::template::Bip84;
     let key = bitcoin::bip32::Xpriv::from_str("tprv8ZgxMBicQKsPcx5nBGsR63Pe8KnRUqmbJNENAfGftF3yuXoMMoVJJcYeUw5eVkm9WBPjWYt6HMWYJNesB5HaNVBaFc1M6dRjWSYnmewUMYy").unwrap();
-    let wallet = Wallet::create(
+    let mut keyring = KeyRing::new(
+        Network::Regtest,
+        KeychainKind::External,
         Bip84(key, KeychainKind::External),
-        Bip84(key, KeychainKind::Internal),
     )
-    .network(Network::Regtest)
-    .create_wallet_no_persist()
-    .unwrap();
+    .expect("valid descriptor");
+    keyring
+        .add_descriptor(KeychainKind::Internal, Bip84(key, KeychainKind::Internal))
+        .expect("valid change descriptor");
+    let wallet = Wallet::create(keyring).create_wallet_no_persist();
 
     assert_eq!(
         wallet.peek_address(KeychainKind::External, 0),
@@ -2346,10 +2369,12 @@ fn test_get_address() {
 #[test]
 fn test_reveal_addresses() {
     let (desc, change_desc) = get_test_tr_single_sig_xprv_and_change_desc();
-    let mut wallet = Wallet::create(desc, change_desc)
-        .network(Network::Signet)
-        .create_wallet_no_persist()
-        .unwrap();
+    let mut keyring =
+        KeyRing::new(Network::Signet, KeychainKind::External, desc).expect("valid descriptor");
+    keyring
+        .add_descriptor(KeychainKind::Internal, change_desc)
+        .expect("valid change descriptor");
+    let mut wallet = Wallet::create(keyring).create_wallet_no_persist();
     let keychain = KeychainKind::External;
 
     let last_revealed_addr = wallet.reveal_addresses_to(keychain, 9).last().unwrap();
@@ -2370,13 +2395,16 @@ fn test_get_address_no_reuse() {
     use std::collections::HashSet;
 
     let key = bitcoin::bip32::Xpriv::from_str("tprv8ZgxMBicQKsPcx5nBGsR63Pe8KnRUqmbJNENAfGftF3yuXoMMoVJJcYeUw5eVkm9WBPjWYt6HMWYJNesB5HaNVBaFc1M6dRjWSYnmewUMYy").unwrap();
-    let mut wallet = Wallet::create(
+    let mut keyring = KeyRing::new(
+        Network::Regtest,
+        KeychainKind::External,
         Bip84(key, KeychainKind::External),
-        Bip84(key, KeychainKind::Internal),
     )
-    .network(Network::Regtest)
-    .create_wallet_no_persist()
-    .unwrap();
+    .expect("valid descriptor");
+    keyring
+        .add_descriptor(KeychainKind::Internal, Bip84(key, KeychainKind::Internal))
+        .expect("valid change descriptor");
+    let mut wallet = Wallet::create(keyring).create_wallet_no_persist();
 
     let mut used_set = HashSet::new();
 
@@ -2612,7 +2640,7 @@ fn test_taproot_sign_using_non_witness_utxo() {
     );
 }
 
-fn test_spend_from_wallet(mut wallet: Wallet, descriptor: impl IntoWalletDescriptor) {
+fn test_spend_from_wallet(mut wallet: Wallet<KeychainKind>, descriptor: impl IntoWalletDescriptor) {
     let signers = signers_from_descriptor(&wallet, descriptor);
     let addr = wallet.next_unused_address(KeychainKind::External);
 
@@ -2822,10 +2850,16 @@ fn test_taproot_sign_derive_index_from_psbt() {
     let mut psbt = builder.finish().unwrap();
 
     // re-create the wallet with an empty db
-    let wallet_empty = Wallet::create(get_test_tr_single_sig_xprv(), get_test_tr_single_sig())
-        .network(Network::Regtest)
-        .create_wallet_no_persist()
-        .unwrap();
+    let mut keyring = KeyRing::new(
+        Network::Regtest,
+        KeychainKind::External,
+        get_test_tr_single_sig_xprv(),
+    )
+    .expect("valid descriptor");
+    keyring
+        .add_descriptor(KeychainKind::Internal, get_test_tr_single_sig())
+        .expect("valid change descriptor");
+    let wallet_empty = Wallet::create(keyring).create_wallet_no_persist();
 
     // signing with an empty db means that we will only look at the psbt to infer the
     // derivation index
@@ -2932,10 +2966,12 @@ fn test_taproot_sign_non_default_sighash() {
 #[test]
 fn test_spend_coinbase() {
     let (desc, change_desc) = get_test_wpkh_and_change_desc();
-    let mut wallet = Wallet::create(desc, change_desc)
-        .network(Network::Regtest)
-        .create_wallet_no_persist()
-        .unwrap();
+    let mut keyring =
+        KeyRing::new(Network::Regtest, KeychainKind::External, desc).expect("valid descriptor");
+    keyring
+        .add_descriptor(KeychainKind::Internal, change_desc)
+        .expect("valid change descriptor");
+    let mut wallet = Wallet::create(keyring).create_wallet_no_persist();
 
     let confirmation_height = 5;
     let confirmation_block_id = BlockId {
@@ -3259,17 +3295,22 @@ fn test_keychains_with_overlapping_spks() {
 #[test]
 fn test_thread_safety() {
     fn thread_safe<T: Send + Sync>() {}
-    thread_safe::<Wallet>(); // compiles only if true
-    thread_safe::<PersistedWallet<bdk_chain::rusqlite::Connection>>();
+    thread_safe::<Wallet<KeychainKind>>(); // compiles only if true
+    thread_safe::<PersistedWallet<KeychainKind, bdk_chain::rusqlite::Connection>>();
 }
 
 #[test]
 fn single_descriptor_wallet_can_create_tx_and_receive_change() {
     // create single descriptor wallet and fund it
-    let mut wallet = Wallet::create_single(get_test_tr_single_sig_xprv())
-        .network(Network::Testnet)
-        .create_wallet_no_persist()
-        .unwrap();
+    let mut wallet = Wallet::create(
+        KeyRing::new(
+            Network::Testnet,
+            KeychainKind::External,
+            get_test_tr_single_sig_xprv(),
+        )
+        .expect("valid descriptors"),
+    )
+    .create_wallet_no_persist();
     assert_eq!(wallet.keychains().count(), 1);
     let amount = Amount::from_sat(5_000);
     receive_output(&mut wallet, amount * 2, ReceiveTo::Mempool(2));
@@ -3466,10 +3507,12 @@ fn test_tx_ordering_untouched_preserves_insertion_ordering() {
 fn test_tx_ordering_untouched_preserves_insertion_ordering_bnb_success() {
     // Create empty wallet
     let (desc, change_desc) = get_test_wpkh_and_change_desc();
-    let mut wallet = Wallet::create(desc, change_desc)
-        .network(bdk_wallet::bitcoin::Network::Regtest)
-        .create_wallet_no_persist()
-        .unwrap();
+    let mut keyring =
+        KeyRing::new(Network::Regtest, KeychainKind::External, desc).expect("valid descriptor");
+    keyring
+        .add_descriptor(KeychainKind::Internal, change_desc)
+        .expect("valid change descriptor");
+    let mut wallet = Wallet::create(keyring).create_wallet_no_persist();
 
     // Set up UTXOs with specific values so BnB can find an exact match (avoiding change).
     // - outpoint_0 (required): 35,000 sat - not enough alone
@@ -3514,10 +3557,12 @@ fn test_tx_ordering_untouched_preserves_insertion_ordering_bnb_success() {
 #[test]
 fn test_create_and_spend_from_truc_tx() -> anyhow::Result<()> {
     let (descriptor, change_descriptor) = get_test_wpkh_and_change_desc();
-    let mut wallet = Wallet::create(descriptor, change_descriptor)
-        .network(Network::Regtest)
-        .create_wallet_no_persist()
-        .expect("should create wallet successfully!");
+    let mut keyring = KeyRing::new(Network::Regtest, KeychainKind::External, descriptor)
+        .expect("valid descriptor");
+    keyring
+        .add_descriptor(KeychainKind::Internal, change_descriptor)
+        .expect("valid change descriptor");
+    let mut wallet = Wallet::create(keyring).create_wallet_no_persist();
 
     // establish a chain tip so confirmed funds can be anchored to a block in the active chain.
     let block = BlockId {
@@ -3569,9 +3614,14 @@ fn test_create_and_spend_from_truc_tx() -> anyhow::Result<()> {
 
     let balance = wallet.balance();
     assert_eq!(
+        balance.trusted_pending,
+        Amount::ZERO,
+        "nothing is trusted before it is mined"
+    );
+    assert_eq!(
         balance.untrusted_pending,
-        Amount::from_sat(125_000),
-        "wallet balance SHOULD have 125K unconfirmed (TRUC) UTXO after txA!"
+        Amount::from_sat(249_859),
+        "wallet balance SHOULD have the 125K unconfirmed (TRUC) UTXO after txA, plus change!"
     );
 
     // create txB (non-TRUC)
@@ -3606,8 +3656,8 @@ fn test_create_and_spend_from_truc_tx() -> anyhow::Result<()> {
     let balance = wallet.balance();
     assert_eq!(
         balance.untrusted_pending,
-        Amount::from_sat(250_000),
-        "wallet balance SHOULD have 250K unconfirmed, both non-TRUC (txB) and TRUC (txA) UTXOs after txB!"
+        Amount::from_sat(499_718),
+        "wallet balance SHOULD have both non-TRUC (txB) and TRUC (txA) UTXOs after txB, plus change!"
     );
 
     // create txC (TRUC)
@@ -3640,8 +3690,8 @@ fn test_create_and_spend_from_truc_tx() -> anyhow::Result<()> {
     let balance = wallet.balance();
     assert_eq!(
         balance.untrusted_pending,
-        Amount::from_sat(325_000),
-        "wallet balance SHOULD have 325K unconfirmed UTXOs after txC!"
+        Amount::from_sat(499_509),
+        "wallet balance SHOULD have all unconfirmed UTXOs after txC, including change!"
     );
 
     // create txD (non-TRUC)
@@ -3661,4 +3711,58 @@ fn test_create_and_spend_from_truc_tx() -> anyhow::Result<()> {
     );
 
     Ok(())
+}
+
+/// A keychain type that is not [`KeychainKind`], with a keychain that has no conventional
+/// counterpart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum SyncKeychain {
+    Receive,
+    Change,
+    Cold,
+}
+
+/// Sync and full-scan requests can be built from a wallet generic over `K`.
+#[test]
+fn test_sync_requests_are_generic_over_keychain() {
+    let (desc, change_desc) = get_test_tr_single_sig_xprv_and_change_desc();
+    let cold_desc = get_test_tr_single_sig_xprv();
+
+    let mut keyring =
+        KeyRing::new(Network::Regtest, SyncKeychain::Receive, desc).expect("valid descriptor");
+    keyring
+        .add_descriptor(SyncKeychain::Change, change_desc)
+        .expect("valid change descriptor");
+    keyring
+        .add_descriptor(SyncKeychain::Cold, cold_desc)
+        .expect("valid cold descriptor");
+    let mut wallet = Wallet::create(keyring).create_wallet_no_persist();
+
+    // A full scan covers every keychain the wallet holds, including the one with no
+    // `KeychainKind` equivalent.
+    let mut request = wallet.start_full_scan().build();
+    let mut keychains = request.keychains();
+    keychains.sort();
+    assert_eq!(
+        keychains,
+        vec![
+            SyncKeychain::Receive,
+            SyncKeychain::Change,
+            SyncKeychain::Cold
+        ]
+    );
+    assert!(
+        request.iter_spks(SyncKeychain::Cold).next().is_some(),
+        "full scan must produce spks for a custom keychain"
+    );
+
+    // A sync covers exactly the revealed spks, across all keychains.
+    let _ = wallet.reveal_addresses_to(SyncKeychain::Receive, 2); // indices 0..=2
+    let _ = wallet.reveal_next_address(SyncKeychain::Cold); // index 0
+    let request = wallet.start_sync_with_revealed_spks_at(0).build();
+    assert_eq!(
+        request.progress().total_spks(),
+        4,
+        "sync must cover the 3 revealed receive spks and the 1 revealed cold spk"
+    );
 }

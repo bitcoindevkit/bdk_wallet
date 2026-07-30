@@ -136,6 +136,20 @@ where
         self.keychains.get(keychain)
     }
 
+    /// Convert into the parameters used to create a [`Wallet`](crate::Wallet).
+    ///
+    /// Prefer [`Wallet::create`](crate::Wallet::create), which calls this for you.
+    pub fn into_params(self) -> crate::CreateParams<K> {
+        crate::CreateParams {
+            secp: self.secp,
+            descriptors: self.keychains,
+            network: self.network,
+            genesis_hash: None,
+            lookahead: bdk_chain::keychain_txout::DEFAULT_LOOKAHEAD,
+            use_spk_cache: false,
+        }
+    }
+
     fn validate(
         secp: &SecpCtx,
         network: Network,

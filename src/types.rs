@@ -30,6 +30,49 @@ pub enum KeychainKind {
     Internal = 1,
 }
 
+/// Stored as the text `"external"` / `"internal"` so a database is readable and stays valid if
+/// the enum's discriminants ever change.
+#[cfg(feature = "rusqlite")]
+impl bdk_chain::rusqlite::ToSql for KeychainKind {
+    fn to_sql(&self) -> bdk_chain::rusqlite::Result<bdk_chain::rusqlite::types::ToSqlOutput<'_>> {
+        let s = match self {
+            KeychainKind::External => "external",
+            KeychainKind::Internal => "internal",
+        };
+        Ok(bdk_chain::rusqlite::types::ToSqlOutput::from(s))
+    }
+}
+
+#[cfg(feature = "rusqlite")]
+impl bdk_chain::rusqlite::types::FromSql for KeychainKind {
+    fn column_result(
+        value: bdk_chain::rusqlite::types::ValueRef<'_>,
+    ) -> bdk_chain::rusqlite::types::FromSqlResult<Self> {
+        match value.as_str()? {
+            "external" => Ok(KeychainKind::External),
+            "internal" => Ok(KeychainKind::Internal),
+            other => Err(bdk_chain::rusqlite::types::FromSqlError::Other(
+                alloc::boxed::Box::new(UnknownKeychain(alloc::string::String::from(other))),
+            )),
+        }
+    }
+}
+
+/// A keychain column held a value this wallet does not recognise.
+#[cfg(feature = "rusqlite")]
+#[derive(Debug)]
+pub struct UnknownKeychain(pub alloc::string::String);
+
+#[cfg(feature = "rusqlite")]
+impl core::fmt::Display for UnknownKeychain {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "unknown keychain: {}", self.0)
+    }
+}
+
+#[cfg(feature = "rusqlite")]
+impl core::error::Error for UnknownKeychain {}
+
 impl KeychainKind {
     /// Return [`KeychainKind`] as a byte
     pub fn as_byte(&self) -> u8 {
@@ -62,13 +105,13 @@ impl AsRef<[u8]> for KeychainKind {
 ///
 /// [`Wallet`]: crate::Wallet
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
-pub struct LocalOutput {
+pub struct LocalOutput<K> {
     /// Reference to a transaction output
     pub outpoint: OutPoint,
     /// Transaction output
     pub txout: TxOut,
     /// Type of keychain
-    pub keychain: KeychainKind,
+    pub keychain: K,
     /// Whether this UTXO is spent or not
     pub is_spent: bool,
     /// The derivation index for the script pubkey in the wallet
@@ -94,7 +137,7 @@ pub struct WeightedUtxo {
 /// An unspent transaction output (UTXO).
 pub enum Utxo {
     /// A UTXO owned by the local wallet.
-    Local(LocalOutput),
+    Local(LocalOutput<KeychainKind>),
     /// A UTXO owned by another wallet.
     Foreign {
         /// The location of the output.

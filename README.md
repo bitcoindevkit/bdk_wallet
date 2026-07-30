@@ -79,7 +79,7 @@ To persist `Wallet` state use a data storage crate that reads and writes [`Chang
 
 ```rust,no_run
 use bdk_wallet::rusqlite;
-use bdk_wallet::{KeychainKind, Wallet};
+use bdk_wallet::{KeyRing, KeychainKind, Wallet};
 
 // Open or create a new SQLite database for wallet data.
 let db_path = "my_wallet.sqlite";
@@ -96,9 +96,11 @@ let mut wallet = match Wallet::load()
     .load_wallet(&mut conn)?
 {
     Some(wallet) => wallet,
-    None => Wallet::create(descriptor, change_descriptor)
-        .network(network)
-        .create_wallet(&mut conn)?,
+    None => {
+        let mut keyring = KeyRing::new(network, KeychainKind::External, descriptor)?;
+        keyring.add_descriptor(KeychainKind::Internal, change_descriptor)?;
+        Wallet::create(keyring).create_wallet(&mut conn)?
+    }
 };
 
 // Get a new address to receive bitcoin!

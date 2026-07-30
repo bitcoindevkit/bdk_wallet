@@ -6,7 +6,7 @@ use bdk_chain::BlockId;
 use bdk_tx::ChangeScript;
 use bdk_wallet::psbt::PsbtParams;
 use bdk_wallet::test_utils::*;
-use bdk_wallet::{KeychainKind, Wallet};
+use bdk_wallet::{KeyRing, KeychainKind, Wallet};
 use bitcoin::{Amount, FeeRate, TxIn, TxOut};
 use miniscript::{DefiniteDescriptorKey, Descriptor};
 
@@ -19,9 +19,12 @@ fn main() -> anyhow::Result<()> {
     let (desc, change_desc) = get_test_wpkh_and_change_desc();
 
     // Create wallet and "fund" it with a single UTXO.
-    let mut wallet = Wallet::create(desc, change_desc)
-        .network(NETWORK)
-        .create_wallet_no_persist()?;
+    let mut keyring =
+        KeyRing::new(NETWORK, KeychainKind::External, desc).expect("valid descriptor");
+    keyring
+        .add_descriptor(KeychainKind::Internal, change_desc)
+        .expect("valid change descriptor");
+    let mut wallet = Wallet::create(keyring).create_wallet_no_persist();
 
     fund_wallet(&mut wallet)?;
 
@@ -156,7 +159,7 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn fund_wallet(wallet: &mut Wallet) -> anyhow::Result<()> {
+fn fund_wallet(wallet: &mut Wallet<KeychainKind>) -> anyhow::Result<()> {
     let anchor_block = BlockId {
         height: 1,
         hash: "3bcc1c447c6b3886f43e416b5c21cf5c139dc4829a71dc78609bc8f6235611c5".parse()?,

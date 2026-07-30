@@ -1,3 +1,4 @@
+use crate::collections::BTreeMap;
 use alloc::boxed::Box;
 
 use bdk_chain::keychain_txout::DEFAULT_LOOKAHEAD;
@@ -5,8 +6,7 @@ use bitcoin::{BlockHash, Network, NetworkKind};
 use miniscript::descriptor::KeyMap;
 
 use crate::{
-    AsyncWalletPersister, CreateWithPersistError, KeychainKind, LoadWithPersistError, Wallet,
-    WalletPersister,
+    AsyncWalletPersister, CreateWithPersistError, LoadWithPersistError, Wallet, WalletPersister,
     descriptor::{DescriptorError, ExtendedDescriptor, IntoWalletDescriptor},
     utils::SecpCtx,
 };
@@ -58,86 +58,16 @@ where
 
 /// Parameters for [`Wallet::create`] or [`PersistedWallet::create`].
 #[must_use]
-pub struct CreateParams {
-    pub(crate) descriptor: DescriptorToExtract,
-    pub(crate) change_descriptor: Option<DescriptorToExtract>,
+pub struct CreateParams<K: Ord> {
+    pub(crate) secp: SecpCtx,
+    pub(crate) descriptors: BTreeMap<K, ExtendedDescriptor>,
     pub(crate) network: Network,
     pub(crate) genesis_hash: Option<BlockHash>,
     pub(crate) lookahead: u32,
     pub(crate) use_spk_cache: bool,
 }
 
-impl CreateParams {
-    /// Construct parameters with provided `descriptor`.
-    ///
-    /// Default values:
-    /// * `change_descriptor` = `None`
-    /// * `network` = [`Network::Bitcoin`]
-    /// * `genesis_hash` = `None`
-    /// * `lookahead` = [`DEFAULT_LOOKAHEAD`]
-    ///
-    /// Use this method only when building a wallet with a single descriptor. See
-    /// also [`Wallet::create_single`].
-    pub fn new_single<D: IntoWalletDescriptor + Send + 'static>(descriptor: D) -> Self {
-        Self {
-            descriptor: make_descriptor_to_extract(descriptor),
-            change_descriptor: None,
-            network: Network::Bitcoin,
-            genesis_hash: None,
-            lookahead: DEFAULT_LOOKAHEAD,
-            use_spk_cache: false,
-        }
-    }
-
-    /// Construct parameters with provided `descriptor` and `change_descriptor`.
-    ///
-    /// Default values:
-    /// * `network` = [`Network::Bitcoin`]
-    /// * `genesis_hash` = `None`
-    /// * `lookahead` = [`DEFAULT_LOOKAHEAD`]
-    pub fn new<D: IntoWalletDescriptor + Send + 'static>(
-        descriptor: D,
-        change_descriptor: D,
-    ) -> Self {
-        Self {
-            descriptor: make_descriptor_to_extract(descriptor),
-            change_descriptor: Some(make_descriptor_to_extract(change_descriptor)),
-            network: Network::Bitcoin,
-            genesis_hash: None,
-            lookahead: DEFAULT_LOOKAHEAD,
-            use_spk_cache: false,
-        }
-    }
-
-    /// Construct parameters with a two-path descriptor that will be parsed into receive and change
-    /// descriptors.
-    ///
-    /// This function parses a two-path descriptor (receive and change) and creates parameters
-    /// using the existing receive and change wallet creation logic.
-    ///
-    /// Default values:
-    /// * `network` = [`Network::Bitcoin`]
-    /// * `genesis_hash` = `None`
-    /// * `lookahead` = [`DEFAULT_LOOKAHEAD`]
-    pub fn new_two_path<D: IntoWalletDescriptor + Send + Clone + 'static>(
-        two_path_descriptor: D,
-    ) -> Self {
-        Self {
-            descriptor: make_two_path_descriptor_to_extract(two_path_descriptor.clone(), 0),
-            change_descriptor: Some(make_two_path_descriptor_to_extract(two_path_descriptor, 1)),
-            network: Network::Bitcoin,
-            genesis_hash: None,
-            lookahead: DEFAULT_LOOKAHEAD,
-            use_spk_cache: false,
-        }
-    }
-
-    /// Set [`Self::network`].
-    pub fn network(mut self, network: Network) -> Self {
-        self.network = network;
-        self
-    }
-
+impl<K: Ord + Clone + core::fmt::Debug> CreateParams<K> {
     /// Use a custom `genesis_hash`.
     pub fn genesis_hash(mut self, genesis_hash: BlockHash) -> Self {
         self.genesis_hash = Some(genesis_hash);
@@ -168,9 +98,9 @@ impl CreateParams {
     pub fn create_wallet<P>(
         self,
         persister: &mut P,
-    ) -> Result<PersistedWallet<P>, CreateWithPersistError<P::Error>>
+    ) -> Result<PersistedWallet<K, P>, CreateWithPersistError<P::Error, K>>
     where
-        P: WalletPersister,
+        P: WalletPersister<K>,
     {
         PersistedWallet::create(persister, self)
     }
@@ -179,31 +109,34 @@ impl CreateParams {
     pub async fn create_wallet_async<P>(
         self,
         persister: &mut P,
-    ) -> Result<PersistedWallet<P>, CreateWithPersistError<P::Error>>
+    ) -> Result<PersistedWallet<K, P>, CreateWithPersistError<P::Error, K>>
     where
-        P: AsyncWalletPersister,
+        P: AsyncWalletPersister<K>,
     {
         PersistedWallet::create_async(persister, self).await
     }
 
-    /// Create [`Wallet`] without persistence.
-    pub fn create_wallet_no_persist(self) -> Result<Wallet, DescriptorError> {
+    /// Create a [`Wallet`] without persistence.
+    ///
+    /// Infallible: the [`KeyRing`](crate::KeyRing) these parameters came from has already
+    /// established that the descriptors are valid, match the network, and are uniquely paired
+    /// with their keychains.
+    pub fn create_wallet_no_persist(self) -> Wallet<K> {
         Wallet::create_with_params(self)
     }
 }
 
 /// Parameters for [`Wallet::load`] or [`PersistedWallet::load`].
 #[must_use]
-pub struct LoadParams {
+pub struct LoadParams<K: Ord> {
     pub(crate) lookahead: u32,
     pub(crate) check_network: Option<Network>,
     pub(crate) check_genesis_hash: Option<BlockHash>,
-    pub(crate) check_descriptor: Option<Option<DescriptorToExtract>>,
-    pub(crate) check_change_descriptor: Option<Option<DescriptorToExtract>>,
+    pub(crate) check_descriptors: BTreeMap<K, Option<DescriptorToExtract>>,
     pub(crate) use_spk_cache: bool,
 }
 
-impl LoadParams {
+impl<K: Ord + Clone + core::fmt::Debug> LoadParams<K> {
     /// Construct parameters with default values.
     ///
     /// Default values: `lookahead` = [`DEFAULT_LOOKAHEAD`]
@@ -212,44 +145,18 @@ impl LoadParams {
             lookahead: DEFAULT_LOOKAHEAD,
             check_network: None,
             check_genesis_hash: None,
-            check_descriptor: None,
-            check_change_descriptor: None,
+            check_descriptors: BTreeMap::new(),
             use_spk_cache: false,
         }
     }
 
     /// Checks the `expected_descriptor` matches exactly what is loaded for `keychain`.
-    pub fn descriptor<D>(mut self, keychain: KeychainKind, expected_descriptor: Option<D>) -> Self
+    pub fn descriptor<D>(mut self, keychain: K, expected_descriptor: Option<D>) -> Self
     where
         D: IntoWalletDescriptor + Send + 'static,
     {
         let expected = expected_descriptor.map(|d| make_descriptor_to_extract(d));
-        match keychain {
-            KeychainKind::External => self.check_descriptor = Some(expected),
-            KeychainKind::Internal => self.check_change_descriptor = Some(expected),
-        }
-        self
-    }
-
-    /// Checks that the provided two-path descriptor matches exactly what is loaded for both the
-    /// external and internal keychains.
-    ///
-    /// # Note
-    ///
-    /// The provided descriptor may only contain extended public keys (`xpub`) with exactly 2 paths,
-    /// or an error will occur at load time.
-    pub fn two_path_descriptor<D>(mut self, expected_descriptor: D) -> Self
-    where
-        D: IntoWalletDescriptor + Send + Clone + 'static,
-    {
-        let external: DescriptorToExtract =
-            make_two_path_descriptor_to_extract(expected_descriptor.clone(), 0);
-        let internal: DescriptorToExtract =
-            make_two_path_descriptor_to_extract(expected_descriptor, 1);
-
-        self.check_descriptor = Some(Some(external));
-        self.check_change_descriptor = Some(Some(internal));
-
+        self.check_descriptors.insert(keychain, expected);
         self
     }
 
@@ -286,35 +193,66 @@ impl LoadParams {
     }
 
     /// Load [`PersistedWallet`] with the given [`WalletPersister`].
+    #[allow(clippy::type_complexity)]
     pub fn load_wallet<P>(
         self,
         persister: &mut P,
-    ) -> Result<Option<PersistedWallet<P>>, LoadWithPersistError<P::Error>>
+    ) -> Result<Option<PersistedWallet<K, P>>, LoadWithPersistError<P::Error, K>>
     where
-        P: WalletPersister,
+        P: WalletPersister<K>,
     {
         PersistedWallet::load(persister, self)
     }
 
     /// Load [`PersistedWallet`] with the given [`AsyncWalletPersister`].
+    #[allow(clippy::type_complexity)]
     pub async fn load_wallet_async<P>(
         self,
         persister: &mut P,
-    ) -> Result<Option<PersistedWallet<P>>, LoadWithPersistError<P::Error>>
+    ) -> Result<Option<PersistedWallet<K, P>>, LoadWithPersistError<P::Error, K>>
     where
-        P: AsyncWalletPersister,
+        P: AsyncWalletPersister<K>,
     {
         PersistedWallet::load_async(persister, self).await
     }
 
     /// Load [`Wallet`] without persistence.
-    pub fn load_wallet_no_persist(self, changeset: ChangeSet) -> Result<Option<Wallet>, LoadError> {
+    pub fn load_wallet_no_persist(
+        self,
+        changeset: ChangeSet<K>,
+    ) -> Result<Option<Wallet<K>>, LoadError<K>> {
         Wallet::load_with_params(changeset, self)
     }
 }
 
-impl Default for LoadParams {
+impl<K: Ord + Clone + core::fmt::Debug> Default for LoadParams<K> {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl LoadParams<KeychainKind> {
+    /// Checks that the provided two-path descriptor matches exactly what is loaded for both the
+    /// external and internal keychains.
+    ///
+    /// # Note
+    ///
+    /// The provided descriptor may only contain extended public keys (`xpub`) with exactly 2 paths,
+    /// or an error will occur at load time.
+    pub fn two_path_descriptor<D>(mut self, expected_descriptor: D) -> Self
+    where
+        D: IntoWalletDescriptor + Send + Clone + 'static,
+    {
+        let external: DescriptorToExtract =
+            make_two_path_descriptor_to_extract(expected_descriptor.clone(), 0);
+        let internal: DescriptorToExtract =
+            make_two_path_descriptor_to_extract(expected_descriptor, 1);
+
+        self.check_descriptors
+            .insert(KeychainKind::External, Some(external));
+        self.check_descriptors
+            .insert(KeychainKind::Internal, Some(internal));
+
+        self
     }
 }
