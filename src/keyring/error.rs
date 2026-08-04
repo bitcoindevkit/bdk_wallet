@@ -29,12 +29,15 @@ impl<K> From<DescriptorError> for KeyRingError<K> {
     }
 }
 
-impl<K: fmt::Display> fmt::Display for KeyRingError<K> {
+impl<K: fmt::Debug> fmt::Display for KeyRingError<K> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Descriptor(e) => e.fmt(f),
             Self::KeychainAlreadyAssigned(keychain) => {
-                write!(f, "keychain {keychain} is already assigned to a descriptor")
+                write!(
+                    f,
+                    "keychain {keychain:?} is already assigned to a descriptor"
+                )
             }
             Self::DescriptorAlreadyAssigned(descriptor) => {
                 write!(
@@ -46,4 +49,4 @@ impl<K: fmt::Display> fmt::Display for KeyRingError<K> {
     }
 }
 
-impl<K: fmt::Display + fmt::Debug> core::error::Error for KeyRingError<K> {}
+impl<K: fmt::Debug> core::error::Error for KeyRingError<K> {}
