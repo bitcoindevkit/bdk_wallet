@@ -11,7 +11,7 @@ use chain::Merge;
 
 use crate::error::LoadError;
 use crate::{
-    ChangeSet, CreateParams, KeychainKind, LoadParams, Wallet,
+    ChangeSet, CreateParams, LoadParams, Wallet,
     descriptor::{DescriptorError, calc_checksum},
 };
 
@@ -265,44 +265,46 @@ impl<K: Ord + Clone + core::fmt::Debug, P: AsyncWalletPersister<K>> PersistedWal
 }
 
 #[cfg(feature = "rusqlite")]
-impl WalletPersister<KeychainKind> for bdk_chain::rusqlite::Transaction<'_> {
+impl<K> WalletPersister<K> for bdk_chain::rusqlite::Transaction<'_>
+where
+    K: Ord + Clone + bdk_chain::rusqlite::ToSql + bdk_chain::rusqlite::types::FromSql,
+{
     type Error = bdk_chain::rusqlite::Error;
 
-    fn initialize(persister: &mut Self) -> Result<ChangeSet<KeychainKind>, Self::Error> {
-        ChangeSet::<KeychainKind>::init_sqlite_tables(&*persister)?;
-        let mut changeset = ChangeSet::<KeychainKind>::from_sqlite(persister)?;
+    fn initialize(persister: &mut Self) -> Result<ChangeSet<K>, Self::Error> {
+        ChangeSet::<K>::init_sqlite_tables(&*persister)?;
+        let mut changeset = ChangeSet::<K>::from_sqlite(persister)?;
         // Databases written by schema v0/v1 keep their descriptors in columns rather than in the
         // per-keychain table; recover them so existing wallets still load.
-        ChangeSet::<KeychainKind>::read_legacy_descriptors(persister, &mut changeset)?;
+        ChangeSet::<K>::read_legacy_descriptors(persister, &mut changeset)?;
         Ok(changeset)
     }
 
-    fn persist(
-        persister: &mut Self,
-        changeset: &ChangeSet<KeychainKind>,
-    ) -> Result<(), Self::Error> {
+    fn persist(persister: &mut Self, changeset: &ChangeSet<K>) -> Result<(), Self::Error> {
         changeset.persist_to_sqlite(persister)
     }
 }
 
 #[cfg(feature = "rusqlite")]
-impl WalletPersister<KeychainKind> for bdk_chain::rusqlite::Connection {
+impl<K> WalletPersister<K> for bdk_chain::rusqlite::Connection
+where
+    K: Ord + Clone + bdk_chain::rusqlite::ToSql + bdk_chain::rusqlite::types::FromSql,
+{
     type Error = bdk_chain::rusqlite::Error;
 
-    fn initialize(persister: &mut Self) -> Result<ChangeSet<KeychainKind>, Self::Error> {
+    fn initialize(persister: &mut Self) -> Result<ChangeSet<K>, Self::Error> {
         let mut db_tx = persister.transaction()?;
         let changeset =
-            <bdk_chain::rusqlite::Transaction<'_> as WalletPersister>::initialize(&mut db_tx)?;
+            <bdk_chain::rusqlite::Transaction<'_> as WalletPersister<K>>::initialize(&mut db_tx)?;
         db_tx.commit()?;
         Ok(changeset)
     }
 
-    fn persist(
-        persister: &mut Self,
-        changeset: &ChangeSet<KeychainKind>,
-    ) -> Result<(), Self::Error> {
+    fn persist(persister: &mut Self, changeset: &ChangeSet<K>) -> Result<(), Self::Error> {
         let mut db_tx = persister.transaction()?;
-        <bdk_chain::rusqlite::Transaction<'_> as WalletPersister>::persist(&mut db_tx, changeset)?;
+        <bdk_chain::rusqlite::Transaction<'_> as WalletPersister<K>>::persist(
+            &mut db_tx, changeset,
+        )?;
         db_tx.commit()
     }
 }
@@ -310,15 +312,15 @@ impl WalletPersister<KeychainKind> for bdk_chain::rusqlite::Connection {
 /// Error for [`bdk_file_store`]'s implementation of [`WalletPersister`].
 #[cfg(feature = "file_store")]
 #[derive(Debug)]
-pub enum FileStoreError {
+pub enum FileStoreError<K: Ord> {
     /// Error when loading from the store.
-    Load(bdk_file_store::StoreErrorWithDump<ChangeSet>),
+    Load(bdk_file_store::StoreErrorWithDump<ChangeSet<K>>),
     /// Error when writing to the store.
     Write(std::io::Error),
 }
 
 #[cfg(feature = "file_store")]
-impl core::fmt::Display for FileStoreError {
+impl<K: Ord + fmt::Debug> core::fmt::Display for FileStoreError<K> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         use core::fmt::Display;
         match self {
@@ -329,23 +331,23 @@ impl core::fmt::Display for FileStoreError {
 }
 
 #[cfg(feature = "file_store")]
-impl error::Error for FileStoreError {}
+impl<K: Ord + fmt::Debug> error::Error for FileStoreError<K> {}
 
 #[cfg(feature = "file_store")]
-impl WalletPersister<KeychainKind> for bdk_file_store::Store<ChangeSet> {
-    type Error = FileStoreError;
+impl<K> WalletPersister<K> for bdk_file_store::Store<ChangeSet<K>>
+where
+    K: Ord + Clone + serde::Serialize + serde::de::DeserializeOwned,
+{
+    type Error = FileStoreError<K>;
 
-    fn initialize(persister: &mut Self) -> Result<ChangeSet<KeychainKind>, Self::Error> {
+    fn initialize(persister: &mut Self) -> Result<ChangeSet<K>, Self::Error> {
         persister
             .dump()
             .map(Option::unwrap_or_default)
             .map_err(FileStoreError::Load)
     }
 
-    fn persist(
-        persister: &mut Self,
-        changeset: &ChangeSet<KeychainKind>,
-    ) -> Result<(), Self::Error> {
+    fn persist(persister: &mut Self, changeset: &ChangeSet<K>) -> Result<(), Self::Error> {
         persister.append(changeset).map_err(FileStoreError::Write)
     }
 }

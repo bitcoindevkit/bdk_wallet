@@ -401,30 +401,27 @@ where
         self.indexer.persist_to_sqlite(db_tx)?;
         Ok(())
     }
-}
 
-#[cfg(feature = "rusqlite")]
-impl ChangeSet<crate::KeychainKind> {
     /// Recover descriptors written by schema v0 or v1.
     ///
     /// Those versions stored the wallet's two descriptors as `descriptor` and `change_descriptor`
-    /// columns on a single row, rather than one row per keychain. This reads them and maps them
-    /// onto [`External`](crate::KeychainKind::External) and
-    /// [`Internal`](crate::KeychainKind::Internal).
+    /// columns on a single row, rather than one row per keychain in
+    /// [`WALLET_KEYCHAIN_TABLE_NAME`](Self::WALLET_KEYCHAIN_TABLE_NAME).
     ///
-    /// Only meaningful for wallets keyed by [`KeychainKind`](crate::KeychainKind): interpreting
-    /// the two legacy columns *requires* knowing they mean external and change. A wallet using a
-    /// custom keychain type has no v0/v1 database to recover, since those schemas predate custom
-    /// keychains entirely.
+    /// The legacy columns carry no keychain identifier of their own — the schema encoded it
+    /// positionally. They are recovered here by asking `K` to parse the same strings
+    /// [`KeychainKind`](crate::KeychainKind) serialises to, `"external"` and `"internal"`. A
+    /// keychain type that does not recognise them cannot have written a v0/v1 database in the
+    /// first place, so it is left untouched.
     ///
-    /// Descriptors already present are left alone, so this never overwrites what schema v2 holds.
+    /// Existing keychains are never overwritten: anything already read from the v2 table wins.
     pub fn read_legacy_descriptors(
         db_tx: &chain::rusqlite::Transaction,
         changeset: &mut Self,
     ) -> chain::rusqlite::Result<()> {
-        use crate::KeychainKind;
         use chain::Impl;
         use chain::rusqlite::OptionalExtension;
+        use chain::rusqlite::types::ValueRef;
 
         let mut statement = db_tx.prepare(&format!(
             "SELECT descriptor, change_descriptor FROM {}",
@@ -445,17 +442,16 @@ impl ChangeSet<crate::KeychainKind> {
             return Ok(());
         };
 
-        if let Some(Impl(descriptor)) = descriptor {
-            changeset
-                .descriptors
-                .entry(KeychainKind::External)
-                .or_insert(descriptor);
-        }
-        if let Some(Impl(change_descriptor)) = change_descriptor {
-            changeset
-                .descriptors
-                .entry(KeychainKind::Internal)
-                .or_insert(change_descriptor);
+        for (column, keychain_name) in [(descriptor, "external"), (change_descriptor, "internal")] {
+            let Some(Impl(descriptor)) = column else {
+                continue;
+            };
+            // `K` not recognising the legacy name means this database was never written by a
+            // wallet using this keychain type. Nothing to migrate.
+            let Ok(keychain) = K::column_result(ValueRef::Text(keychain_name.as_bytes())) else {
+                continue;
+            };
+            changeset.descriptors.entry(keychain).or_insert(descriptor);
         }
 
         Ok(())
@@ -703,6 +699,114 @@ mod test {
             changeset.descriptors.get(&KeychainKind::External),
             Some(&v2),
             "schema v2 is authoritative; a legacy column must not overwrite it"
+        );
+    }
+
+    /// A keychain type that has nothing to do with `external`/`internal`.
+    #[cfg(feature = "rusqlite")]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    enum Account {
+        Savings,
+        Spending,
+    }
+
+    #[cfg(feature = "rusqlite")]
+    impl chain::rusqlite::ToSql for Account {
+        fn to_sql(&self) -> chain::rusqlite::Result<chain::rusqlite::types::ToSqlOutput<'_>> {
+            Ok(match self {
+                Account::Savings => "savings".into(),
+                Account::Spending => "spending".into(),
+            })
+        }
+    }
+
+    #[cfg(feature = "rusqlite")]
+    impl chain::rusqlite::types::FromSql for Account {
+        fn column_result(
+            value: chain::rusqlite::types::ValueRef<'_>,
+        ) -> chain::rusqlite::types::FromSqlResult<Self> {
+            match value.as_str()? {
+                "savings" => Ok(Account::Savings),
+                "spending" => Ok(Account::Spending),
+                other => Err(chain::rusqlite::types::FromSqlError::Other(
+                    alloc::boxed::Box::new(crate::types::UnknownKeychain(
+                        alloc::string::String::from(other),
+                    )),
+                )),
+            }
+        }
+    }
+
+    #[cfg(feature = "rusqlite")]
+    #[test]
+    fn descriptors_round_trip_through_sqlite_for_a_custom_keychain() {
+        use bitcoin::Network;
+        use chain::rusqlite::Connection;
+
+        const SAVINGS: &str = "wpkh([41f2aed0/84h/1h/0h]tpubDDFSdQWw75hk1ewbwnNpPp5DvXFRKt68ioPoyJDY752cNHKkFxPWqkqCyCf4hxrEfpuxh46QisehL3m8Bi6MsAv394QVLopwbtfvryFQNUH/0/*)";
+        const SPENDING: &str = "wpkh([41f2aed0/84h/1h/0h]tpubDDFSdQWw75hk1ewbwnNpPp5DvXFRKt68ioPoyJDY752cNHKkFxPWqkqCyCf4hxrEfpuxh46QisehL3m8Bi6MsAv394QVLopwbtfvryFQNUH/1/*)";
+
+        let mut changeset = ChangeSet::<Account> {
+            network: Some(Network::Testnet),
+            ..Default::default()
+        };
+        changeset
+            .descriptors
+            .insert(Account::Savings, SAVINGS.parse().unwrap());
+        changeset
+            .descriptors
+            .insert(Account::Spending, SPENDING.parse().unwrap());
+
+        let mut conn = Connection::open_in_memory().unwrap();
+        let db_tx = conn.transaction().unwrap();
+        ChangeSet::<Account>::init_sqlite_tables(&db_tx).unwrap();
+        changeset.persist_to_sqlite(&db_tx).unwrap();
+        let read_back = ChangeSet::<Account>::from_sqlite(&db_tx).unwrap();
+        db_tx.commit().unwrap();
+
+        assert_eq!(
+            read_back.descriptors, changeset.descriptors,
+            "a custom keychain type must survive the sqlite round-trip"
+        );
+        assert_eq!(read_back.network, Some(Network::Testnet));
+    }
+
+    #[cfg(feature = "rusqlite")]
+    #[test]
+    fn legacy_read_is_a_no_op_for_a_keychain_type_that_never_wrote_one() {
+        use bitcoin::Network;
+        use chain::rusqlite::{Connection, named_params};
+
+        const EXTERNAL: &str = "wpkh([41f2aed0/84h/1h/0h]tpubDDFSdQWw75hk1ewbwnNpPp5DvXFRKt68ioPoyJDY752cNHKkFxPWqkqCyCf4hxrEfpuxh46QisehL3m8Bi6MsAv394QVLopwbtfvryFQNUH/0/*)";
+
+        let mut conn = Connection::open_in_memory().unwrap();
+        let db_tx = conn.transaction().unwrap();
+        ChangeSet::<Account>::init_sqlite_tables(&db_tx).unwrap();
+
+        // A v0/v1-shaped row, whose descriptors are keyed positionally as external/internal.
+        let external: Descriptor<DescriptorPublicKey> = EXTERNAL.parse().unwrap();
+        db_tx
+            .execute(
+                &format!(
+                    "INSERT INTO {}(id, descriptor, network) VALUES(:id, :descriptor, :network)",
+                    ChangeSet::<Account>::WALLET_TABLE_NAME
+                ),
+                named_params! {
+                    ":id": 0,
+                    ":descriptor": chain::Impl(external),
+                    ":network": chain::Impl(Network::Testnet),
+                },
+            )
+            .unwrap();
+
+        // `Account` cannot represent "external", so there is nothing to recover — and crucially
+        // this must not be an error, since such a database was never written by this wallet.
+        let mut changeset = ChangeSet::<Account>::default();
+        ChangeSet::<Account>::read_legacy_descriptors(&db_tx, &mut changeset).unwrap();
+
+        assert!(
+            changeset.descriptors.is_empty(),
+            "legacy descriptors must not be forced onto an unrelated keychain type"
         );
     }
 }
