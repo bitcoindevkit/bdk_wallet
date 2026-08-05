@@ -13,32 +13,6 @@ use crate::{
 
 use super::{ChangeSet, LoadError, PersistedWallet};
 
-fn make_two_path_descriptor_to_extract<D>(
-    two_path_descriptor: D,
-    index: usize,
-) -> DescriptorToExtract
-where
-    D: IntoWalletDescriptor + Send + 'static,
-{
-    Box::new(move |secp, network| {
-        let (desc, keymap) = two_path_descriptor.into_wallet_descriptor(secp, network)?;
-
-        if !desc.is_multipath() {
-            return Err(DescriptorError::MultiPath);
-        }
-
-        let descriptors = desc
-            .into_single_descriptors()
-            .map_err(DescriptorError::Miniscript)?;
-
-        if descriptors.len() != 2 {
-            return Err(DescriptorError::MultiPath);
-        }
-
-        Ok((descriptors[index].clone(), keymap))
-    })
-}
-
 /// This atrocity is to avoid having type parameters on [`CreateParams`] and [`LoadParams`].
 ///
 /// The better option would be to do `Box<dyn IntoWalletDescriptor>`, but we cannot due to Rust's
@@ -228,31 +202,5 @@ impl<K: Ord + Clone + core::fmt::Debug> LoadParams<K> {
 impl<K: Ord + Clone + core::fmt::Debug> Default for LoadParams<K> {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-impl LoadParams<KeychainKind> {
-    /// Checks that the provided two-path descriptor matches exactly what is loaded for both the
-    /// external and internal keychains.
-    ///
-    /// # Note
-    ///
-    /// The provided descriptor may only contain extended public keys (`xpub`) with exactly 2 paths,
-    /// or an error will occur at load time.
-    pub fn two_path_descriptor<D>(mut self, expected_descriptor: D) -> Self
-    where
-        D: IntoWalletDescriptor + Send + Clone + 'static,
-    {
-        let external: DescriptorToExtract =
-            make_two_path_descriptor_to_extract(expected_descriptor.clone(), 0);
-        let internal: DescriptorToExtract =
-            make_two_path_descriptor_to_extract(expected_descriptor, 1);
-
-        self.check_descriptors
-            .insert(KeychainKind::External, Some(external));
-        self.check_descriptors
-            .insert(KeychainKind::Internal, Some(internal));
-
-        self
     }
 }
