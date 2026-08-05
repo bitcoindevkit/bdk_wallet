@@ -49,6 +49,7 @@ fn main() -> anyhow::Result<()> {
 
     // Build params.
     let mut params = PsbtParams::default();
+    params.change_keychain(Internal);
     let addr = Address::from_str(SEND_TO)?.require_network(NETWORK)?;
     let feerate = feerate_unchecked(FEERATE);
     params

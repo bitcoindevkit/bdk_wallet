@@ -26,7 +26,7 @@ pub struct ReplaceTx;
 /// Parameters to create a PSBT.
 // TODO: Can we derive `Clone` for this?
 #[derive(Debug)]
-pub struct PsbtParams<C> {
+pub struct PsbtParams<C, K> {
     /// Set of selected UTXO outpoints, `HashSet` ensures uniqueness
     pub(crate) set: HashSet<OutPoint>,
     /// Ordered list of manually-selected spends.
@@ -34,7 +34,14 @@ pub struct PsbtParams<C> {
     /// List of recipient script/amount pairs.
     pub(crate) recipients: Vec<(ScriptBuf, Amount)>,
     /// Optional script or descriptor designated for change.
+    ///
+    /// Takes precedence over [`change_keychain`](Self::change_keychain).
     pub(crate) change_script: Option<ChangeScript>,
+    /// Keychain the change output is derived from.
+    ///
+    /// The wallet reveals the keychain's next unused address and stages the resulting changeset,
+    /// so change stays tracked. Ignored when [`change_script`](Self::change_script) is set.
+    pub(crate) change_keychain: Option<K>,
     /// Optional assets for creating a spend plan.
     pub(crate) assets: Option<Assets>,
     /// Target fee rate.
@@ -77,7 +84,7 @@ pub struct PsbtParams<C> {
     pub(crate) marker: core::marker::PhantomData<C>,
 }
 
-impl Default for PsbtParams<CreateTx> {
+impl<K> Default for PsbtParams<CreateTx, K> {
     fn default() -> Self {
         Self {
             set: Default::default(),
@@ -85,6 +92,7 @@ impl Default for PsbtParams<CreateTx> {
             assets: Default::default(),
             recipients: Default::default(),
             change_script: Default::default(),
+            change_keychain: Default::default(),
             fee_rate: FeeRate::BROADCAST_MIN,
             coin_selection: Default::default(),
             canonical_params: Default::default(),
@@ -105,7 +113,7 @@ impl Default for PsbtParams<CreateTx> {
     }
 }
 
-impl PsbtParams<CreateTx> {
+impl<K> PsbtParams<CreateTx, K> {
     /// Create a new [`PsbtParams`].
     pub fn new() -> Self {
         Self::default()
@@ -156,6 +164,7 @@ impl PsbtParams<CreateTx> {
     ///
     /// ```rust,no_run
     /// use bdk_tx::Input;
+    /// # use bdk_wallet::KeychainKind;
     /// # use bdk_wallet::psbt::PsbtParams;
     /// # use bitcoin::{psbt, OutPoint, Sequence, TxOut};
     /// # let outpoint = OutPoint::null();
@@ -164,7 +173,7 @@ impl PsbtParams<CreateTx> {
     /// # let satisfaction_weight = 0;
     /// # let tx_status = None;
     /// # let is_coinbase = false;
-    /// let mut params = PsbtParams::default();
+    /// let mut params = PsbtParams::<_, KeychainKind>::default();
     /// let input = Input::from_psbt_input(
     ///     outpoint,
     ///     sequence,
@@ -211,7 +220,7 @@ impl PsbtParams<CreateTx> {
     /// [`add_planned_input`]: PsbtParams::add_planned_input
     /// [`Input`]: bdk_tx::Input
     /// [`NoOriginalTransactions`]: crate::error::ReplaceByFeeError::NoOriginalTransactions
-    pub fn replace_txs<T>(self, txs: impl IntoIterator<Item = T>) -> PsbtParams<ReplaceTx>
+    pub fn replace_txs<T>(self, txs: impl IntoIterator<Item = T>) -> PsbtParams<ReplaceTx, K>
     where
         T: Into<Arc<Transaction>>,
     {
@@ -221,13 +230,14 @@ impl PsbtParams<CreateTx> {
     }
 
     /// Transition this [`PsbtParams`] to the [`ReplaceTx`] state.
-    fn into_replace_params(self) -> PsbtParams<ReplaceTx> {
+    fn into_replace_params(self) -> PsbtParams<ReplaceTx, K> {
         PsbtParams {
             set: self.set,
             must_spend: self.must_spend,
             assets: self.assets,
             recipients: self.recipients,
             change_script: self.change_script,
+            change_keychain: self.change_keychain,
             fee_rate: self.fee_rate,
             coin_selection: self.coin_selection,
             canonical_params: self.canonical_params,
@@ -248,7 +258,7 @@ impl PsbtParams<CreateTx> {
     }
 }
 
-impl<C> PsbtParams<C> {
+impl<C, K> PsbtParams<C, K> {
     /// Get the currently selected spends.
     pub fn utxos(&self) -> &HashSet<OutPoint> {
         &self.set
@@ -377,6 +387,21 @@ impl<C> PsbtParams<C> {
     /// [`Script`]: ChangeScript::Script
     pub fn change_script(&mut self, change_script: ChangeScript) -> &mut Self {
         self.change_script = Some(change_script);
+        self
+    }
+
+    /// Set the keychain that the change output is derived from.
+    ///
+    /// The wallet takes the keychain's next unused address, reveals it, and stages the resulting
+    /// changeset so that incoming change is tracked on the next sync. See
+    /// [`Wallet::create_psbt`](crate::Wallet::create_psbt) for notes on change address reuse.
+    ///
+    /// Every PSBT needs a change destination: set this or
+    /// [`change_script`](Self::change_script), or creating the PSBT fails with
+    /// [`NoChangeSource`](crate::wallet::error::CreatePsbtError::NoChangeSource). When both are
+    /// set, `change_script` wins.
+    pub fn change_keychain(&mut self, keychain: K) -> &mut Self {
+        self.change_keychain = Some(keychain);
         self
     }
 
@@ -574,7 +599,7 @@ impl fmt::Debug for UtxoFilter {
     }
 }
 
-impl PsbtParams<ReplaceTx> {
+impl<K> PsbtParams<ReplaceTx, K> {
     /// Replace spends of the provided `txs`. This will internally set the list of UTXOs
     /// to be spent.
     fn replace<T>(&mut self, txs: impl IntoIterator<Item = T>)
@@ -672,6 +697,7 @@ impl AssetsExt for Assets {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::KeychainKind;
     use crate::test_utils::new_tx;
 
     use bitcoin::hashes::Hash;
@@ -697,7 +723,7 @@ mod test {
         let txid1 = tx.compute_txid();
 
         // Replace tx
-        let mut params = PsbtParams::default().replace_txs([tx]);
+        let mut params = PsbtParams::<CreateTx, KeychainKind>::default().replace_txs([tx]);
         params.add_recipients([(ScriptBuf::new_op_return([0xb1, 0x0c]), Amount::ZERO)]);
         let feerate = FeeRate::from_sat_per_vb(8).unwrap();
         params.fee_rate(feerate);
@@ -763,14 +789,15 @@ mod test {
         let expect_spends: HashSet<OutPoint> =
             [tx_a.input[0].previous_output, tx_c.input[0].previous_output].into();
 
-        let params = PsbtParams::new().replace_txs([tx_a, tx_b, tx_c, tx_d]);
+        let params =
+            PsbtParams::<CreateTx, KeychainKind>::new().replace_txs([tx_a, tx_b, tx_c, tx_d]);
         assert_eq!(params.set, expect_spends);
         assert_eq!(params.replace, [txid_a, txid_c].into());
     }
 
     #[test]
     fn test_selected_outpoints_are_unique() {
-        let mut params = PsbtParams::default();
+        let mut params = PsbtParams::<CreateTx, KeychainKind>::default();
         let op = OutPoint::null();
 
         // Try adding the same outpoint repeatedly.
@@ -861,7 +888,7 @@ mod test {
         )
         .unwrap();
 
-        let mut params = PsbtParams::default();
+        let mut params = PsbtParams::<CreateTx, KeychainKind>::default();
         params
             .add_planned_input(conflicted_input)
             .add_planned_input(safe_input);

@@ -384,6 +384,16 @@ pub enum CreatePsbtError {
     /// [`SelectionStrategy::All`]: crate::SelectionStrategy::All
     /// [`change_script`]: crate::PsbtParams::change_script
     NoRecipients,
+    /// No change destination was configured. Every PSBT needs one: set either
+    /// [`change_keychain`] or [`change_script`].
+    ///
+    /// [`change_keychain`]: crate::PsbtParams::change_keychain
+    /// [`change_script`]: crate::PsbtParams::change_script
+    NoChangeSource,
+    /// The keychain given to [`change_keychain`] is not held by this wallet.
+    ///
+    /// [`change_keychain`]: crate::PsbtParams::change_keychain
+    UnknownChangeKeychain,
     /// After coin selection, all outputs fell below the dust threshold and were
     /// dropped to fees.
     AllOutputsBelowDust,
@@ -413,6 +423,13 @@ impl fmt::Display for CreatePsbtError {
             Self::Bnb(e) => write!(f, "{e}"),
             Self::InsufficientFunds(e) => write!(f, "{e}"),
             Self::NoRecipients => write!(f, "no output destinations were configured"),
+            Self::NoChangeSource => write!(
+                f,
+                "no change destination configured: set a change keychain or a change script"
+            ),
+            Self::UnknownChangeKeychain => {
+                write!(f, "the change keychain is not held by this wallet")
+            }
             Self::AllOutputsBelowDust => write!(f, "all outputs are below the dust threshold",),
             Self::MissingKeyOrigin(e) => write!(f, "missing key origin: {e}"),
             Self::Plan(op) => write!(f, "failed to create a plan for txout with outpoint {op}"),

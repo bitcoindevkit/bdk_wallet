@@ -49,6 +49,7 @@ fn main() -> anyhow::Result<()> {
 
     // Create tx1: sweep all funds to our own address at a low feerate
     let mut params = PsbtParams::new();
+    params.change_keychain(KeychainKind::Internal);
     params
         .change_script(ChangeScript::from_descriptor(derived_descriptor.clone()))
         .fee_rate(FeeRate::from_sat_per_vb(2).expect("valid feerate"))

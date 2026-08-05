@@ -45,13 +45,31 @@ let mut keyring = KeyRing::new(Network::Signet, KeychainKind::External, external
 keyring.add_descriptor(KeychainKind::Internal, internal_desc)?;
 ```
 
+## Building transactions
+
+`Wallet::create_psbt` and `Wallet::replace_by_fee` work on any `Wallet<K>`. Because a wallet
+generic over `K` has no canonical change keychain, you name one explicitly:
+
+```rust,ignore
+let mut params = PsbtParams::default();
+params
+    .add_recipients([(recipient_spk, Amount::from_sat(10_000))])
+    .change_keychain(Keychain::Change);
+
+let (psbt, finalizer) = wallet.create_psbt(params)?;
+```
+
+Set `change_keychain` or `change_script` — without one, PSBT creation fails with
+`CreatePsbtError::NoChangeSource`, and naming a keychain the wallet does not hold fails with
+`CreatePsbtError::UnknownChangeKeychain`. Change derived from `change_keychain` is revealed and
+staged, so it stays tracked; you must persist the resulting changeset.
+
 ## Current limitations
 
-One thing a multi-keychain wallet cannot do yet:
-
-- **No transaction building.** `TxBuilder` lives on `impl Wallet<KeychainKind>`, because building a
-  transaction has to pick a change keychain and a wallet generic over `K` has no canonical one.
-  Relatedly, `balance()` counts nothing as trusted until it is mined.
+- **No `TxBuilder`.** The older `TxBuilder` API still lives on `impl Wallet<KeychainKind>`, since it
+  has no way to be told which keychain change belongs to. Use `create_psbt` instead.
+- **Nothing is trusted before it is mined.** `balance()` cannot know which of your keychains hold
+  self-owned change, so all unconfirmed output counts as untrusted-pending.
 
 To persist a custom keychain type, implement `rusqlite`'s `ToSql` and `FromSql` for it (see
 [`persistence.rs`](./persistence.rs)); for the file store, implement `serde::Serialize` and

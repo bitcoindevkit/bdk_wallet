@@ -1771,7 +1771,10 @@ fn status_from_position(pos: ChainPosition<ConfirmationBlockTime>) -> Option<Con
 }
 
 #[cfg(all(bdk_wallet_unstable, feature = "bdk-tx"))]
-impl Wallet {
+impl<K> Wallet<K>
+where
+    K: Ord + Clone + core::fmt::Debug,
+{
     /// Return the "keys" assets, i.e. the ones we can trivially infer by scanning
     /// the pubkeys of the wallet's descriptors.
     fn assets(&self) -> Assets {
@@ -1786,45 +1789,55 @@ impl Wallet {
         Assets::new().add(pks)
     }
 
-    /// Peek at the next change address without revealing it, returning the auto-derived
-    /// change info `(keychain, index, spk)` alongside the [`ChangeScript`].
+    /// Peek at the next change address without revealing it, returning the change info
+    /// `(keychain, index, spk)` alongside the [`ChangeScript`].
     ///
-    /// The next change address is the next unused address of the change keychain, or the
+    /// The next change address is the next unused address of `change_keychain`, or the
     /// next-to-be-revealed address **without** mutating wallet state. Revelation is deferred
     /// until after all error paths have been cleared by the caller.
-    fn peek_change_info(&self) -> ((KeychainKind, u32, ScriptBuf), ChangeScript) {
-        let change_keychain = self.map_keychain(KeychainKind::Internal);
+    fn peek_change_info(
+        &self,
+        change_keychain: K,
+    ) -> Result<((K, u32, ScriptBuf), ChangeScript), CreatePsbtError> {
+        if self
+            .tx_graph
+            .index
+            .get_descriptor(change_keychain.clone())
+            .is_none()
+        {
+            return Err(CreatePsbtError::UnknownChangeKeychain);
+        }
         let (index, spk) = self
             .tx_graph
             .index
-            .unused_keychain_spks(change_keychain)
+            .unused_keychain_spks(change_keychain.clone())
             .next()
             .unwrap_or_else(|| {
                 let (next_index, _) = self
                     .tx_graph
                     .index
-                    .next_index(change_keychain)
+                    .next_index(change_keychain.clone())
                     .expect("keychain must exist");
                 let spk = self
-                    .peek_address(change_keychain, next_index)
+                    .peek_address(change_keychain.clone(), next_index)
                     .script_pubkey();
                 (next_index, spk)
             });
         let descriptor = self
-            .public_descriptor(change_keychain)
+            .public_descriptor(change_keychain.clone())
             .at_derivation_index(index)
             .expect("should be valid derivation index");
-        (
+        Ok((
             (change_keychain, index, spk),
             ChangeScript::from_descriptor(descriptor),
-        )
+        ))
     }
 
     /// Parses the common parameters used during PSBT creation and returns the spend assets
     /// and a map of indexed tx outputs.
     fn parse_params<C>(
         &self,
-        params: &PsbtParams<C>,
+        params: &PsbtParams<C, K>,
     ) -> (Assets, HashMap<OutPoint, FullTxOut<ConfirmationBlockTime>>) {
         // Get spend assets.
         let assets = match params.assets {
@@ -1856,7 +1869,7 @@ impl Wallet {
     fn filter_spendable<'a, I, C, F>(
         &'a self,
         txos: I,
-        params: &'a PsbtParams<C>,
+        params: &'a PsbtParams<C, K>,
         policy: F,
     ) -> impl Iterator<Item = FullTxOut<ConfirmationBlockTime>> + 'a
     where
@@ -1890,14 +1903,15 @@ impl Wallet {
     }
 
     /// Maps the recipients of the `params` to a collection of target [`Output`]s.
-    fn target_outputs<C>(&self, params: &PsbtParams<C>) -> Vec<Output> {
+    fn target_outputs<C>(&self, params: &PsbtParams<C, K>) -> Vec<Output> {
         params
             .recipients
             .iter()
             .cloned()
             .map(
                 |(script, value)| match self.tx_graph.index.index_of_spk(script.clone()) {
-                    Some(&(keychain, index)) => {
+                    Some((keychain, index)) => {
+                        let (keychain, index) = (keychain.clone(), *index);
                         let descriptor = self
                             .public_descriptor(keychain)
                             .at_derivation_index(index)
@@ -1961,7 +1975,7 @@ impl Wallet {
     #[cfg_attr(docsrs, doc(cfg(feature = "std")))]
     pub fn create_psbt(
         &mut self,
-        params: PsbtParams<CreateTx>,
+        params: PsbtParams<CreateTx, K>,
     ) -> Result<(Psbt, Finalizer), CreatePsbtError> {
         self.create_psbt_with_rng(params, &mut rand::thread_rng())
     }
@@ -1982,7 +1996,7 @@ impl Wallet {
     /// See [`Wallet::take_staged`].
     pub fn create_psbt_with_rng(
         &mut self,
-        mut params: PsbtParams<CreateTx>,
+        mut params: PsbtParams<CreateTx, K>,
         rng: &mut impl RngCore,
     ) -> Result<(Psbt, Finalizer), CreatePsbtError> {
         // Only permit no recipients if we're doing a sweep and an explicit change script is
@@ -1993,14 +2007,17 @@ impl Wallet {
         {
             return Err(CreatePsbtError::NoRecipients);
         }
-        let (change_info, change_script) = params
-            .change_script
-            .take()
-            .map(|change_script| (None, change_script))
-            .unwrap_or_else(|| {
-                let (change_info, change_script) = self.peek_change_info();
+        let (change_info, change_script) = match params.change_script.take() {
+            Some(change_script) => (None, change_script),
+            None => {
+                let change_keychain = params
+                    .change_keychain
+                    .clone()
+                    .ok_or(CreatePsbtError::NoChangeSource)?;
+                let (change_info, change_script) = self.peek_change_info(change_keychain)?;
                 (Some(change_info), change_script)
-            });
+            }
+        };
 
         let (assets, txouts) = self.parse_params(&params);
 
@@ -2071,7 +2088,7 @@ impl Wallet {
     fn create_psbt_from_selector<C>(
         &self,
         selector: &mut Selector,
-        params: &PsbtParams<C>,
+        params: &PsbtParams<C, K>,
         rng: &mut impl RngCore,
     ) -> Result<(Psbt, Finalizer), CreatePsbtError> {
         // Select coins
@@ -2202,7 +2219,7 @@ impl Wallet {
     #[cfg_attr(docsrs, doc(cfg(feature = "std")))]
     pub fn replace_by_fee(
         &mut self,
-        params: PsbtParams<ReplaceTx>,
+        params: PsbtParams<ReplaceTx, K>,
     ) -> Result<(Psbt, Finalizer), ReplaceByFeeError> {
         self.replace_by_fee_with_rng(params, &mut rand::thread_rng())
     }
@@ -2222,7 +2239,7 @@ impl Wallet {
     /// See [`Wallet::take_staged`].
     pub fn replace_by_fee_with_rng(
         &mut self,
-        mut params: PsbtParams<ReplaceTx>,
+        mut params: PsbtParams<ReplaceTx, K>,
         rng: &mut impl RngCore,
     ) -> Result<(Psbt, Finalizer), ReplaceByFeeError> {
         if params.replace.is_empty() {
@@ -2236,14 +2253,22 @@ impl Wallet {
         {
             return Err(ReplaceByFeeError::CreatePsbt(CreatePsbtError::NoRecipients));
         }
-        let (change_info, change_script) = params
-            .change_script
-            .take()
-            .map(|change_script| (None, change_script))
-            .unwrap_or_else(|| {
-                let (change_info, change_script) = self.peek_change_info();
+        let (change_info, change_script) = match params.change_script.take() {
+            Some(change_script) => (None, change_script),
+            None => {
+                let change_keychain =
+                    params
+                        .change_keychain
+                        .clone()
+                        .ok_or(ReplaceByFeeError::CreatePsbt(
+                            CreatePsbtError::NoChangeSource,
+                        ))?;
+                let (change_info, change_script) = self
+                    .peek_change_info(change_keychain)
+                    .map_err(ReplaceByFeeError::CreatePsbt)?;
                 (Some(change_info), change_script)
-            });
+            }
+        };
 
         let (assets, txouts) = self.parse_params(&params);
 
@@ -2431,7 +2456,7 @@ impl Wallet {
     /// in that same insertion order.
     fn build_must_spend_inputs<C>(
         &self,
-        params: &PsbtParams<C>,
+        params: &PsbtParams<C, K>,
         txouts: &HashMap<OutPoint, FullTxOut<ConfirmationBlockTime>>,
         assets: &Assets,
     ) -> Result<Vec<Input>, CreatePsbtError> {
