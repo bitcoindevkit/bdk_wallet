@@ -29,7 +29,7 @@ use core::fmt;
 /// [`Wallet`]: crate::wallet::Wallet
 /// [`ChangeSet`]: crate::wallet::ChangeSet
 #[derive(Debug, PartialEq)]
-pub enum LoadError {
+pub enum LoadError<K> {
     /// There was a problem with the passed-in descriptor(s).
     Descriptor(crate::descriptor::DescriptorError),
     /// Data loaded from persistence is missing network type.
@@ -37,32 +37,32 @@ pub enum LoadError {
     /// Data loaded from persistence is missing genesis hash.
     MissingGenesis,
     /// Data loaded from persistence is missing descriptor.
-    MissingDescriptor(KeychainKind),
+    MissingDescriptors,
     /// Data loaded is unexpected.
-    Mismatch(LoadMismatch),
+    Mismatch(LoadMismatch<K>),
 }
 
-impl fmt::Display for LoadError {
+impl<K: fmt::Debug> fmt::Display for LoadError<K> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             LoadError::Descriptor(e) => e.fmt(f),
             LoadError::MissingNetwork => write!(f, "loaded data is missing network type"),
             LoadError::MissingGenesis => write!(f, "loaded data is missing genesis hash"),
-            LoadError::MissingDescriptor(k) => {
-                write!(f, "loaded data is missing descriptor for {k} keychain")
+            LoadError::MissingDescriptors => {
+                write!(f, "loaded data is missing descriptors")
             }
             LoadError::Mismatch(e) => write!(f, "{e}"),
         }
     }
 }
 
-impl core::error::Error for LoadError {}
+impl<K: fmt::Debug> core::error::Error for LoadError<K> {}
 
 /// Represents a mismatch with what is loaded and what is expected from [`LoadParams`].
 ///
 /// [`LoadParams`]: crate::wallet::LoadParams
 #[derive(Debug, PartialEq)]
-pub enum LoadMismatch {
+pub enum LoadMismatch<K> {
     /// Network does not match.
     Network {
         /// The network that is loaded.
@@ -80,7 +80,7 @@ pub enum LoadMismatch {
     /// Descriptor's [`DescriptorId`](bdk_chain::DescriptorId) does not match.
     Descriptor {
         /// Keychain identifying the descriptor.
-        keychain: KeychainKind,
+        keychain: K,
         /// The loaded descriptor.
         loaded: Option<Box<ExtendedDescriptor>>,
         /// The expected descriptor.
@@ -88,7 +88,7 @@ pub enum LoadMismatch {
     },
 }
 
-impl fmt::Display for LoadMismatch {
+impl<K: fmt::Debug> fmt::Display for LoadMismatch<K> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             LoadMismatch::Network { loaded, expected } => {
@@ -107,7 +107,7 @@ impl fmt::Display for LoadMismatch {
             } => {
                 write!(
                     f,
-                    "Descriptor mismatch for {} keychain: loaded {}, expected {}",
+                    "Descriptor mismatch for {:?} keychain: loaded {}, expected {}",
                     keychain,
                     loaded
                         .as_ref()
@@ -121,14 +121,14 @@ impl fmt::Display for LoadMismatch {
     }
 }
 
-impl<E> From<LoadMismatch> for LoadWithPersistError<E> {
-    fn from(mismatch: LoadMismatch) -> Self {
+impl<E, K> From<LoadMismatch<K>> for LoadWithPersistError<E, K> {
+    fn from(mismatch: LoadMismatch<K>) -> Self {
         Self::InvalidChangeSet(LoadError::Mismatch(mismatch))
     }
 }
 
-impl From<LoadMismatch> for LoadError {
-    fn from(mismatch: LoadMismatch) -> Self {
+impl<K> From<LoadMismatch<K>> for LoadError<K> {
+    fn from(mismatch: LoadMismatch<K>) -> Self {
         Self::Mismatch(mismatch)
     }
 }
@@ -384,6 +384,16 @@ pub enum CreatePsbtError {
     /// [`SelectionStrategy::All`]: crate::SelectionStrategy::All
     /// [`change_script`]: crate::PsbtParams::change_script
     NoRecipients,
+    /// No change destination was configured. Every PSBT needs one: set either
+    /// [`change_keychain`] or [`change_script`].
+    ///
+    /// [`change_keychain`]: crate::PsbtParams::change_keychain
+    /// [`change_script`]: crate::PsbtParams::change_script
+    NoChangeSource,
+    /// The keychain given to [`change_keychain`] is not held by this wallet.
+    ///
+    /// [`change_keychain`]: crate::PsbtParams::change_keychain
+    UnknownChangeKeychain,
     /// After coin selection, all outputs fell below the dust threshold and were
     /// dropped to fees.
     AllOutputsBelowDust,
@@ -413,6 +423,13 @@ impl fmt::Display for CreatePsbtError {
             Self::Bnb(e) => write!(f, "{e}"),
             Self::InsufficientFunds(e) => write!(f, "{e}"),
             Self::NoRecipients => write!(f, "no output destinations were configured"),
+            Self::NoChangeSource => write!(
+                f,
+                "no change destination configured: set a change keychain or a change script"
+            ),
+            Self::UnknownChangeKeychain => {
+                write!(f, "the change keychain is not held by this wallet")
+            }
             Self::AllOutputsBelowDust => write!(f, "all outputs are below the dust threshold",),
             Self::MissingKeyOrigin(e) => write!(f, "missing key origin: {e}"),
             Self::Plan(op) => write!(f, "failed to create a plan for txout with outpoint {op}"),

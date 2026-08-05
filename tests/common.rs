@@ -1,8 +1,8 @@
 #![allow(unused)]
 
-use bdk_wallet::Wallet;
 use bdk_wallet::descriptor::IntoWalletDescriptor;
 use bdk_wallet::signer::SignersContainer;
+use bdk_wallet::{KeychainKind, Wallet};
 use bitcoin::secp256k1::Secp256k1;
 use miniscript::{Descriptor, DescriptorPublicKey, descriptor::KeyMap};
 
@@ -11,7 +11,7 @@ use miniscript::{Descriptor, DescriptorPublicKey, descriptor::KeyMap};
 /// The `Wallet` no longer holds key material, so tests that need to sign construct their own
 /// container from the descriptor that carries the secrets.
 pub fn signers_from_descriptor(
-    wallet: &Wallet,
+    wallet: &Wallet<KeychainKind>,
     descriptor: impl IntoWalletDescriptor,
 ) -> SignersContainer {
     let (descriptor, keymap) = descriptor
@@ -21,7 +21,10 @@ pub fn signers_from_descriptor(
 }
 
 /// Extract just the [`KeyMap`] from a signing descriptor, for use with [`bitcoin::Psbt::sign`].
-pub fn keymap_from_descriptor(wallet: &Wallet, descriptor: impl IntoWalletDescriptor) -> KeyMap {
+pub fn keymap_from_descriptor(
+    wallet: &Wallet<KeychainKind>,
+    descriptor: impl IntoWalletDescriptor,
+) -> KeyMap {
     let (_, keymap) = descriptor
         .into_wallet_descriptor(wallet.secp_ctx(), wallet.network().into())
         .expect("failed to parse signing descriptor");

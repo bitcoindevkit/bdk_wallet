@@ -24,7 +24,7 @@ use miniscript::policy::Concrete;
 use bdk_wallet::descriptor::ExtractPolicy;
 use bdk_wallet::descriptor::policy::BuildSatisfaction;
 use bdk_wallet::signer::SignersContainer;
-use bdk_wallet::{KeychainKind, Wallet};
+use bdk_wallet::{KeyRing, KeychainKind, Wallet};
 
 /// Miniscript policy is a high level abstraction of spending conditions. Defined in the
 /// rust-miniscript library here  https://docs.rs/miniscript/7.0.0/miniscript/policy/index.html
@@ -60,9 +60,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("Compiled into Descriptor: \n{descriptor}");
 
     // Create a new wallet from descriptors
-    let mut wallet = Wallet::create_single(descriptor)
-        .network(Network::Regtest)
-        .create_wallet_no_persist()?;
+    let mut wallet = Wallet::create(
+        KeyRing::new(Network::Regtest, KeychainKind::External, descriptor)
+            .expect("valid descriptors"),
+    )
+    .create_wallet_no_persist();
 
     println!(
         "First derived address from the descriptor: \n{}",

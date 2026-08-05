@@ -10,7 +10,7 @@ use bdk_wallet::descriptor::IntoWalletDescriptor;
 use bdk_wallet::miniscript::descriptor::KeyMapWrapper;
 use bdk_wallet::psbt::PsbtUtils;
 use bdk_wallet::rusqlite::Connection;
-use bdk_wallet::{KeychainKind, SignOptions};
+use bdk_wallet::{KeyRing, KeychainKind, SignOptions};
 use std::io::Write;
 use std::thread::sleep;
 use std::time::Duration;
@@ -43,9 +43,14 @@ fn main() -> Result<(), anyhow::Error> {
         .load_wallet(&mut db)?;
     let mut wallet = match wallet_opt {
         Some(wallet) => wallet,
-        None => Wallet::create(external_descriptor, internal_descriptor)
-            .network(NETWORK)
-            .create_wallet(&mut db)?,
+        None => {
+            let mut keyring = KeyRing::new(NETWORK, KeychainKind::External, external_descriptor)
+                .expect("valid descriptor");
+            keyring
+                .add_descriptor(KeychainKind::Internal, internal_descriptor)
+                .expect("valid change descriptor");
+            Wallet::create(keyring).create_wallet(&mut db)?
+        }
     };
 
     let address = wallet.next_unused_address(KeychainKind::External);

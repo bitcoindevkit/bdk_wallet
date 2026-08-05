@@ -112,7 +112,7 @@ use crate::{KeychainKind, LocalOutput, Utxo, WeightedUtxo};
 /// [`coin_selection`]: Self::coin_selection
 #[derive(Debug)]
 pub struct TxBuilder<'a, Cs> {
-    pub(crate) wallet: &'a mut Wallet,
+    pub(crate) wallet: &'a mut Wallet<KeychainKind>,
     pub(crate) params: TxParams,
     pub(crate) coin_selection: Cs,
 }
@@ -222,9 +222,9 @@ impl<'a, Cs> TxBuilder<'a, Cs> {
     /// #     "snj:and_v(v:pk(cMnkdebixpXMPfkcNEjjGin7s94hiehAH4mLbYkZoh9KSiNNmqC8),",
     /// #     "after(630000))))",
     /// # );
-    /// # let mut wallet = Wallet::create_single(descriptor)
-    /// #     .network(Network::Regtest)
-    /// #     .create_wallet_no_persist()?;
+    /// # let mut wallet = Wallet::create(KeyRing::new(Network::Regtest, KeychainKind::External, descriptor).expect("valid descriptors"))
+    /// #
+    /// #     .create_wallet_no_persist();
     /// let policy = wallet
     ///     .public_descriptor(KeychainKind::External)
     ///     .extract_policy(
@@ -263,7 +263,7 @@ impl<'a, Cs> TxBuilder<'a, Cs> {
     /// If a UTXO is inserted multiple times, only the final insertion will take effect.
     pub fn add_utxos(&mut self, outpoints: &[OutPoint]) -> Result<&mut Self, AddUtxoError> {
         // Canonicalize once, instead of once for every call to `get_utxo`.
-        let unspent: HashMap<OutPoint, LocalOutput> = self
+        let unspent: HashMap<OutPoint, LocalOutput<KeychainKind>> = self
             .wallet
             .list_unspent()
             .map(|output| (output.outpoint, output))
@@ -894,7 +894,7 @@ pub enum ChangeSpendPolicy {
 }
 
 impl ChangeSpendPolicy {
-    pub(crate) fn is_satisfied_by(&self, utxo: &LocalOutput) -> bool {
+    pub(crate) fn is_satisfied_by(&self, utxo: &LocalOutput<KeychainKind>) -> bool {
         match self {
             ChangeSpendPolicy::ChangeAllowed => true,
             ChangeSpendPolicy::OnlyChange => utxo.keychain == KeychainKind::Internal,
@@ -906,6 +906,7 @@ impl ChangeSpendPolicy {
 #[cfg_attr(coverage_nightly, coverage(off))]
 #[cfg(test)]
 mod test {
+    use crate::KeyRing;
     const ORDERING_TEST_TX: &str = "0200000003c26f3eb7932f7acddc5ddd26602b77e7516079b03090a16e2c2f54\
                                     85d1fd600f0100000000ffffffffc26f3eb7932f7acddc5ddd26602b77e75160\
                                     79b03090a16e2c2f5485d1fd600f0000000000ffffffff571fb3e02278217852\
@@ -1067,7 +1068,7 @@ mod test {
         assert_ne!(tx_2, original_tx);
     }
 
-    fn get_test_utxos() -> Vec<LocalOutput> {
+    fn get_test_utxos() -> Vec<LocalOutput<KeychainKind>> {
         use bitcoin::hashes::Hash;
 
         vec![
@@ -1148,10 +1149,15 @@ mod test {
         use bdk_chain::BlockId;
         use bitcoin::{BlockHash, Network, hashes::Hash};
 
-        let mut wallet = Wallet::create_single(get_test_tr_single_sig())
-            .network(Network::Regtest)
-            .create_wallet_no_persist()
-            .unwrap();
+        let mut wallet = Wallet::create(
+            KeyRing::new(
+                Network::Regtest,
+                KeychainKind::External,
+                get_test_tr_single_sig(),
+            )
+            .expect("valid descriptors"),
+        )
+        .create_wallet_no_persist();
         let recipient = wallet.next_unused_address(KeychainKind::External).address;
 
         insert_checkpoint(
@@ -1237,10 +1243,15 @@ mod test {
         use bdk_chain::BlockId;
         use bitcoin::{BlockHash, Network, hashes::Hash};
 
-        let mut wallet = Wallet::create_single(get_test_tr_single_sig())
-            .network(Network::Regtest)
-            .create_wallet_no_persist()
-            .unwrap();
+        let mut wallet = Wallet::create(
+            KeyRing::new(
+                Network::Regtest,
+                KeychainKind::External,
+                get_test_tr_single_sig(),
+            )
+            .expect("valid descriptors"),
+        )
+        .create_wallet_no_persist();
 
         insert_checkpoint(
             &mut wallet,
@@ -1310,10 +1321,16 @@ mod test {
     fn test_add_utxo_final_outpoint_retained() {
         // Create empty wallet
         let (desc, change_desc) = get_test_wpkh_and_change_desc();
-        let mut wallet = Wallet::create(desc, change_desc)
-            .network(bdk_wallet::bitcoin::Network::Regtest)
-            .create_wallet_no_persist()
-            .unwrap();
+        let mut keyring = KeyRing::new(
+            bdk_wallet::bitcoin::Network::Regtest,
+            KeychainKind::External,
+            desc,
+        )
+        .expect("valid descriptor");
+        keyring
+            .add_descriptor(KeychainKind::Internal, change_desc)
+            .expect("valid change descriptor");
+        let mut wallet = Wallet::create(keyring).create_wallet_no_persist();
 
         let outpoint_0 = receive_output(
             &mut wallet,
