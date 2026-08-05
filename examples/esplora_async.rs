@@ -38,7 +38,7 @@ async fn main() -> Result<(), anyhow::Error> {
     wallet.persist(&mut db)?;
     println!("Next unused address: ({}) {address}", address.index);
 
-    let balance = wallet.balance();
+    let balance = wallet.balance(1);
     println!("Wallet balance before syncing: {}", balance.total());
 
     println!("Full Sync...");
@@ -64,7 +64,7 @@ async fn main() -> Result<(), anyhow::Error> {
     wallet.persist(&mut db)?;
     println!();
 
-    let balance = wallet.balance();
+    let balance = wallet.balance(1);
     println!("Wallet balance after full sync: {}", balance.total());
     println!(
         "Wallet has {} transactions and {} utxos after full sync",
@@ -175,7 +175,7 @@ async fn main() -> Result<(), anyhow::Error> {
 
     wallet.persist(&mut db)?;
 
-    let balance_after_sync = wallet.balance();
+    let balance_after_sync = wallet.balance(1);
     println!("Wallet balance after sync: {}", balance_after_sync.total());
     println!(
         "Wallet has {} transactions and {} utxos after partial sync",

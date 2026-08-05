@@ -1151,22 +1151,24 @@ impl Wallet {
         txs
     }
 
-    /// Return the balance, separated into available, trusted-pending, untrusted-pending, and
-    /// immature values.
+    /// Return the balance, separated into available, trusted-pending, untrusted-pending, and immature values.
     ///
     /// A pending output is trusted only when its entire unconfirmed ancestry spends coins we own.
     /// If any unconfirmed ancestor pulls in a foreign or unknown output, the output is untrusted.
     ///
-    // NOTE: depends on `CanonicalView` (bitcoindevkit/bdk#2246), not yet in a published
-    // `bdk_chain` release.
-    pub fn balance(&self) -> Balance {
+    /// # Arguments
+    /// 
+    /// * `min_confirmations` - How many confirmations an output needs to count as settled. `0` and `1` behave identically. It defines the `is_settled` predicate that bdk_chain's `classify_outpoints` uses to draw the confirmed/pending boundary.
+    /// 
+    // NOTE: depends on `CanonicalView` (bitcoindevkit/bdk#2246), not yet in a published `bdk_chain` release.
+    pub fn balance(&self, min_confirmations: u32) -> Balance {
         let graph = self.tx_graph.graph();
         let index = &self.tx_graph.index;
         let chain_tip = self.chain.tip().block_id();
+        let tip_height = chain_tip.height;
 
-        // A tx pulls in untrusted funds if any of its inputs spends an output we don't own
-        // (foreign spk, or unknown to our graph). Transitive taint through unconfirmed ancestry
-        // is handled by `classify_outpoints`, which calls this on every unsettled ancestor.
+        // A tx pulls in untrusted funds if any of its inputs spends an output we don't own (foreign spk, or unknown to our graph). 
+        // Transitive taint through unconfirmed ancestry is handled by `classify_outpoints`, which calls this on every unsettled ancestor.
         let does_taint = |ctx: &CanonicalTx<ChainPosition<ConfirmationBlockTime>>| {
             ctx.tx.input.iter().any(|txin| {
                 let op = txin.previous_output;
@@ -1178,6 +1180,12 @@ impl Wallet {
             })
         };
 
+        let min_confirmations = min_confirmations.max(1);
+        let is_settled = move |pos: &ChainPosition<ConfirmationBlockTime>| {
+            pos.confirmation_height_upper_bound()
+                .is_some_and(|h| tip_height - h + 1 >= min_confirmations)
+        };
+
         let view = self
             .chain
             .canonical_view(graph, chain_tip, CanonicalParams::default());
@@ -1186,7 +1194,7 @@ impl Wallet {
         for (txout, eligibility) in view.classify_outpoints(
             index.outpoints().iter().map(|(_, op)| *op),
             does_taint,
-            |pos| pos.is_confirmed(),
+            is_settled,
         ) {
             let bucket = match eligibility {
                 Eligibility::Settled => &mut balance.confirmed,

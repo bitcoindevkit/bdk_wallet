@@ -119,7 +119,7 @@ fn main() -> anyhow::Result<()> {
     let address = wallet.reveal_next_address(KeychainKind::External).address;
     println!("Wallet address: {address}");
 
-    let balance = wallet.balance();
+    let balance = wallet.balance(1);
     println!("Wallet balance before syncing: {}", balance.total());
 
     let wallet_tip = wallet.latest_checkpoint();
@@ -186,7 +186,7 @@ fn main() -> anyhow::Result<()> {
         }
     }
     let wallet_tip_end = wallet.latest_checkpoint();
-    let balance = wallet.balance();
+    let balance = wallet.balance(1);
     println!(
         "Synced {} blocks in {}s",
         blocks_received,

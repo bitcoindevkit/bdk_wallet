@@ -40,7 +40,7 @@ fn main() -> anyhow::Result<()> {
 
     println!(
         "Wallet funded with {}\n",
-        wallet.balance().total().display_dynamic()
+        wallet.balance(1).total().display_dynamic()
     );
     println!("Creating first sweep transaction (tx1)...");
 

@@ -78,7 +78,7 @@ fn test_get_funded_wallet_balance() {
     // The funded wallet contains a tx with a 76_000 sats input and two outputs, one spending 25_000
     // to a foreign address and one returning 50_000 back to the wallet as change. The remaining
     // 1000 sats are the transaction fee.
-    assert_eq!(wallet.balance().confirmed, Amount::from_sat(50_000));
+    assert_eq!(wallet.balance(1).confirmed, Amount::from_sat(50_000));
 }
 
 #[test]
@@ -2836,7 +2836,7 @@ fn test_spend_coinbase() {
     let not_yet_mature_time = confirmation_height + COINBASE_MATURITY - 2;
     let maturity_time = confirmation_height + COINBASE_MATURITY - 1;
 
-    let balance = wallet.balance();
+    let balance = wallet.balance(1);
     assert_eq!(
         balance,
         Balance {
@@ -2888,7 +2888,7 @@ fn test_spend_coinbase() {
             hash: BlockHash::all_zeros(),
         },
     );
-    let balance = wallet.balance();
+    let balance = wallet.balance(1);
     assert_eq!(
         balance,
         Balance {
@@ -3068,7 +3068,7 @@ fn test_keychains_with_overlapping_spks() {
     let non_wildcard_keychain = "wpkh(tprv8ZgxMBicQKsPdDArR4xSAECuVxeX1jwwSXR4ApKbkYgZiziDc4LdBy2WvJeGDfUSE4UT4hHhbgEwbdq8ajjUHiKDegkwrNU6V55CxcxonVN/1)";
 
     let (mut wallet, _) = get_funded_wallet(wildcard_keychain, non_wildcard_keychain);
-    assert_eq!(wallet.balance().confirmed, Amount::from_sat(50000));
+    assert_eq!(wallet.balance(1).confirmed, Amount::from_sat(50000));
 
     let addr = wallet
         .reveal_addresses_to(KeychainKind::External, 1)
@@ -3083,7 +3083,7 @@ fn test_keychains_with_overlapping_spks() {
         confirmation_time: 0,
     };
     let _outpoint = receive_output_to_address(&mut wallet, addr, Amount::from_sat(8000), anchor);
-    assert_eq!(wallet.balance().confirmed, Amount::from_sat(58000));
+    assert_eq!(wallet.balance(1).confirmed, Amount::from_sat(58000));
 }
 
 #[test]
@@ -3354,7 +3354,7 @@ fn test_trusted_pending_balance_from_owned_outpoints() {
 
     insert_tx(&mut wallet, tx.clone());
 
-    let balance = wallet.balance();
+    let balance = wallet.balance(1);
 
     assert_eq!(balance.trusted_pending, Amount::from_sat(500));
     assert_eq!(balance.untrusted_pending, Amount::ZERO);
@@ -3389,7 +3389,7 @@ fn test_untrusted_pending_balance_from_external_inputs() {
 
     insert_tx(&mut wallet, tx.clone());
 
-    let balance = wallet.balance();
+    let balance = wallet.balance(1);
 
     assert_eq!(balance.untrusted_pending, Amount::from_sat(500));
     assert_eq!(balance.trusted_pending, Amount::ZERO);
@@ -3439,7 +3439,7 @@ fn test_trusted_pending_transitive_chain() {
     };
     insert_tx(&mut wallet, tx_b);
 
-    let balance = wallet.balance();
+    let balance = wallet.balance(1);
 
     assert_eq!(balance.trusted_pending, Amount::from_sat(500));
     assert_eq!(balance.untrusted_pending, Amount::ZERO);
@@ -3474,7 +3474,7 @@ fn test_pay_to_internal_from_not_trusted() {
 
     insert_tx(&mut wallet, tx);
 
-    let balance = wallet.balance();
+    let balance = wallet.balance(1);
 
     // The output is ours but the input is not owned, so it must be untrusted_pending.
     assert_eq!(balance.untrusted_pending, Amount::from_sat(500));
@@ -3535,7 +3535,7 @@ fn test_trusted_pending_does_not_propagate_through_foreign_outputs() {
     };
     insert_tx(&mut wallet, tx_b);
 
-    let balance = wallet.balance();
+    let balance = wallet.balance(1);
 
     assert_eq!(balance.trusted_pending, Amount::from_sat(24_000));
     assert_eq!(balance.untrusted_pending, Amount::from_sat(20_000));
@@ -3589,8 +3589,104 @@ fn test_spending_untrusted_is_untrusted() {
 
     insert_tx(&mut wallet, tx_spend);
 
-    let balance = wallet.balance();
+    let balance = wallet.balance(1);
 
     assert_eq!(balance.untrusted_pending, Amount::from_sat(45_000));
     assert_eq!(balance.trusted_pending, Amount::ZERO);
+}
+
+/// Raising `min_confirmations` above an owned output's depth demotes it from confirmed to trusted_pending.
+#[test]
+fn test_balance_min_confirmations_demotes_owned_to_trusted() {
+    let (mut wallet, _) = get_funded_wallet_wpkh();
+
+    insert_checkpoint(
+        &mut wallet,
+        BlockId {
+            height: 2005,
+            hash: BlockHash::all_zeros(),
+        },
+    );
+
+    // 6 confirmations, need 3.
+    assert_eq!(wallet.balance(3).confirmed, Amount::from_sat(50_000));
+    // 6 confirmations, need 6.
+    assert_eq!(wallet.balance(6).confirmed, Amount::from_sat(50_000));
+    // 6 confirmations, need 7.
+    let balance_7 = wallet.balance(7);
+    assert_eq!(balance_7.confirmed, Amount::ZERO);
+    assert_eq!(balance_7.trusted_pending, Amount::from_sat(50_000));
+    assert_eq!(balance_7.total(), wallet.balance(6).total());
+}
+
+/// When `min_confirmations` pushes a confirmed output below the settled bar, it is re-classified by ancestry. (e.g. an output funded by a foreign input becomes untrusted_pending, not trusted)
+#[test]
+fn test_balance_min_confirmations_demotes_foreign_to_untrusted() {
+    let (descriptor, change_descriptor) = get_test_wpkh_and_change_desc();
+    let mut wallet = Wallet::create(descriptor, change_descriptor)
+        .network(Network::Regtest)
+        .create_wallet_no_persist()
+        .expect("wallet");
+
+    let confirmation_block = BlockId {
+        height: 100,
+        hash: BlockHash::all_zeros(),
+    };
+    insert_checkpoint(&mut wallet, confirmation_block);
+
+    let tx = Transaction {
+        // Foreign input
+        input: vec![TxIn {
+            previous_output: OutPoint {
+                txid: Txid::from_raw_hash(Hash::all_zeros()),
+                vout: 0,
+            },
+            ..Default::default()
+        }],
+        output: vec![TxOut {
+            value: Amount::from_sat(50_000),
+            script_pubkey: wallet
+                .next_unused_address(KeychainKind::External)
+                .address
+                .script_pubkey(),
+        }],
+        version: transaction::Version::ONE,
+        lock_time: absolute::LockTime::ZERO,
+    };
+
+    let txid = tx.compute_txid();
+    let mut tx_update = bdk_chain::TxUpdate::default();
+    tx_update.txs = vec![Arc::new(tx)];
+    tx_update.anchors = [(
+        ConfirmationBlockTime {
+            block_id: confirmation_block,
+            confirmation_time: 0,
+        },
+        txid,
+    )]
+    .into();
+    wallet
+        .apply_update(Update {
+            tx_update,
+            ..Default::default()
+        })
+        .unwrap();
+
+    // Raise the tip to height 105, output has 6 confirmations.
+    insert_checkpoint(
+        &mut wallet,
+        BlockId {
+            height: 105,
+            hash: BlockHash::all_zeros(),
+        },
+    );
+
+    // Settled even if foreign.
+    assert_eq!(wallet.balance(6).confirmed, Amount::from_sat(50_000));
+
+    // Below the bar, so is no longer settled. As it is foreign, should be untrusted_pending
+    let balance_7 = wallet.balance(7);
+    assert_eq!(balance_7.confirmed, Amount::ZERO);
+    assert_eq!(balance_7.untrusted_pending, Amount::from_sat(50_000));
+    assert_eq!(balance_7.trusted_pending, Amount::ZERO);
 }

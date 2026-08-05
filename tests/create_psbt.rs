@@ -889,7 +889,7 @@ fn test_create_psbt_utxo_filter() {
         );
     }
     assert_eq!(wallet.list_unspent().count(), 4);
-    assert_eq!(wallet.balance().total().to_sat(), 2100);
+    assert_eq!(wallet.balance(1).total().to_sat(), 2100);
 
     let mut params = PsbtParams::default();
     params.fee_rate(FeeRate::ZERO);

@@ -41,7 +41,7 @@ fn main() -> Result<(), anyhow::Error> {
         address.index, address.address
     );
 
-    let balance = wallet.balance();
+    let balance = wallet.balance(1);
     println!("Wallet balance before syncing: {}", balance.total());
 
     println!("Full Sync...");
@@ -64,7 +64,7 @@ fn main() -> Result<(), anyhow::Error> {
     wallet.persist(&mut db)?;
     println!();
 
-    let balance = wallet.balance();
+    let balance = wallet.balance(1);
     println!("Wallet balance after syncing: {}", balance.total());
 
     if balance.total() < SEND_AMOUNT {
@@ -156,7 +156,7 @@ fn main() -> Result<(), anyhow::Error> {
     }
     wallet.persist(&mut db)?;
 
-    let balance_after_sync = wallet.balance();
+    let balance_after_sync = wallet.balance(1);
     println!("Wallet balance after sync: {}", balance_after_sync.total());
     println!(
         "Wallet has {} transactions and {} utxos",
