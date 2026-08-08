@@ -60,9 +60,7 @@ where
 #[must_use]
 pub struct CreateParams {
     pub(crate) descriptor: DescriptorToExtract,
-    pub(crate) descriptor_keymap: KeyMap,
     pub(crate) change_descriptor: Option<DescriptorToExtract>,
-    pub(crate) change_descriptor_keymap: KeyMap,
     pub(crate) network: Network,
     pub(crate) genesis_hash: Option<BlockHash>,
     pub(crate) lookahead: u32,
@@ -83,9 +81,7 @@ impl CreateParams {
     pub fn new_single<D: IntoWalletDescriptor + Send + 'static>(descriptor: D) -> Self {
         Self {
             descriptor: make_descriptor_to_extract(descriptor),
-            descriptor_keymap: KeyMap::default(),
             change_descriptor: None,
-            change_descriptor_keymap: KeyMap::default(),
             network: Network::Bitcoin,
             genesis_hash: None,
             lookahead: DEFAULT_LOOKAHEAD,
@@ -105,9 +101,7 @@ impl CreateParams {
     ) -> Self {
         Self {
             descriptor: make_descriptor_to_extract(descriptor),
-            descriptor_keymap: KeyMap::default(),
             change_descriptor: Some(make_descriptor_to_extract(change_descriptor)),
-            change_descriptor_keymap: KeyMap::default(),
             network: Network::Bitcoin,
             genesis_hash: None,
             lookahead: DEFAULT_LOOKAHEAD,
@@ -130,24 +124,12 @@ impl CreateParams {
     ) -> Self {
         Self {
             descriptor: make_two_path_descriptor_to_extract(two_path_descriptor.clone(), 0),
-            descriptor_keymap: KeyMap::default(),
             change_descriptor: Some(make_two_path_descriptor_to_extract(two_path_descriptor, 1)),
-            change_descriptor_keymap: KeyMap::default(),
             network: Network::Bitcoin,
             genesis_hash: None,
             lookahead: DEFAULT_LOOKAHEAD,
             use_spk_cache: false,
         }
-    }
-
-    /// Extend the given `keychain`'s `keymap`.
-    pub fn keymap(mut self, keychain: KeychainKind, keymap: KeyMap) -> Self {
-        match keychain {
-            KeychainKind::External => &mut self.descriptor_keymap,
-            KeychainKind::Internal => &mut self.change_descriptor_keymap,
-        }
-        .extend(keymap);
-        self
     }
 
     /// Set [`Self::network`].
@@ -213,14 +195,11 @@ impl CreateParams {
 /// Parameters for [`Wallet::load`] or [`PersistedWallet::load`].
 #[must_use]
 pub struct LoadParams {
-    pub(crate) descriptor_keymap: KeyMap,
-    pub(crate) change_descriptor_keymap: KeyMap,
     pub(crate) lookahead: u32,
     pub(crate) check_network: Option<Network>,
     pub(crate) check_genesis_hash: Option<BlockHash>,
     pub(crate) check_descriptor: Option<Option<DescriptorToExtract>>,
     pub(crate) check_change_descriptor: Option<Option<DescriptorToExtract>>,
-    pub(crate) extract_keys: bool,
     pub(crate) use_spk_cache: bool,
 }
 
@@ -230,34 +209,16 @@ impl LoadParams {
     /// Default values: `lookahead` = [`DEFAULT_LOOKAHEAD`]
     pub fn new() -> Self {
         Self {
-            descriptor_keymap: KeyMap::default(),
-            change_descriptor_keymap: KeyMap::default(),
             lookahead: DEFAULT_LOOKAHEAD,
             check_network: None,
             check_genesis_hash: None,
             check_descriptor: None,
             check_change_descriptor: None,
-            extract_keys: false,
             use_spk_cache: false,
         }
     }
 
-    /// Extend the given `keychain`'s `keymap`.
-    pub fn keymap(mut self, keychain: KeychainKind, keymap: KeyMap) -> Self {
-        match keychain {
-            KeychainKind::External => &mut self.descriptor_keymap,
-            KeychainKind::Internal => &mut self.change_descriptor_keymap,
-        }
-        .extend(keymap);
-        self
-    }
-
     /// Checks the `expected_descriptor` matches exactly what is loaded for `keychain`.
-    ///
-    /// # Note
-    ///
-    /// You must also specify [`extract_keys`](Self::extract_keys) if you wish to add a signer
-    /// for an expected descriptor containing secrets.
     pub fn descriptor<D>(mut self, keychain: KeychainKind, expected_descriptor: Option<D>) -> Self
     where
         D: IntoWalletDescriptor + Send + 'static,
@@ -312,13 +273,6 @@ impl LoadParams {
     /// the default value [`DEFAULT_LOOKAHEAD`] is sufficient.
     pub fn lookahead(mut self, lookahead: u32) -> Self {
         self.lookahead = lookahead;
-        self
-    }
-
-    /// Whether to try extracting private keys from the *provided descriptors* upon loading.
-    /// See also [`LoadParams::descriptor`].
-    pub fn extract_keys(mut self) -> Self {
-        self.extract_keys = true;
         self
     }
 

@@ -11,8 +11,12 @@
 
 //! Generalized signers
 //!
-//! This module provides the ability to add customized signers to a [`Wallet`](super::Wallet)
-//! through the [`Wallet::add_signer`](super::Wallet::add_signer) function.
+//! This module provides the ability to build caller-owned signer containers and use them with
+//! [`Wallet::sign_with_signers`](super::Wallet::sign_with_signers).
+//!
+//! The `Wallet` no longer holds key material. Prefer signing PSBTs with
+//! [`bitcoin::Psbt::sign`] directly; reach for the containers here when you need the extra
+//! control that [`SignOptions`] provides, or when plugging in your own [`TransactionSigner`].
 //!
 //! ```
 //! # use alloc::sync::Arc;
@@ -65,17 +69,18 @@
 //!     }
 //! }
 //!
-//! let custom_signer = CustomSigner::connect();
+//! let custom_signer = Arc::new(CustomSigner::connect());
 //!
 //! let descriptor = "wpkh(tpubD6NzVbkrYhZ4Xferm7Pz4VnjdcDPFyjVu5K4iZXQ4pVN8Cks4pHVowTBXBKRhX64pkRyJZJN5xAKj4UDNnLPb5p2sSKXhewoYx5GbTdUFWq/0/*)";
 //! let change_descriptor = "wpkh(tpubD6NzVbkrYhZ4Xferm7Pz4VnjdcDPFyjVu5K4iZXQ4pVN8Cks4pHVowTBXBKRhX64pkRyJZJN5xAKj4UDNnLPb5p2sSKXhewoYx5GbTdUFWq/1/*)";
-//! let mut wallet = Wallet::create(descriptor, change_descriptor)
+//! let wallet = Wallet::create(descriptor, change_descriptor)
 //!     .network(Network::Testnet)
 //!     .create_wallet_no_persist()?;
-//! wallet.add_signer(
-//!     KeychainKind::External,
+//! let mut external_signers = SignersContainer::new();
+//! external_signers.add_external(
+//!     custom_signer.id(wallet.secp_ctx()),
 //!     SignerOrdering(200),
-//!     Arc::new(custom_signer)
+//!     custom_signer,
 //! );
 //!
 //! # Ok::<_, anyhow::Error>(())

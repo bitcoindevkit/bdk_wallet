@@ -46,13 +46,23 @@
 //! # use bitcoin::*;
 //! # use bdk_wallet::export::*;
 //! # use bdk_wallet::*;
-//! let wallet = Wallet::create(
-//!     "wpkh([c258d2e4/84h/1h/0h]tpubDD3ynpHgJQW8VvWRzQ5WFDCrs4jqVFGHB3vLC3r49XHJSqP8bHKdK4AriuUKLccK68zfzowx7YhmDN8SiSkgCDENUFx9qVw65YyqM78vyVe/0/*)",
-//!     "wpkh([c258d2e4/84h/1h/0h]tpubDD3ynpHgJQW8VvWRzQ5WFDCrs4jqVFGHB3vLC3r49XHJSqP8bHKdK4AriuUKLccK68zfzowx7YhmDN8SiSkgCDENUFx9qVw65YyqM78vyVe/1/*)",
+//! const EXTERNAL: &str = "wpkh([c258d2e4/84h/1h/0h]tpubDD3ynpHgJQW8VvWRzQ5WFDCrs4jqVFGHB3vLC3r49XHJSqP8bHKdK4AriuUKLccK68zfzowx7YhmDN8SiSkgCDENUFx9qVw65YyqM78vyVe/0/*)";
+//! const INTERNAL: &str = "wpkh([c258d2e4/84h/1h/0h]tpubDD3ynpHgJQW8VvWRzQ5WFDCrs4jqVFGHB3vLC3r49XHJSqP8bHKdK4AriuUKLccK68zfzowx7YhmDN8SiSkgCDENUFx9qVw65YyqM78vyVe/1/*)";
+//! let wallet = Wallet::create(EXTERNAL, INTERNAL)
+//!     .network(Network::Testnet)
+//!     .create_wallet_no_persist()?;
+//! // Keys are caller-owned: supply the keymaps explicitly.
+//! let secp = wallet.secp_ctx();
+//! let (_, external_keymap) = miniscript::Descriptor::parse_descriptor(secp, EXTERNAL)?;
+//! let (_, internal_keymap) = miniscript::Descriptor::parse_descriptor(secp, INTERNAL)?;
+//! let export = FullyNodedExport::export_wallet_with_keymaps(
+//!     &wallet,
+//!     &external_keymap,
+//!     &internal_keymap,
+//!     "exported wallet",
+//!     true,
 //! )
-//! .network(Network::Testnet)
-//! .create_wallet_no_persist()?;
-//! let export = FullyNodedExport::export_wallet(&wallet, "exported wallet", true).unwrap();
+//! .unwrap();
 //!
 //! println!("Exported: {}", export.to_string());
 //! # Ok::<_, Box<dyn core::error::Error>>(())
@@ -147,6 +157,7 @@ use miniscript::{Descriptor, ScriptContext, Terminal};
 
 use crate::types::KeychainKind;
 use crate::wallet::Wallet;
+use miniscript::descriptor::KeyMap;
 
 /// Alias for [`FullyNodedExport`]
 #[deprecated(since = "0.18.0", note = "Please use [`FullyNodedExport`] instead")]
@@ -194,19 +205,18 @@ impl FullyNodedExport {
     ///
     /// If the database is empty or `include_blockheight` is false, the `blockheight` field
     /// returned will be `0`.
-    pub fn export_wallet(
+    pub fn export_wallet_with_keymaps(
         wallet: &Wallet,
+        external_keymap: &KeyMap,
+        internal_keymap: &KeyMap,
         label: &str,
         include_blockheight: bool,
     ) -> Result<Self, &'static str> {
-        let descriptor = wallet
-            .public_descriptor(KeychainKind::External)
-            .to_string_with_secret(
-                &wallet
-                    .get_signers(KeychainKind::External)
-                    .as_key_map(wallet.secp_ctx()),
-            );
-        let descriptor = remove_checksum(descriptor);
+        let descriptor = remove_checksum(
+            wallet
+                .public_descriptor(KeychainKind::External)
+                .to_string_with_secret(external_keymap),
+        );
         Self::is_compatible_with_core(&descriptor)?;
 
         let blockheight = if include_blockheight {
@@ -226,16 +236,11 @@ impl FullyNodedExport {
             blockheight,
         };
 
-        let change_descriptor = {
-            let descriptor = wallet
+        let change_descriptor = Some(remove_checksum(
+            wallet
                 .public_descriptor(KeychainKind::Internal)
-                .to_string_with_secret(
-                    &wallet
-                        .get_signers(KeychainKind::Internal)
-                        .as_key_map(wallet.secp_ctx()),
-                );
-            Some(remove_checksum(descriptor))
-        };
+                .to_string_with_secret(internal_keymap),
+        ));
 
         if export.change_descriptor() != change_descriptor {
             return Err("Incompatible change descriptor");
@@ -737,13 +742,36 @@ mod test {
         wallet
     }
 
+    /// Export using keymaps parsed from the descriptors, mirroring what a caller does now that
+    /// the wallet no longer owns key material.
+    fn export_with_desc_keymaps(
+        wallet: &Wallet,
+        descriptor: &str,
+        change_descriptor: &str,
+        label: &str,
+        include_blockheight: bool,
+    ) -> Result<FullyNodedExport, &'static str> {
+        let secp = wallet.secp_ctx();
+        let (_, external_keymap) = Descriptor::parse_descriptor(secp, descriptor).unwrap();
+        let (_, internal_keymap) = Descriptor::parse_descriptor(secp, change_descriptor).unwrap();
+        FullyNodedExport::export_wallet_with_keymaps(
+            wallet,
+            &external_keymap,
+            &internal_keymap,
+            label,
+            include_blockheight,
+        )
+    }
+
     #[test]
     fn test_export_bip44() {
         let descriptor = "wpkh(xprv9s21ZrQH143K4CTb63EaMxja1YiTnSEWKMbn23uoEnAzxjdUJRQkazCAtzxGm4LSoTSVTptoV9RbchnKPW9HxKtZumdyxyikZFDLhogJ5Uj/44'/0'/0'/0/*)";
         let change_descriptor = "wpkh(xprv9s21ZrQH143K4CTb63EaMxja1YiTnSEWKMbn23uoEnAzxjdUJRQkazCAtzxGm4LSoTSVTptoV9RbchnKPW9HxKtZumdyxyikZFDLhogJ5Uj/44'/0'/0'/1/*)";
 
         let wallet = get_test_wallet(descriptor, change_descriptor, Network::Bitcoin);
-        let export = FullyNodedExport::export_wallet(&wallet, "Test Label", true).unwrap();
+        let export =
+            export_with_desc_keymaps(&wallet, descriptor, change_descriptor, "Test Label", true)
+                .unwrap();
 
         assert_eq!(export.descriptor(), descriptor);
         assert_eq!(export.change_descriptor(), Some(change_descriptor.into()));
@@ -762,7 +790,8 @@ mod test {
         let change_descriptor = "wpkh(xprv9s21ZrQH143K4CTb63EaMxja1YiTnSEWKMbn23uoEnAzxjdUJRQkazCAtzxGm4LSoTSVTptoV9RbchnKPW9HxKtZumdyxyikZFDLhogJ5Uj/44'/0'/0'/1/0)";
 
         let wallet = get_test_wallet(descriptor, change_descriptor, Network::Bitcoin);
-        FullyNodedExport::export_wallet(&wallet, "Test Label", true).unwrap();
+        export_with_desc_keymaps(&wallet, descriptor, change_descriptor, "Test Label", true)
+            .unwrap();
     }
 
     #[test]
@@ -775,7 +804,8 @@ mod test {
         let change_descriptor = "wpkh(xprv9s21ZrQH143K4CTb63EaMxja1YiTnSEWKMbn23uoEnAzxjdUJRQkazCAtzxGm4LSoTSVTptoV9RbchnKPW9HxKtZumdyxyikZFDLhogJ5Uj/50'/0'/1/*)";
 
         let wallet = get_test_wallet(descriptor, change_descriptor, Network::Bitcoin);
-        FullyNodedExport::export_wallet(&wallet, "Test Label", true).unwrap();
+        export_with_desc_keymaps(&wallet, descriptor, change_descriptor, "Test Label", true)
+            .unwrap();
     }
 
     #[test]
@@ -792,7 +822,9 @@ mod test {
                                  ))";
 
         let wallet = get_test_wallet(descriptor, change_descriptor, Network::Testnet);
-        let export = FullyNodedExport::export_wallet(&wallet, "Test Label", true).unwrap();
+        let export =
+            export_with_desc_keymaps(&wallet, descriptor, change_descriptor, "Test Label", true)
+                .unwrap();
 
         assert_eq!(export.descriptor(), descriptor);
         assert_eq!(export.change_descriptor(), Some(change_descriptor.into()));
@@ -805,7 +837,9 @@ mod test {
         let descriptor = "tr([73c5da0a/86'/0'/0']tprv8fMn4hSKPRC1oaCPqxDb1JWtgkpeiQvZhsr8W2xuy3GEMkzoArcAWTfJxYb6Wj8XNNDWEjfYKK4wGQXh3ZUXhDF2NcnsALpWTeSwarJt7Vc/0/*)";
         let change_descriptor = "tr([73c5da0a/86'/0'/0']tprv8fMn4hSKPRC1oaCPqxDb1JWtgkpeiQvZhsr8W2xuy3GEMkzoArcAWTfJxYb6Wj8XNNDWEjfYKK4wGQXh3ZUXhDF2NcnsALpWTeSwarJt7Vc/1/*)";
         let wallet = get_test_wallet(descriptor, change_descriptor, Network::Testnet);
-        let export = FullyNodedExport::export_wallet(&wallet, "Test Label", true).unwrap();
+        let export =
+            export_with_desc_keymaps(&wallet, descriptor, change_descriptor, "Test Label", true)
+                .unwrap();
         assert_eq!(export.descriptor(), descriptor);
         assert_eq!(export.change_descriptor(), Some(change_descriptor.into()));
         assert_eq!(export.blockheight, 5000);
@@ -818,7 +852,9 @@ mod test {
         let change_descriptor = "wpkh(xprv9s21ZrQH143K4CTb63EaMxja1YiTnSEWKMbn23uoEnAzxjdUJRQkazCAtzxGm4LSoTSVTptoV9RbchnKPW9HxKtZumdyxyikZFDLhogJ5Uj/44'/0'/0'/1/*)";
 
         let wallet = get_test_wallet(descriptor, change_descriptor, Network::Bitcoin);
-        let export = FullyNodedExport::export_wallet(&wallet, "Test Label", true).unwrap();
+        let export =
+            export_with_desc_keymaps(&wallet, descriptor, change_descriptor, "Test Label", true)
+                .unwrap();
 
         assert_eq!(
             export.to_string(),

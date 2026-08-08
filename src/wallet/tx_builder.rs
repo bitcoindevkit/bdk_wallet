@@ -36,7 +36,7 @@
 //! # Ok::<(), anyhow::Error>(())
 //! ```
 
-use alloc::{boxed::Box, string::String, vec::Vec};
+use alloc::{boxed::Box, vec::Vec};
 use core::fmt;
 
 use alloc::sync::Arc;
@@ -52,7 +52,8 @@ use rand_core::RngCore;
 use super::coin_selection::CoinSelectionAlgorithm;
 use super::utils::shuffle_slice;
 use super::{CreateTxError, Wallet};
-use crate::collections::{BTreeMap, HashMap, HashSet};
+use crate::collections::{HashMap, HashSet};
+use crate::descriptor::Condition;
 use crate::{KeychainKind, LocalOutput, Utxo, WeightedUtxo};
 
 /// A transaction builder
@@ -124,8 +125,7 @@ pub(crate) struct TxParams {
     pub(crate) drain_wallet: bool,
     pub(crate) drain_to: Option<ScriptBuf>,
     pub(crate) fee_policy: Option<FeePolicy>,
-    pub(crate) internal_policy_path: Option<BTreeMap<String, Vec<usize>>>,
-    pub(crate) external_policy_path: Option<BTreeMap<String, Vec<usize>>>,
+    pub(crate) condition: Option<Condition>,
     pub(crate) utxos: Vec<WeightedUtxo>,
     pub(crate) unspendable: HashSet<OutPoint>,
     pub(crate) manually_selected_only: bool,
@@ -191,80 +191,64 @@ impl<'a, Cs> TxBuilder<'a, Cs> {
         self
     }
 
-    /// Set the policy path to use while creating the transaction for a given keychain.
+    /// Set the CSV / CLTV requirements for the intended spending path.
     ///
-    /// This method accepts a map where the key is the policy node id (see
-    /// [`Policy::id`](crate::descriptor::Policy::id)) and the value is the list of the indexes of
-    /// the items that are intended to be satisfied from the policy node (see
-    /// [`SatisfiableItem::Thresh::items`](crate::descriptor::policy::SatisfiableItem::Thresh::items)).
+    /// This is needed when different ways of satisfying the descriptor imply different `nSequence`
+    /// or `nLockTime` values. Derive a [`Condition`] before building the transaction from
+    /// caller-owned policy information: extract the spending policy with
+    /// [`ExtractPolicy::extract_policy`](crate::descriptor::ExtractPolicy::extract_policy), pick a
+    /// path, and call [`Policy::get_condition`](crate::descriptor::Policy::get_condition). You can
+    /// also construct one directly when the CSV / CLTV values are already known.
+    ///
+    /// For wallets with separate external and internal descriptors, merge the conditions for every
+    /// keychain from which inputs may be selected using [`Condition::merge`].
+    ///
+    /// Without a condition, building a transaction for a descriptor that requires an explicit
+    /// spending path fails with [`CreateTxError::SpendingPolicyRequired`].
     ///
     /// ## Example
     ///
-    /// An example of when the policy path is needed is the following descriptor:
-    /// `wsh(thresh(2,pk(A),sj:and_v(v:pk(B),n:older(6)),snj:and_v(v:pk(C),after(630000))))`,
-    /// derived from the miniscript policy
-    /// `thresh(2,pk(A),and(pk(B),older(6)),and(pk(C),after(630000)))`. It declares three
-    /// descriptor fragments, and at the top level it uses `thresh()` to ensure that at least
-    /// two of them are satisfied. The individual fragments are:
-    ///
-    /// 1. `pk(A)`
-    /// 2. `and(pk(B),older(6))`
-    /// 3. `and(pk(C),after(630000))`
-    ///
-    /// When those conditions are combined in pairs, it's clear that the transaction needs to be
-    /// created differently depending on how the user intends to satisfy the policy afterwards:
-    ///
-    /// * If fragments `1` and `2` are used, the transaction will need to use a specific
-    ///   `n_sequence` in order to spend an `OP_CSV` branch.
-    /// * If fragments `1` and `3` are used, the transaction will need to use a specific `locktime`
-    ///   in order to spend an `OP_CLTV` branch.
-    /// * If fragments `2` and `3` are used, the transaction will need both.
-    ///
-    /// When the spending policy is represented as a tree (see
-    /// [`Wallet::policies`](super::Wallet::policies)), every node
-    /// is assigned a unique identifier that can be used in the policy path to specify which of
-    /// the node's children the user intends to satisfy: for instance, assuming the `thresh()`
-    /// root node of this example has an id of `aabbccdd`, the policy path map would look like:
-    ///
-    /// `{ "aabbccdd" => [0, 1] }`
-    ///
-    /// where the key is the node's id, and the value is a list of the children that should be
-    /// used, in no particular order.
-    ///
-    /// If a particularly complex descriptor has multiple ambiguous thresholds in its structure,
-    /// multiple entries can be added to the map, one for each node that requires an explicit path.
-    ///
     /// ```
-    /// # use std::str::FromStr;
     /// # use std::collections::BTreeMap;
-    /// # use bitcoin::*;
     /// # use bdk_wallet::*;
-    /// # let to_address =
-    /// Address::from_str("2N4eQYCbKUHCCTUjBJeHcJp9ok6J2GZsTDt")
-    ///     .unwrap()
-    ///     .assume_checked();
-    /// # let mut wallet = doctest_wallet!();
+    /// # use bdk_wallet::descriptor::{ExtractPolicy, policy::BuildSatisfaction};
+    /// # use bdk_wallet::signer::SignersContainer;
+    /// # use bitcoin::{Network, Sequence};
+    /// # let descriptor = concat!(
+    /// #     "wsh(thresh(2,",
+    /// #     "pk(cVpPVruEDdmutPzisEsYvtST1usBR3ntr8pXSyt6D2YYqXRyPcFW),",
+    /// #     "sj:and_v(v:pk(cRjo6jqfVNP33HhSS76UhXETZsGTZYx8FMFvR9kpbtCSV1PmdZdu),",
+    /// #     "n:older(6)),",
+    /// #     "snj:and_v(v:pk(cMnkdebixpXMPfkcNEjjGin7s94hiehAH4mLbYkZoh9KSiNNmqC8),",
+    /// #     "after(630000))))",
+    /// # );
+    /// # let mut wallet = Wallet::create_single(descriptor)
+    /// #     .network(Network::Regtest)
+    /// #     .create_wallet_no_persist()?;
+    /// let policy = wallet
+    ///     .public_descriptor(KeychainKind::External)
+    ///     .extract_policy(
+    ///         // Signers only affect the `contribution` and `satisfaction` fields, which
+    ///         // `get_condition` ignores, so an empty container is enough here.
+    ///         &SignersContainer::default(),
+    ///         BuildSatisfaction::None,
+    ///         wallet.secp_ctx(),
+    ///     )?
+    ///     .expect("descriptor has a spending policy");
+    ///
+    /// // Choose pk(A) + and(pk(B), older(6)) from the thresh() root.
     /// let mut path = BTreeMap::new();
-    /// path.insert("aabbccdd".to_string(), vec![0, 1]);
+    /// path.insert(policy.id.clone(), vec![0, 1]);
+    /// let condition = policy.get_condition(&path)?;
+    /// assert_eq!(condition.csv, Some(Sequence(6)));
     ///
-    /// let builder = wallet
-    ///     .build_tx()
-    ///     .add_recipient(to_address.script_pubkey(), Amount::from_sat(50_000))
-    ///     .policy_path(path, KeychainKind::External);
-    ///
+    /// // Inputs of the resulting transaction will carry nSequence = 6.
+    /// let mut builder = wallet.build_tx();
+    /// builder.set_condition(condition);
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    pub fn policy_path(
-        &mut self,
-        policy_path: BTreeMap<String, Vec<usize>>,
-        keychain: KeychainKind,
-    ) -> &mut Self {
-        let to_update = match keychain {
-            KeychainKind::Internal => &mut self.params.internal_policy_path,
-            KeychainKind::External => &mut self.params.external_policy_path,
-        };
-
-        *to_update = Some(policy_path);
+    pub fn set_condition(&mut self, condition: Condition) -> &mut Self {
+        self.params.condition = Some(condition);
         self
     }
 

@@ -97,7 +97,6 @@ fn main() -> anyhow::Result<()> {
     let wallet_opt = Wallet::load()
         .descriptor(KeychainKind::External, Some(args.descriptor.clone()))
         .descriptor(KeychainKind::Internal, args.change_descriptor.clone())
-        .extract_keys()
         .check_network(args.network)
         .load_wallet(&mut db)?;
     let mut wallet = match wallet_opt {

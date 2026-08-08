@@ -46,7 +46,7 @@ pub mod template;
 
 pub use self::checksum::calc_checksum;
 pub use self::error::Error as DescriptorError;
-pub use self::policy::Policy;
+pub use self::policy::{Condition, Policy};
 use self::template::DescriptorTemplateOut;
 use crate::keys::{IntoDescriptorKey, KeyError};
 use crate::wallet::{signer::SignersContainer, utils::SecpCtx};

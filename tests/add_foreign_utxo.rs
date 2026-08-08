@@ -8,12 +8,18 @@ use bdk_wallet::tx_builder::AddForeignUtxoError;
 use bitcoin::{Address, Amount, psbt};
 
 mod common;
+use common::signers_from_descriptor;
 
 #[test]
 fn test_add_foreign_utxo() {
     let (mut wallet1, _) = get_funded_wallet_wpkh();
     let (wallet2, _) =
         get_funded_wallet_single("wpkh(cVbZ8ovhye9AoAHFsqobCf7LxbXDAECy9Kb8TZdfsDYMZGBUyCnm)");
+    let signers1 = signers_from_descriptor(&wallet1, get_test_wpkh_and_change_desc().0);
+    let signers2 = signers_from_descriptor(
+        &wallet2,
+        "wpkh(cVbZ8ovhye9AoAHFsqobCf7LxbXDAECy9Kb8TZdfsDYMZGBUyCnm)",
+    );
 
     let addr = Address::from_str("2N1Ffz3WaNzbeLFBb51xyFMHYSEUXcbiSoX")
         .unwrap()
@@ -56,8 +62,9 @@ fn test_add_foreign_utxo() {
     );
 
     let finished = wallet1
-        .sign(
+        .sign_with_signers(
             &mut psbt,
+            &[&signers1],
             SignOptions {
                 trust_witness_utxo: true,
                 ..Default::default()
@@ -71,8 +78,9 @@ fn test_add_foreign_utxo() {
     );
 
     let finished = wallet2
-        .sign(
+        .sign_with_signers(
             &mut psbt,
+            &[&signers2],
             SignOptions {
                 trust_witness_utxo: true,
                 ..Default::default()
