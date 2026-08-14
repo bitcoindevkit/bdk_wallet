@@ -140,6 +140,7 @@ pub(crate) struct TxParams {
     pub(crate) bumping_fee: Option<PreviousFee>,
     pub(crate) current_height: Option<absolute::LockTime>,
     pub(crate) allow_dust: bool,
+    pub(crate) lock_utxos: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -665,6 +666,12 @@ impl<'a, Cs> TxBuilder<'a, Cs> {
     /// non-standard.
     pub fn allow_dust(&mut self, allow_dust: bool) -> &mut Self {
         self.params.allow_dust = allow_dust;
+        self
+    }
+
+    /// Set whether to automatically lock the selected UTXOs (inputs) of the created transaction in the wallet.
+    pub fn lock_utxos(&mut self, lock: bool) -> &mut Self {
+        self.params.lock_utxos = lock;
         self
     }
 

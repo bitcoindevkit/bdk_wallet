@@ -3506,3 +3506,30 @@ fn test_create_and_spend_from_truc_tx() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn test_tx_builder_lock_utxos() {
+    let (mut wallet, _) = get_funded_wallet_wpkh();
+
+    let utxo = wallet.list_unspent().next().unwrap().outpoint;
+    assert!(!wallet.is_outpoint_locked(utxo));
+
+    let send_to = wallet.reveal_next_address(KeychainKind::External).address;
+    let mut builder = wallet.build_tx();
+    builder
+        .add_recipient(send_to.script_pubkey(), Amount::from_sat(20_000))
+        .lock_utxos(true);
+    let psbt = builder.finish().unwrap();
+
+    let input_op = psbt.unsigned_tx.input[0].previous_output;
+    assert!(wallet.is_outpoint_locked(input_op));
+
+    // Subsequent build should fail with InsufficientFunds
+    let send_to2 = wallet.reveal_next_address(KeychainKind::External).address;
+    let mut builder2 = wallet.build_tx();
+    builder2
+        .add_recipient(send_to2.script_pubkey(), Amount::from_sat(20_000));
+    let result = builder2.finish();
+    assert!(result.is_err());
+}
+
