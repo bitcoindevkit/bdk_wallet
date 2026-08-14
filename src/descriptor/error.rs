@@ -137,3 +137,9 @@ impl From<miniscript::AbsLockTimeError> for Error {
         Error::Miniscript(miniscript::Error::AbsoluteLockTime(err))
     }
 }
+
+impl From<miniscript::ThresholdError> for Error {
+    fn from(err: miniscript::ThresholdError) -> Self {
+        Error::Miniscript(miniscript::Error::Threshold(err))
+    }
+}
