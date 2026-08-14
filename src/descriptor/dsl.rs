@@ -765,9 +765,11 @@ macro_rules! fragment {
             (keys_acc, net_acc)
         });
 
-        let thresh = $crate::miniscript::Threshold::new($thresh, items).expect("valid threshold and pks collection");
-        $crate::impl_leaf_opcode_value!(Thresh, thresh)
-            .map(|(minisc, _, _)| (minisc, key_maps, valid_network_kinds))
+        (|| -> Result<_, $crate::descriptor::DescriptorError> {
+            let thresh = $crate::miniscript::Threshold::new($thresh, items)?;
+            let (minisc, _, _) = $crate::impl_leaf_opcode_value!(Thresh, thresh)?;
+            Ok((minisc, key_maps, valid_network_kinds))
+        })()
     });
     ( thresh ( $thresh:expr, $( $inner:tt )* ) ) => ({
         let items = $crate::fragment_internal!( @v $( $inner )* );
@@ -778,9 +780,10 @@ macro_rules! fragment {
     ( multi_vec ( $thresh:expr, $keys:expr ) ) => ({
         let secp = $crate::bitcoin::secp256k1::Secp256k1::new();
 
-        let fun = |k, pks| {
-            let thresh = $crate::miniscript::Threshold::new(k, pks).expect("valid threshold and pks collection");
-            $crate::miniscript::Terminal::Multi(thresh)
+        let fun = |k, pks| -> Result<_, $crate::descriptor::DescriptorError> {
+            Ok($crate::miniscript::Terminal::Multi(
+                $crate::miniscript::Threshold::new(k, pks)?,
+            ))
         };
 
         $crate::keys::make_multi($thresh, fun, $keys, &secp)
@@ -792,9 +795,10 @@ macro_rules! fragment {
     ( multi_a_vec ( $thresh:expr, $keys:expr ) ) => ({
         let secp = $crate::bitcoin::secp256k1::Secp256k1::new();
 
-        let fun = |k, pks| {
-            let thresh = $crate::miniscript::Threshold::new(k, pks).expect("valid threshold and pks collection");
-            $crate::miniscript::Terminal::MultiA(thresh)
+        let fun = |k, pks| -> Result<_, $crate::descriptor::DescriptorError> {
+            Ok($crate::miniscript::Terminal::MultiA(
+                $crate::miniscript::Threshold::new(k, pks)?,
+            ))
         };
 
         $crate::keys::make_multi($thresh, fun, $keys, &secp)
@@ -1115,6 +1119,71 @@ mod test {
                 "bcrt1ql2elz9mhm9ll27ddpewhxs732xyl2fk2kpkqz9gdyh33wgcun4vstrd49k",
             ],
         );
+    }
+
+    #[test]
+    fn test_dsl_multi_invalid_threshold_returns_error_not_panic() {
+        let key_1 = bip32::Xpriv::from_str("tprv8ZgxMBicQKsPcx5nBGsR63Pe8KnRUqmbJNENAfGftF3yuXoMMoVJJcYeUw5eVkm9WBPjWYt6HMWYJNesB5HaNVBaFc1M6dRjWSYnmewUMYy").unwrap();
+        let path_1 = bip32::DerivationPath::from_str("m/0").unwrap();
+        let key_2 = bip32::Xpriv::from_str("tprv8ZgxMBicQKsPegBHHnq7YEgM815dG24M2Jk5RVqipgDxF1HJ1tsnT815X5Fd5FRfMVUs8NZs9XCb6y9an8hRPThnhfwfXJ36intaekySHGF").unwrap();
+        let path_2 = bip32::DerivationPath::from_str("m/1").unwrap();
+        let desc_key1 = (key_1, path_1).into_descriptor_key().unwrap();
+        let desc_key2 = (key_2, path_2).into_descriptor_key().unwrap();
+
+        let result = descriptor!(wsh(multi(3, desc_key1, desc_key2)));
+
+        assert!(
+            result.is_err(),
+            "invalid threshold (k > n) should return Err, not panic"
+        );
+        assert!(matches!(
+            result,
+            Err(DescriptorError::Miniscript(miniscript::Error::Threshold(_)))
+        ));
+    }
+
+    #[test]
+    fn test_dsl_thresh_invalid_threshold_returns_error_not_panic() {
+        let key_1 = bip32::Xpriv::from_str("tprv8ZgxMBicQKsPcx5nBGsR63Pe8KnRUqmbJNENAfGftF3yuXoMMoVJJcYeUw5eVkm9WBPjWYt6HMWYJNesB5HaNVBaFc1M6dRjWSYnmewUMYy").unwrap();
+        let path_1 = bip32::DerivationPath::from_str("m/0").unwrap();
+        let key_2 = bip32::Xpriv::from_str("tprv8ZgxMBicQKsPegBHHnq7YEgM815dG24M2Jk5RVqipgDxF1HJ1tsnT815X5Fd5FRfMVUs8NZs9XCb6y9an8hRPThnhfwfXJ36intaekySHGF").unwrap();
+        let path_2 = bip32::DerivationPath::from_str("m/1").unwrap();
+        let desc_key1 = (key_1, path_1).into_descriptor_key().unwrap();
+        let desc_key2 = (key_2, path_2).into_descriptor_key().unwrap();
+
+        let result = descriptor!(wsh(thresh(3, pk(desc_key1), pk(desc_key2))));
+
+        assert!(
+            result.is_err(),
+            "invalid threshold (k > n) should return Err, not panic"
+        );
+        assert!(matches!(
+            result,
+            Err(DescriptorError::Miniscript(miniscript::Error::Threshold(_)))
+        ));
+    }
+
+    #[test]
+    fn test_dsl_multi_a_invalid_threshold_returns_error_not_panic() {
+        let internal_key =
+            PrivateKey::from_wif("cSQPHDBwXGjVzWRqAHm6zfvQhaTuj1f2bFH58h55ghbjtFwvmeXR").unwrap();
+        let key_1 = bip32::Xpriv::from_str("tprv8ZgxMBicQKsPcx5nBGsR63Pe8KnRUqmbJNENAfGftF3yuXoMMoVJJcYeUw5eVkm9WBPjWYt6HMWYJNesB5HaNVBaFc1M6dRjWSYnmewUMYy").unwrap();
+        let path_1 = bip32::DerivationPath::from_str("m/0").unwrap();
+        let key_2 = bip32::Xpriv::from_str("tprv8ZgxMBicQKsPegBHHnq7YEgM815dG24M2Jk5RVqipgDxF1HJ1tsnT815X5Fd5FRfMVUs8NZs9XCb6y9an8hRPThnhfwfXJ36intaekySHGF").unwrap();
+        let path_2 = bip32::DerivationPath::from_str("m/1").unwrap();
+        let desc_key1 = (key_1, path_1).into_descriptor_key().unwrap();
+        let desc_key2 = (key_2, path_2).into_descriptor_key().unwrap();
+
+        let result = descriptor!(tr(internal_key, multi_a(3, desc_key1, desc_key2)));
+
+        assert!(
+            result.is_err(),
+            "invalid threshold (k > n) should return Err, not panic"
+        );
+        assert!(matches!(
+            result,
+            Err(DescriptorError::Miniscript(miniscript::Error::Threshold(_)))
+        ));
     }
 
     // Verify that the `valid_network_kinds` returned is correctly computed based on the keys
