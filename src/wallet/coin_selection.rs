@@ -16,7 +16,8 @@
 //!
 //! You can specify a custom coin selection algorithm through the [`coin_selection`] method on
 //! [`TxBuilder`]. [`DefaultCoinSelectionAlgorithm`] aliases the coin selection algorithm that will
-//! be used if it is not explicitly set.
+//! be used if it is not explicitly set: [`BranchAndBoundCoinSelection`] with a
+//! [`SingleRandomDraw`] fallback.
 //!
 //! [`TxBuilder`]: super::tx_builder::TxBuilder
 //! [`coin_selection`]: super::tx_builder::TxBuilder::coin_selection
@@ -117,7 +118,16 @@ use rand_core::RngCore;
 
 use super::utils::shuffle_slice;
 /// Default coin selection algorithm used by [`TxBuilder`](super::tx_builder::TxBuilder) if not
-/// overridden
+/// overridden.
+///
+/// This is [`BranchAndBoundCoinSelection`] with [`SingleRandomDraw`] as the fallback algorithm.
+/// Branch and bound first attempts to find an input set that exactly covers the payment target
+/// plus fees, avoiding a change output (which reduces fees and improves privacy). If no exact
+/// match is found within the search limit, selection falls back to [`SingleRandomDraw`], which
+/// pulls UTXOs at random until the target is met.
+///
+/// The default assumes a P2WPKH change output size (31 bytes) when evaluating whether creating
+/// change is economical.
 pub type DefaultCoinSelectionAlgorithm = BranchAndBoundCoinSelection<SingleRandomDraw>;
 
 /// Wallet's UTXO set is not enough to cover recipient's requested plus fee.
