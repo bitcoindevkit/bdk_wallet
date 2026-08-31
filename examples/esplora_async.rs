@@ -1,7 +1,9 @@
 use bdk_esplora::{EsploraAsyncExt, esplora_client};
 use bdk_wallet::{
     KeychainKind, SignOptions, Wallet,
-    bitcoin::{Amount, FeeRate, Network},
+    bitcoin::{Amount, FeeRate, Network, secp256k1::Secp256k1},
+    descriptor::IntoWalletDescriptor,
+    miniscript::descriptor::KeyMapWrapper,
     psbt::PsbtUtils,
     rusqlite::Connection,
 };
@@ -20,16 +22,22 @@ const ESPLORA_URL: &str = "https://mempool.space/testnet4/api";
 
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
+    let secp = Secp256k1::new();
+    let (external_descriptor, mut external_keymap) =
+        EXTERNAL_DESC.into_wallet_descriptor(&secp, NETWORK.into())?;
+    let (internal_descriptor, internal_keymap) =
+        INTERNAL_DESC.into_wallet_descriptor(&secp, NETWORK.into())?;
+    external_keymap.extend(internal_keymap);
+    let signer = KeyMapWrapper::from(external_keymap);
     let mut db = Connection::open(DB_PATH)?;
     let wallet_opt = Wallet::load()
-        .descriptor(KeychainKind::External, Some(EXTERNAL_DESC))
-        .descriptor(KeychainKind::Internal, Some(INTERNAL_DESC))
-        .extract_keys()
+        .descriptor(KeychainKind::External, Some(external_descriptor.clone()))
+        .descriptor(KeychainKind::Internal, Some(internal_descriptor.clone()))
         .check_network(NETWORK)
         .load_wallet(&mut db)?;
     let mut wallet = match wallet_opt {
         Some(wallet) => wallet,
-        None => Wallet::create(EXTERNAL_DESC, INTERNAL_DESC)
+        None => Wallet::create(external_descriptor, internal_descriptor)
             .network(NETWORK)
             .create_wallet(&mut db)?,
     };
@@ -83,7 +91,9 @@ async fn main() -> Result<(), anyhow::Error> {
     tx_builder.fee_rate(target_fee_rate);
 
     let mut psbt = tx_builder.finish()?;
-    let finalized = wallet.sign(&mut psbt, SignOptions::default())?;
+    psbt.sign(&signer, wallet.secp_ctx())
+        .map_err(|(_, e)| anyhow::anyhow!("{e:?}"))?;
+    let finalized = wallet.finalize_psbt(&mut psbt, SignOptions::default())?;
     assert!(finalized);
     let original_fee = psbt.fee_amount().unwrap();
     let tx_feerate = psbt.fee_rate().unwrap();
@@ -117,7 +127,10 @@ async fn main() -> Result<(), anyhow::Error> {
     let mut builder = wallet.build_fee_bump(txid).expect("failed to bump tx");
     builder.fee_rate(feerate);
     let mut bumped_psbt = builder.finish().unwrap();
-    let finalize_btx = wallet.sign(&mut bumped_psbt, SignOptions::default())?;
+    bumped_psbt
+        .sign(&signer, wallet.secp_ctx())
+        .map_err(|(_, e)| anyhow::anyhow!("{e:?}"))?;
+    let finalize_btx = wallet.finalize_psbt(&mut bumped_psbt, SignOptions::default())?;
     assert!(finalize_btx);
     let new_fee = bumped_psbt.fee_amount().unwrap();
     let bumped_tx = bumped_psbt.extract_tx()?;

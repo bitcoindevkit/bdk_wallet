@@ -10,6 +10,10 @@ use bdk_chain::{
 use bdk_wallet::coin_selection::InsufficientFunds;
 use bdk_wallet::descriptor::IntoWalletDescriptor;
 use bdk_wallet::error::CreateTxError;
+
+use bdk_wallet::persist_test_utils::{
+    persist_keychains, persist_network, persist_single_keychain, persist_wallet_changeset,
+};
 use bdk_wallet::test_utils::*;
 use bdk_wallet::{
     ChangeSet, KeychainKind, LoadError, LoadMismatch, LoadWithPersistError, Wallet, WalletPersister,
@@ -22,10 +26,6 @@ use bitcoin::{
     transaction,
 };
 use miniscript::{Descriptor, DescriptorPublicKey};
-
-use bdk_wallet::persist_test_utils::{
-    persist_keychains, persist_network, persist_single_keychain, persist_wallet_changeset,
-};
 
 mod common;
 use common::*;
@@ -230,6 +230,7 @@ fn wallet_is_persisted() -> anyhow::Result<()> {
 }
 
 #[test]
+#[allow(deprecated)]
 fn wallet_load_checks() -> anyhow::Result<()> {
     fn run<Db, CreateDb, OpenDb>(
         filename: &str,
@@ -358,12 +359,8 @@ fn wallet_should_persist_anchors_and_recover() {
     assert!(wallet.persist(&mut db).unwrap());
 
     // should recover persisted wallet
-    let secp = wallet.secp_ctx();
-    let (_, keymap) = <Descriptor<DescriptorPublicKey>>::parse_descriptor(secp, desc).unwrap();
-    assert!(!keymap.is_empty());
     let wallet = Wallet::load()
         .descriptor(KeychainKind::External, Some(desc))
-        .extract_keys()
         .load_wallet(&mut db)
         .unwrap()
         .expect("must have loaded changeset");
@@ -384,8 +381,6 @@ fn wallet_should_persist_anchors_and_recover() {
 
 #[test]
 fn single_descriptor_wallet_persist_and_recover() {
-    use bdk_chain::miniscript::Descriptor;
-    use bdk_chain::miniscript::DescriptorPublicKey;
     use bdk_chain::rusqlite;
     let temp_dir = tempfile::tempdir().unwrap();
     let db_path = temp_dir.path().join("wallet.db");
@@ -401,27 +396,18 @@ fn single_descriptor_wallet_persist_and_recover() {
 
     // should recover persisted wallet
     let secp = wallet.secp_ctx();
-    let (_, keymap) = <Descriptor<DescriptorPublicKey>>::parse_descriptor(secp, desc).unwrap();
-    assert!(!keymap.is_empty());
     let wallet = Wallet::load()
         .descriptor(KeychainKind::External, Some(desc))
-        .extract_keys()
         .load_wallet(&mut db)
         .unwrap()
         .expect("must have loaded changeset");
     assert_eq!(wallet.derivation_index(KeychainKind::External), Some(2));
-    // should have private key
-    assert_eq!(
-        wallet.get_signers(KeychainKind::External).as_key_map(secp),
-        keymap,
-    );
 
     // should error on wrong internal params
     let desc = get_test_wpkh();
     let (exp_desc, _) = <Descriptor<DescriptorPublicKey>>::parse_descriptor(secp, desc).unwrap();
     let err = Wallet::load()
         .descriptor(KeychainKind::Internal, Some(desc))
-        .extract_keys()
         .load_wallet(&mut db);
     assert_matches!(
         err,

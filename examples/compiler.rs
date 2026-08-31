@@ -21,6 +21,9 @@ use bitcoin::Network;
 use miniscript::Descriptor;
 use miniscript::policy::Concrete;
 
+use bdk_wallet::descriptor::ExtractPolicy;
+use bdk_wallet::descriptor::policy::BuildSatisfaction;
+use bdk_wallet::signer::SignersContainer;
 use bdk_wallet::{KeychainKind, Wallet};
 
 /// Miniscript policy is a high level abstraction of spending conditions. Defined in the
@@ -66,9 +69,15 @@ fn main() -> Result<(), Box<dyn Error>> {
         wallet.next_unused_address(KeychainKind::External),
     );
 
-    // BDK also has it's own `Policy` structure to represent the spending condition in a more
+    // BDK also has its own `Policy` structure to represent the spending condition in a more
     // human readable json format.
-    let spending_policy = wallet.policies(KeychainKind::External)?;
+    let spending_policy = wallet
+        .public_descriptor(KeychainKind::External)
+        .extract_policy(
+            &SignersContainer::default(),
+            BuildSatisfaction::None,
+            wallet.secp_ctx(),
+        )?;
     println!(
         "The BDK spending policy: \n{}",
         serde_json::to_string_pretty(&spending_policy)?

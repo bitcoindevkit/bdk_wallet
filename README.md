@@ -92,7 +92,6 @@ let change_descriptor = "wpkh(tprv8ZgxMBicQKsPdcAqYBpzAFwU5yxBUo88ggoBqu1qPcHUfS
 let mut wallet = match Wallet::load()
     .descriptor(KeychainKind::External, Some(descriptor))
     .descriptor(KeychainKind::Internal, Some(change_descriptor))
-    .extract_keys()
     .check_network(network)
     .load_wallet(&mut conn)?
 {

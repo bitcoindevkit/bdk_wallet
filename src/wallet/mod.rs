@@ -69,7 +69,7 @@ use crate::descriptor::{
     Policy, XKeyUtils, calc_checksum, check_wallet_descriptor, error::Error as DescriptorError,
     policy::BuildSatisfaction,
 };
-use crate::psbt::PsbtUtils;
+use crate::psbt::{PsbtUtils, validated_non_witness_prevout};
 use crate::types::*;
 use crate::wallet::{
     coin_selection::{DefaultCoinSelectionAlgorithm, Excess, InsufficientFunds},
@@ -119,8 +119,9 @@ type IndexedTxOut = ((KeychainKind, u32), FullTxOut<ConfirmationBlockTime>);
 /// The `Wallet` acts as a way of coherently interfacing with output descriptors and related
 /// transactions. Its main components are:
 ///
-/// 1. output *descriptors* from which it can derive addresses.
-/// 2. [`signer`]s that can contribute signatures to addresses instantiated from the descriptors.
+/// 1. output *descriptors* from which it derives addresses.
+/// 2. local chain state.
+/// 3. a transaction graph indexed by those descriptors.
 ///
 /// The user is responsible for loading and writing wallet changes which are represented as
 /// [`ChangeSet`]s (see [`take_staged`]). Also see individual functions and example for instructions
@@ -403,11 +404,12 @@ impl Wallet {
 
     /// Build [`Wallet`] by loading from persistence or [`ChangeSet`].
     ///
-    /// Note that the descriptor secret keys are not persisted to the db. You can add
-    /// signers after-the-fact with [`Wallet::add_signer`] or [`Wallet::set_keymap`]. You
-    /// can also add keys when building the wallet by using [`LoadParams::keymap`]. Finally
-    /// you can check the wallet's descriptors are what you expect with [`LoadParams::descriptor`]
-    /// which will try to populate signers if [`LoadParams::extract_keys`] is enabled.
+    /// Note that descriptor secret keys are not persisted to the db. The recommended signing
+    /// flow is to keep signing keys outside the wallet and pass them to [`bitcoin::Psbt::sign`]
+    /// with [`Wallet::secp_ctx`].
+    /// [`Wallet::sign_with_signers`] supports caller-owned [`SignersContainer`]s while the
+    /// [`signer`] module is phased out.
+    /// You can check the wallet's descriptors are what you expect with [`LoadParams::descriptor`].
     ///
     /// # Synopsis
     ///
@@ -426,18 +428,12 @@ impl Wallet {
     /// // Load a wallet that is persisted to SQLite database.
     /// # let temp_dir = tempfile::tempdir().expect("must create tempdir");
     /// # let file_path = temp_dir.path().join("store.db");
-    /// # let external_keymap = Default::default();
-    /// # let internal_keymap = Default::default();
     /// # let genesis_hash = BlockHash::all_zeros();
     /// let mut conn = bdk_wallet::rusqlite::Connection::open(file_path)?;
     /// let mut wallet = Wallet::load()
-    ///     // check loaded descriptors matches these values and extract private keys
+    ///     // check loaded descriptors matches these values
     ///     .descriptor(KeychainKind::External, Some(EXTERNAL_DESC))
     ///     .descriptor(KeychainKind::Internal, Some(INTERNAL_DESC))
-    ///     .extract_keys()
-    ///     // you can also manually add private keys
-    ///     .keymap(KeychainKind::External, external_keymap)
-    ///     .keymap(KeychainKind::Internal, internal_keymap)
     ///     // ensure loaded wallet's genesis hash matches this value
     ///     .check_genesis_hash(genesis_hash)
     ///     // set a lookahead for our indexer
@@ -1165,6 +1161,10 @@ impl Wallet {
     /// Add an external signer
     ///
     /// See [the `signer` module](signer) for an example.
+    #[deprecated(
+        since = "3.2.0",
+        note = "use your KeyMap or Xpriv with bitcoin::Psbt::sign and wallet.secp_ctx() for software signing, or use your own signer for hardware signing. If you rely on SignOptions, use Wallet::sign_with_signers with caller-owned SignersContainers."
+    )]
     pub fn add_signer(
         &mut self,
         keychain: KeychainKind,
@@ -1183,6 +1183,10 @@ impl Wallet {
     ///
     /// Note this does nothing if the given keychain has no descriptor because we won't
     /// know the context (segwit, taproot, etc) in which to create signatures.
+    #[deprecated(
+        since = "3.2.0",
+        note = "use your KeyMap or Xpriv with bitcoin::Psbt::sign and wallet.secp_ctx() for software signing, or use your own signer for hardware signing. If you rely on SignOptions, use Wallet::sign_with_signers with caller-owned SignersContainers."
+    )]
     pub fn set_keymap(&mut self, keychain: KeychainKind, keymap: KeyMap) {
         let wallet_signers = match keychain {
             KeychainKind::External => Arc::make_mut(&mut self.signers),
@@ -1194,6 +1198,11 @@ impl Wallet {
     }
 
     /// Set the keymap for each keychain.
+    #[deprecated(
+        since = "3.2.0",
+        note = "use your KeyMap or Xpriv with bitcoin::Psbt::sign and wallet.secp_ctx() for software signing, or use your own signer for hardware signing. If you rely on SignOptions, use Wallet::sign_with_signers with caller-owned SignersContainers."
+    )]
+    #[allow(deprecated)]
     pub fn set_keymaps(&mut self, keymaps: impl IntoIterator<Item = (KeychainKind, KeyMap)>) {
         for (keychain, keymap) in keymaps {
             self.set_keymap(keychain, keymap);
@@ -1212,6 +1221,7 @@ impl Wallet {
     /// let wallet = Wallet::create(descriptor, change_descriptor)
     ///     .network(Network::Testnet)
     ///     .create_wallet_no_persist()?;
+    /// #[allow(deprecated)]
     /// for secret_key in wallet.get_signers(KeychainKind::External).signers().iter().filter_map(|s| s.descriptor_secret_key()) {
     ///     // secret_key: tprv8ZgxMBicQKsPe73PBRSmNbTfbcsZnwWhz5eVmhHpi31HW29Z7mc9B4cWGRQzopNUzZUT391DeDJxL2PefNunWyLgqCKRMDkU1s2s8bAfoSk/84'/0'/0'/0/*
     ///     println!("secret_key: {}", secret_key);
@@ -1219,6 +1229,10 @@ impl Wallet {
     ///
     /// Ok::<(), Box<dyn core::error::Error>>(())
     /// ```
+    #[deprecated(
+        since = "3.2.0",
+        note = "the Wallet is being phased out as a key store; keep your own KeyMap or Xpriv instead. If you rely on SignOptions, use Wallet::sign_with_signers with caller-owned SignersContainers."
+    )]
     pub fn get_signers(&self, keychain: KeychainKind) -> Arc<SignersContainer> {
         match keychain {
             KeychainKind::External => Arc::clone(&self.signers),
@@ -1269,65 +1283,78 @@ impl Wallet {
         params: TxParams,
         rng: &mut impl RngCore,
     ) -> Result<Psbt, CreateTxError> {
-        let keychains: BTreeMap<_, _> = self.tx_graph.index.keychains().collect();
-        let external_descriptor = keychains.get(&KeychainKind::External).expect("must exist");
-        let internal_descriptor = keychains.get(&KeychainKind::Internal);
+        let requirements = match params.condition {
+            Some(condition) => condition,
+            // Fall back to deriving the condition from the deprecated policy paths, to be removed
+            // along with `TxBuilder::policy_path`. The wallet-owned signers are required here:
+            // policy node ids depend on them, so the paths only match policies extracted with the
+            // very same signers as `Wallet::policies` uses.
+            None => {
+                let keychains: BTreeMap<_, _> = self.tx_graph.index.keychains().collect();
+                let external_descriptor =
+                    keychains.get(&KeychainKind::External).expect("must exist");
+                let internal_descriptor = keychains.get(&KeychainKind::Internal);
 
-        let external_policy = external_descriptor
-            .extract_policy(&self.signers, BuildSatisfaction::None, &self.secp)?
-            .unwrap();
-        let internal_policy = internal_descriptor
-            .map(|desc| {
-                Ok::<_, CreateTxError>(
-                    desc.extract_policy(&self.change_signers, BuildSatisfaction::None, &self.secp)?
-                        .unwrap(),
-                )
-            })
-            .transpose()?;
+                let external_policy = external_descriptor
+                    .extract_policy(&self.signers, BuildSatisfaction::None, &self.secp)?
+                    .unwrap();
+                let internal_policy = internal_descriptor
+                    .map(|desc| {
+                        Ok::<_, CreateTxError>(
+                            desc.extract_policy(
+                                &self.change_signers,
+                                BuildSatisfaction::None,
+                                &self.secp,
+                            )?
+                            .unwrap(),
+                        )
+                    })
+                    .transpose()?;
 
-        // The policy allows spending external outputs, but it requires a policy path that hasn't
-        // been provided
-        if params.change_policy != tx_builder::ChangeSpendPolicy::OnlyChange
-            && external_policy.requires_path()
-            && params.external_policy_path.is_none()
-        {
-            return Err(CreateTxError::SpendingPolicyRequired(
-                KeychainKind::External,
-            ));
+                // The policy allows spending external outputs, but it requires a policy path that
+                // hasn't been provided
+                if params.change_policy != tx_builder::ChangeSpendPolicy::OnlyChange
+                    && external_policy.requires_path()
+                    && params.external_policy_path.is_none()
+                {
+                    return Err(CreateTxError::SpendingPolicyRequired(
+                        KeychainKind::External,
+                    ));
+                }
+                // Same for the internal_policy path
+                if let Some(internal_policy) = &internal_policy {
+                    if params.change_policy != tx_builder::ChangeSpendPolicy::ChangeForbidden
+                        && internal_policy.requires_path()
+                        && params.internal_policy_path.is_none()
+                    {
+                        return Err(CreateTxError::SpendingPolicyRequired(
+                            KeychainKind::Internal,
+                        ));
+                    }
+                }
+
+                let external_requirements = external_policy.get_condition(
+                    params
+                        .external_policy_path
+                        .as_ref()
+                        .unwrap_or(&BTreeMap::new()),
+                )?;
+                let internal_requirements = internal_policy
+                    .map(|policy| {
+                        Ok::<_, CreateTxError>(
+                            policy.get_condition(
+                                params
+                                    .internal_policy_path
+                                    .as_ref()
+                                    .unwrap_or(&BTreeMap::new()),
+                            )?,
+                        )
+                    })
+                    .transpose()?;
+
+                external_requirements.merge(&internal_requirements.unwrap_or_default())?
+            }
         };
-        // Same for the internal_policy path
-        if let Some(internal_policy) = &internal_policy {
-            if params.change_policy != tx_builder::ChangeSpendPolicy::ChangeForbidden
-                && internal_policy.requires_path()
-                && params.internal_policy_path.is_none()
-            {
-                return Err(CreateTxError::SpendingPolicyRequired(
-                    KeychainKind::Internal,
-                ));
-            };
-        }
-
-        let external_requirements = external_policy.get_condition(
-            params
-                .external_policy_path
-                .as_ref()
-                .unwrap_or(&BTreeMap::new()),
-        )?;
-        let internal_requirements = internal_policy
-            .map(|policy| {
-                Ok::<_, CreateTxError>(
-                    policy.get_condition(
-                        params
-                            .internal_policy_path
-                            .as_ref()
-                            .unwrap_or(&BTreeMap::new()),
-                    )?,
-                )
-            })
-            .transpose()?;
-
-        let requirements =
-            external_requirements.merge(&internal_requirements.unwrap_or_default())?;
 
         let version = match params.version {
             Some(transaction::Version(0)) => return Err(CreateTxError::Version0),
@@ -1601,18 +1628,24 @@ impl Wallet {
     /// # use bitcoin::*;
     /// # use bdk_wallet::*;
     /// # use bdk_wallet::ChangeSet;
+    /// # use bdk_wallet::descriptor::IntoWalletDescriptor;
     /// # use bdk_wallet::error::CreateTxError;
     /// # use anyhow::Error;
-    /// # let descriptor = "wpkh(tpubD6NzVbkrYhZ4Xferm7Pz4VnjdcDPFyjVu5K4iZXQ4pVN8Cks4pHVowTBXBKRhX64pkRyJZJN5xAKj4UDNnLPb5p2sSKXhewoYx5GbTdUFWq/*)";
+    /// # use miniscript::descriptor::KeyMapWrapper;
+    /// # let descriptor = "tr([73c5da0a/86'/0'/0']tprv8fMn4hSKPRC1oaCPqxDb1JWtgkpeiQvZhsr8W2xuy3GEMkzoArcAWTfJxYb6Wj8XNNDWEjfYKK4wGQXh3ZUXhDF2NcnsALpWTeSwarJt7Vc/0/*)";
     /// # let mut wallet = doctest_wallet!();
     /// # let to_address = Address::from_str("2N4eQYCbKUHCCTUjBJeHcJp9ok6J2GZsTDt").unwrap().assume_checked();
+    /// let (_, keymap) = descriptor
+    ///     .into_wallet_descriptor(wallet.secp_ctx(), wallet.network().into())?;
+    /// let signer = KeyMapWrapper::from(keymap);
     /// let mut psbt = {
     ///     let mut builder = wallet.build_tx();
     ///     builder
     ///         .add_recipient(to_address.script_pubkey(), Amount::from_sat(50_000));
     ///     builder.finish()?
     /// };
-    /// let _ = wallet.sign(&mut psbt, SignOptions::default())?;
+    /// psbt.sign(&signer, wallet.secp_ctx()).map_err(|(_, e)| Error::msg(format!("{e:?}")))?;
+    /// wallet.finalize_psbt(&mut psbt, SignOptions::default())?;
     /// let tx = psbt.clone().extract_tx().expect("tx");
     /// // broadcast tx but it's taking too long to confirm so we want to bump the fee
     /// let mut psbt =  {
@@ -1622,7 +1655,8 @@ impl Wallet {
     ///     builder.finish()?
     /// };
     ///
-    /// let _ = wallet.sign(&mut psbt, SignOptions::default())?;
+    /// psbt.sign(&signer, wallet.secp_ctx()).map_err(|(_, e)| Error::msg(format!("{e:?}")))?;
+    /// wallet.finalize_psbt(&mut psbt, SignOptions::default())?;
     /// let fee_bumped_tx = psbt.extract_tx();
     /// // broadcast fee_bumped_tx to replace original
     /// # Ok::<(), anyhow::Error>(())
@@ -1783,10 +1817,15 @@ impl Wallet {
     ///     builder.add_recipient(to_address.script_pubkey(), Amount::from_sat(50_000));
     ///     builder.finish()?
     /// };
+    /// #[allow(deprecated)]
     /// let finalized = wallet.sign(&mut psbt, SignOptions::default())?;
     /// assert!(finalized, "we should have signed all the inputs");
     /// # Ok::<(),anyhow::Error>(())
     /// ```
+    #[deprecated(
+        since = "3.2.0",
+        note = "use your KeyMap or Xpriv with bitcoin::Psbt::sign and wallet.secp_ctx() for software signing, or use your own signer for hardware signing. If you rely on SignOptions, use Wallet::sign_with_signers with caller-owned SignersContainers."
+    )]
     pub fn sign(&self, psbt: &mut Psbt, sign_options: SignOptions) -> Result<bool, SignerError> {
         self.sign_with_signers(
             psbt,
@@ -1853,17 +1892,22 @@ impl Wallet {
         self.update_psbt_with_descriptor(psbt)
             .map_err(SignerError::MiniscriptPsbt)?;
 
-        // If we aren't allowed to use `witness_utxo`, ensure that every input (except p2tr and
-        // finalized ones) has the `non_witness_utxo`.
-        if !sign_options.trust_witness_utxo
-            && psbt
-                .inputs
-                .iter()
-                .filter(|i| i.final_script_witness.is_none() && i.final_script_sig.is_none())
-                .filter(|i| i.tap_internal_key.is_none() && i.tap_merkle_root.is_none())
-                .any(|i| i.non_witness_utxo.is_none())
-        {
-            return Err(SignerError::MissingNonWitnessUtxo);
+        if !sign_options.trust_witness_utxo {
+            let inputs = psbt.inputs.iter().zip(psbt.unsigned_tx.input.iter());
+            let all_taproot = inputs
+                .clone()
+                .all(|(input, txin)| self.is_verified_taproot_input(input, txin.previous_output));
+
+            if !all_taproot {
+                for (input, txin) in inputs {
+                    if input.non_witness_utxo.is_none() {
+                        return Err(SignerError::MissingNonWitnessUtxo);
+                    }
+                    if validated_non_witness_prevout(input, txin.previous_output).is_none() {
+                        return Err(SignerError::InvalidNonWitnessUtxo);
+                    }
+                }
+            }
         }
 
         // If the user hasn't explicitly opted-in, refuse to sign the transaction unless every input
@@ -1891,7 +1935,30 @@ impl Wallet {
         }
     }
 
+    /// Whether this outpoint is a verified p2tr.
+    ///
+    /// `witness_utxo` scriptPubKey is unauthenticated; trusting it would skip the prev-tx check.
+    fn is_verified_taproot_input(&self, input: &psbt::Input, outpoint: OutPoint) -> bool {
+        if let Some(prev_tx) = self.tx_graph.graph().get_tx(outpoint.txid) {
+            return prev_tx
+                .output
+                .get(outpoint.vout as usize)
+                .is_some_and(|prevout| prevout.script_pubkey.is_p2tr());
+        }
+        validated_non_witness_prevout(input, outpoint)
+            .is_some_and(|prevout| prevout.script_pubkey.is_p2tr())
+    }
+
     /// Return the spending policies for the wallet's descriptor.
+    ///
+    /// Use `wallet.public_descriptor(keychain).extract_policy(signers, BuildSatisfaction::None,
+    /// wallet.secp_ctx())` with caller-owned signers instead. For transaction building, derive a
+    /// [`Condition`](crate::descriptor::Condition) via [`Policy::get_condition`] and pass it to
+    /// [`TxBuilder::set_condition`](tx_builder::TxBuilder::set_condition).
+    #[deprecated(
+        since = "3.2.0",
+        note = "use wallet.public_descriptor(keychain).extract_policy(signers, BuildSatisfaction::None, wallet.secp_ctx()) with caller-owned signers; for tx building, Policy::get_condition then TxBuilder::set_condition"
+    )]
     pub fn policies(&self, keychain: KeychainKind) -> Result<Option<Policy>, DescriptorError> {
         let signers = match keychain {
             KeychainKind::External => &self.signers,
@@ -4056,5 +4123,85 @@ mod test {
         // Wallet name should be main_checksum + change_checksum
         let wallet_name = result_with_change.unwrap();
         assert_eq!(wallet_name, "vn4aqs37jgrerlc3");
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn test_deprecated_keymap_methods() {
+        use crate::test_utils::get_test_wpkh_and_change_desc;
+
+        let (external_desc, internal_desc) = get_test_wpkh_and_change_desc();
+        let secp = SecpCtx::new();
+        let (external_descriptor, external_keymap) = external_desc
+            .into_wallet_descriptor(&secp, NetworkKind::Test)
+            .unwrap();
+        let (internal_descriptor, internal_keymap) = internal_desc
+            .into_wallet_descriptor(&secp, NetworkKind::Test)
+            .unwrap();
+
+        let assert_keymaps = |wallet: &Wallet| {
+            assert_eq!(
+                wallet
+                    .get_signers(KeychainKind::External)
+                    .as_key_map(wallet.secp_ctx()),
+                external_keymap
+            );
+            assert_eq!(
+                wallet
+                    .get_signers(KeychainKind::Internal)
+                    .as_key_map(wallet.secp_ctx()),
+                internal_keymap
+            );
+        };
+
+        let wallet = Wallet::create(external_descriptor.clone(), internal_descriptor.clone())
+            .network(Network::Testnet)
+            .keymap(KeychainKind::External, external_keymap.clone())
+            .keymap(KeychainKind::Internal, internal_keymap.clone())
+            .create_wallet_no_persist()
+            .unwrap();
+        assert_keymaps(&wallet);
+
+        let mut wallet = Wallet::create(external_descriptor, internal_descriptor)
+            .network(Network::Testnet)
+            .create_wallet_no_persist()
+            .unwrap();
+        wallet.set_keymaps([
+            (KeychainKind::External, external_keymap.clone()),
+            (KeychainKind::Internal, internal_keymap.clone()),
+        ]);
+        assert_keymaps(&wallet);
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn test_deprecated_sign_matches_sign_with_signers() {
+        use crate::test_utils::get_funded_wallet_wpkh;
+
+        let (mut wallet, _) = get_funded_wallet_wpkh();
+        let addr = wallet.next_unused_address(KeychainKind::External);
+        let mut builder = wallet.build_tx();
+        builder.drain_to(addr.script_pubkey()).drain_wallet();
+        let psbt = builder.finish().unwrap();
+
+        let mut deprecated_psbt = psbt.clone();
+        let mut signers_psbt = psbt;
+
+        let deprecated_finalized = wallet
+            .sign(&mut deprecated_psbt, SignOptions::default())
+            .unwrap();
+        let external_signers = wallet.get_signers(KeychainKind::External);
+        let internal_signers = wallet.get_signers(KeychainKind::Internal);
+        let signers_finalized = wallet
+            .sign_with_signers(
+                &mut signers_psbt,
+                &[external_signers.as_ref(), internal_signers.as_ref()],
+                SignOptions::default(),
+            )
+            .unwrap();
+
+        assert!(deprecated_finalized);
+        assert_eq!(deprecated_finalized, signers_finalized);
+        assert_eq!(deprecated_psbt, signers_psbt);
     }
 }

@@ -11,8 +11,12 @@
 
 //! Generalized signers
 //!
-//! This module provides the ability to add customized signers to a [`Wallet`](super::Wallet)
-//! through the [`Wallet::add_signer`](super::Wallet::add_signer) function.
+//! This module provides the ability to build caller-owned signer containers and use them with
+//! [`Wallet::sign_with_signers`](super::Wallet::sign_with_signers).
+//!
+//! This is an interim bridge for callers still relying on bdk's signer infrastructure. Ideally
+//! you should sign PSBTs with [`bitcoin::Psbt::sign`] (software signing), or have your own signer
+//! (hardware signing).
 //!
 //! ```
 //! # use alloc::sync::Arc;
@@ -65,17 +69,19 @@
 //!     }
 //! }
 //!
-//! let custom_signer = CustomSigner::connect();
+//! let custom_signer = Arc::new(CustomSigner::connect());
 //!
 //! let descriptor = "wpkh(tpubD6NzVbkrYhZ4Xferm7Pz4VnjdcDPFyjVu5K4iZXQ4pVN8Cks4pHVowTBXBKRhX64pkRyJZJN5xAKj4UDNnLPb5p2sSKXhewoYx5GbTdUFWq/0/*)";
 //! let change_descriptor = "wpkh(tpubD6NzVbkrYhZ4Xferm7Pz4VnjdcDPFyjVu5K4iZXQ4pVN8Cks4pHVowTBXBKRhX64pkRyJZJN5xAKj4UDNnLPb5p2sSKXhewoYx5GbTdUFWq/1/*)";
-//! let mut wallet = Wallet::create(descriptor, change_descriptor)
+//! let wallet = Wallet::create(descriptor, change_descriptor)
 //!     .network(Network::Testnet)
 //!     .create_wallet_no_persist()?;
-//! wallet.add_signer(
-//!     KeychainKind::External,
+//!
+//! let mut external_signers = SignersContainer::new();
+//! external_signers.add_external(
+//!     custom_signer.id(wallet.secp_ctx()),
 //!     SignerOrdering(200),
-//!     Arc::new(custom_signer)
+//!     custom_signer,
 //! );
 //!
 //! # Ok::<_, anyhow::Error>(())
@@ -106,7 +112,7 @@ use miniscript::{SigType, ToPublicKey};
 
 use super::utils::SecpCtx;
 use crate::descriptor::{DescriptorMeta, XKeyUtils};
-use crate::psbt::PsbtUtils;
+use crate::psbt::{PsbtUtils, validated_non_witness_prevout};
 use crate::types::IndexOutOfBoundsError;
 use crate::wallet::error::MiniscriptPsbtError;
 
@@ -426,7 +432,7 @@ impl InputSigner for SignerWrapper<DescriptorMultiXKey<Xpriv>> {
         sign_options: &SignOptions,
         secp: &SecpCtx,
     ) -> Result<(), SignerError> {
-        let xkeys = multikey_to_xkeys(self.signer.clone());
+        let xkeys: Vec<DescriptorXKey<Xpriv>> = multikey_to_xkeys(self.signer.clone());
         for xkey in xkeys {
             SignerWrapper::new(xkey, self.ctx).sign_input(psbt, input_index, sign_options, secp)?
         }
@@ -465,10 +471,35 @@ impl InputSigner for SignerWrapper<PrivateKey> {
             ))?;
         }
 
-        if psbt.inputs[input_index].final_script_sig.is_some()
-            || psbt.inputs[input_index].final_script_witness.is_some()
-        {
+        let input = &psbt.inputs[input_index];
+        if input.final_script_sig.is_some() || input.final_script_witness.is_some() {
             return Ok(());
+        }
+
+        let outpoint = psbt.unsigned_tx.input[input_index].previous_output;
+        if input.non_witness_utxo.is_some() {
+            let prevout = validated_non_witness_prevout(input, outpoint)
+                .ok_or(SignerError::InvalidNonWitnessUtxo)?;
+            if input
+                .witness_utxo
+                .as_ref()
+                .is_some_and(|witness| witness != prevout)
+            {
+                return Err(SignerError::InvalidNonWitnessUtxo);
+            }
+        } else if !sign_options.trust_witness_utxo && input.witness_utxo.is_some() {
+            let all_inputs_p2tr =
+                psbt.inputs
+                    .iter()
+                    .zip(psbt.unsigned_tx.input.iter())
+                    .all(|(inp, txin)| {
+                        validated_non_witness_prevout(inp, txin.previous_output)
+                            .or(inp.witness_utxo.as_ref())
+                            .is_some_and(|txout| txout.script_pubkey.is_p2tr())
+                    });
+            if !all_inputs_p2tr {
+                return Err(SignerError::MissingNonWitnessUtxo);
+            }
         }
 
         fn is_sighash_all(ctx: SignerContext, sighash_type: PsbtSighashType) -> bool {
@@ -1090,11 +1121,13 @@ mod signers_container_tests {
 
         let opts_reject = SignOptions {
             allow_all_sighashes: false,
+            trust_witness_utxo: true,
             ..Default::default()
         };
 
         let opts_allow = SignOptions {
             allow_all_sighashes: true,
+            trust_witness_utxo: true,
             ..Default::default()
         };
 

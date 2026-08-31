@@ -484,7 +484,11 @@ impl Condition {
         }
     }
 
-    pub(crate) fn merge(mut self, other: &Condition) -> Result<Self, PolicyError> {
+    /// Merge two [`Condition`]s into the strictest combined CSV / CLTV requirements.
+    ///
+    /// Useful when combining external and internal keychain requirements into one `Condition`
+    /// before passing it to the transaction builder.
+    pub fn merge(mut self, other: &Condition) -> Result<Self, PolicyError> {
         match (self.csv, other.csv) {
             (Some(a), Some(b)) => self.csv = Some(Self::merge_nsequence(a, b)?),
             (None, any) => self.csv = any,

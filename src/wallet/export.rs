@@ -50,9 +50,9 @@
 //!     "wpkh([c258d2e4/84h/1h/0h]tpubDD3ynpHgJQW8VvWRzQ5WFDCrs4jqVFGHB3vLC3r49XHJSqP8bHKdK4AriuUKLccK68zfzowx7YhmDN8SiSkgCDENUFx9qVw65YyqM78vyVe/0/*)",
 //!     "wpkh([c258d2e4/84h/1h/0h]tpubDD3ynpHgJQW8VvWRzQ5WFDCrs4jqVFGHB3vLC3r49XHJSqP8bHKdK4AriuUKLccK68zfzowx7YhmDN8SiSkgCDENUFx9qVw65YyqM78vyVe/1/*)",
 //! )
-//! .network(Network::Testnet)
-//! .create_wallet_no_persist()?;
-//! let export = FullyNodedExport::export_wallet(&wallet, "exported wallet", true).unwrap();
+//!     .network(Network::Testnet)
+//!     .create_wallet_no_persist()?;
+//! let export = FullyNodedExport::export_wallet(&wallet, "exported wallet", true)?;
 //!
 //! println!("Exported: {}", export.to_string());
 //! # Ok::<_, Box<dyn core::error::Error>>(())
@@ -183,7 +183,7 @@ fn remove_checksum(s: String) -> String {
 }
 
 impl FullyNodedExport {
-    /// Export a wallet
+    /// Export a wallet to FullyNoded format without secret keys.
     ///
     /// This function returns an error if it determines that the `wallet`'s descriptor(s) are not
     /// supported by Bitcoin Core or don't follow the standard derivation paths defined by BIP44
@@ -199,14 +199,8 @@ impl FullyNodedExport {
         label: &str,
         include_blockheight: bool,
     ) -> Result<Self, &'static str> {
-        let descriptor = wallet
-            .public_descriptor(KeychainKind::External)
-            .to_string_with_secret(
-                &wallet
-                    .get_signers(KeychainKind::External)
-                    .as_key_map(wallet.secp_ctx()),
-            );
-        let descriptor = remove_checksum(descriptor);
+        let descriptor =
+            remove_checksum(wallet.public_descriptor(KeychainKind::External).to_string());
         Self::is_compatible_with_core(&descriptor)?;
 
         let blockheight = if include_blockheight {
@@ -226,16 +220,9 @@ impl FullyNodedExport {
             blockheight,
         };
 
-        let change_descriptor = {
-            let descriptor = wallet
-                .public_descriptor(KeychainKind::Internal)
-                .to_string_with_secret(
-                    &wallet
-                        .get_signers(KeychainKind::Internal)
-                        .as_key_map(wallet.secp_ctx()),
-                );
-            Some(remove_checksum(descriptor))
-        };
+        let change_descriptor = Some(remove_checksum(
+            wallet.public_descriptor(KeychainKind::Internal).to_string(),
+        ));
 
         if export.change_descriptor() != change_descriptor {
             return Err("Incompatible change descriptor");
@@ -745,8 +732,13 @@ mod test {
         let wallet = get_test_wallet(descriptor, change_descriptor, Network::Bitcoin);
         let export = FullyNodedExport::export_wallet(&wallet, "Test Label", true).unwrap();
 
-        assert_eq!(export.descriptor(), descriptor);
-        assert_eq!(export.change_descriptor(), Some(change_descriptor.into()));
+        let public_descriptor =
+            remove_checksum(wallet.public_descriptor(KeychainKind::External).to_string());
+        let public_change_descriptor =
+            remove_checksum(wallet.public_descriptor(KeychainKind::Internal).to_string());
+
+        assert_eq!(export.descriptor(), public_descriptor);
+        assert_eq!(export.change_descriptor(), Some(public_change_descriptor));
         assert_eq!(export.blockheight, 5000);
         assert_eq!(export.label, "Test Label");
     }
@@ -806,8 +798,14 @@ mod test {
         let change_descriptor = "tr([73c5da0a/86'/0'/0']tprv8fMn4hSKPRC1oaCPqxDb1JWtgkpeiQvZhsr8W2xuy3GEMkzoArcAWTfJxYb6Wj8XNNDWEjfYKK4wGQXh3ZUXhDF2NcnsALpWTeSwarJt7Vc/1/*)";
         let wallet = get_test_wallet(descriptor, change_descriptor, Network::Testnet);
         let export = FullyNodedExport::export_wallet(&wallet, "Test Label", true).unwrap();
-        assert_eq!(export.descriptor(), descriptor);
-        assert_eq!(export.change_descriptor(), Some(change_descriptor.into()));
+
+        let public_descriptor =
+            remove_checksum(wallet.public_descriptor(KeychainKind::External).to_string());
+        let public_change_descriptor =
+            remove_checksum(wallet.public_descriptor(KeychainKind::Internal).to_string());
+
+        assert_eq!(export.descriptor(), public_descriptor);
+        assert_eq!(export.change_descriptor(), Some(public_change_descriptor));
         assert_eq!(export.blockheight, 5000);
         assert_eq!(export.label, "Test Label");
     }
@@ -822,7 +820,7 @@ mod test {
 
         assert_eq!(
             export.to_string(),
-            "{\"descriptor\":\"wpkh(xprv9s21ZrQH143K4CTb63EaMxja1YiTnSEWKMbn23uoEnAzxjdUJRQkazCAtzxGm4LSoTSVTptoV9RbchnKPW9HxKtZumdyxyikZFDLhogJ5Uj/44\'/0\'/0\'/0/*)\",\"blockheight\":5000,\"label\":\"Test Label\"}"
+            "{\"descriptor\":\"wpkh([a12b02f4/44\'/0\'/0\']xpub6BzhLAQUDcBUfHRQHZxDF2AbcJqp4Kaeq6bzJpXrjrWuK26ymTFwkEFbxPra2bJ7yeZKbDjfDeFwxe93JMqpo5SsPJH6dZdvV9kMzJkAZ69/0/*)\",\"blockheight\":5000,\"label\":\"Test Label\"}"
         );
     }
 

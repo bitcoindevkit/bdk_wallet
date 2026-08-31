@@ -12,17 +12,26 @@
 //! Additional functions on the `rust-bitcoin` `Psbt` structure.
 
 use alloc::vec::Vec;
-use bitcoin::Amount;
-use bitcoin::FeeRate;
-use bitcoin::Psbt;
-use bitcoin::TxOut;
+use bitcoin::psbt;
+use bitcoin::{Amount, FeeRate, OutPoint, Psbt, TxOut};
 
 #[cfg(all(bdk_wallet_unstable, feature = "bdk-tx"))]
 mod params;
 #[cfg(all(bdk_wallet_unstable, feature = "bdk-tx"))]
 pub use params::*;
 
-// TODO upstream the functions here to `rust-bitcoin`?
+pub(crate) fn validated_non_witness_prevout(
+    input: &psbt::Input,
+    outpoint: OutPoint,
+) -> Option<&TxOut> {
+    let prev_tx = input.non_witness_utxo.as_ref()?;
+    if prev_tx.compute_txid() != outpoint.txid {
+        return None;
+    }
+    prev_tx.output.get(outpoint.vout as usize)
+}
+
+// TODO: Upstream these PSBT utilities to rust-bitcoin.
 
 /// Trait to add functions to extract utxos and calculate fees.
 pub trait PsbtUtils {
@@ -45,16 +54,15 @@ impl PsbtUtils for Psbt {
     fn get_utxo_for(&self, input_index: usize) -> Option<TxOut> {
         let tx = &self.unsigned_tx;
         let input = self.inputs.get(input_index)?;
+        let outpoint = tx.input.get(input_index)?.previous_output;
 
         match (&input.witness_utxo, &input.non_witness_utxo) {
+            (Some(witness_utxo), Some(_)) => {
+                let non_witness_utxo = validated_non_witness_prevout(input, outpoint)?;
+                (witness_utxo == non_witness_utxo).then(|| witness_utxo.clone())
+            }
+            (_, Some(_)) => validated_non_witness_prevout(input, outpoint).cloned(),
             (Some(_), _) => input.witness_utxo.clone(),
-            (_, Some(_)) => input.non_witness_utxo.as_ref().and_then(|prev_tx| {
-                let outpoint = tx.input[input_index].previous_output;
-                if prev_tx.compute_txid() != outpoint.txid {
-                    return None;
-                }
-                prev_tx.output.get(outpoint.vout as usize).cloned()
-            }),
             _ => None,
         }
     }
