@@ -619,6 +619,50 @@ impl<'a, Cs> TxBuilder<'a, Cs> {
         self.exclude_below_confirmations(1)
     }
 
+    /// Avoid spending UTXOs that sit on an address the wallet has used more than once.
+    ///
+    /// When called, every currently-unspent UTXO whose address (script pubkey) appears in more
+    /// than one of the wallet's indexed outputs is added to the "unspendable" list (see
+    /// [`TxBuilder::unspendable`]), so automatic coin selection will not pick it. This improves
+    /// privacy by thwarting *forced address reuse* — e.g. an adversary peppering an already-used
+    /// address of yours with dust, hoping your wallet later merges it into a payment and thereby
+    /// links your UTXOs together.
+    ///
+    /// Reused-address UTXOs can still be spent by selecting them explicitly with
+    /// [`TxBuilder::add_utxo`], since manual selection overrides the unspendable list.
+    ///
+    /// This inspects the wallet's current state, so call it after syncing. Chaining it with other
+    /// filtering methods yields the union of all excluded outpoints.
+    ///
+    /// This mirrors Bitcoin Core's `avoid_reuse` wallet flag (`bitcoin/bitcoin#13756`).
+    pub fn avoid_reuse(&mut self) -> &mut Self {
+        // Count the wallet's indexed outputs (spent or unspent) per address. Each
+        // `(keychain, derivation index)` maps 1:1 to a script pubkey, so a count > 1 means the
+        // address received funds more than once, i.e. it was reused.
+        let mut output_counts: HashMap<(KeychainKind, u32), usize> = HashMap::new();
+        for &((keychain, index), _) in self.wallet.spk_index().outpoints() {
+            *output_counts.entry((keychain, index)).or_default() += 1;
+        }
+
+        let to_exclude = self
+            .wallet
+            .list_unspent()
+            .filter(|utxo| {
+                output_counts
+                    .get(&(utxo.keychain, utxo.derivation_index))
+                    .copied()
+                    .unwrap_or(0)
+                    > 1
+            })
+            .map(|utxo| utxo.outpoint)
+            .collect::<Vec<_>>();
+
+        for outpoint in to_exclude {
+            self.params.unspendable.insert(outpoint);
+        }
+        self
+    }
+
     /// Sign with a specific sig hash
     ///
     /// **Use this option very carefully**
@@ -1027,9 +1071,11 @@ mod test {
     }
 
     use crate::test_utils::*;
-    use bitcoin::TxOut;
+    use alloc::string::ToString;
     use bitcoin::consensus::deserialize;
     use bitcoin::hex::FromHex;
+    use bitcoin::{Address, Network, TxOut};
+    use core::str::FromStr;
 
     use super::*;
     #[test]
@@ -1569,5 +1615,82 @@ mod test {
         assert!(
             matches!(&builder.params.utxos[0].utxo, Utxo::Local(output) if output.outpoint == outpoint)
         );
+    }
+
+    #[test]
+    fn test_avoid_reuse_excludes_reused_address_utxos() {
+        let (desc, change_desc) = get_test_wpkh_and_change_desc();
+        let mut wallet = Wallet::create(desc.to_string(), change_desc.to_string())
+            .network(Network::Regtest)
+            .create_wallet_no_persist()
+            .unwrap();
+
+        // a used-once address, and a reused address.
+        let used_once_addr = wallet.reveal_next_address(KeychainKind::External).address;
+        let reused_addr = wallet.reveal_next_address(KeychainKind::External).address;
+
+        let used_once_outpoint = receive_output_to_address(
+            &mut wallet,
+            used_once_addr,
+            Amount::from_sat(50_000),
+            ReceiveTo::Mempool(0),
+        );
+        let reused_outpoint = receive_output_to_address(
+            &mut wallet,
+            reused_addr.clone(),
+            Amount::from_sat(30_000),
+            ReceiveTo::Mempool(0),
+        );
+        let reused_outpoint_2 = receive_output_to_address(
+            &mut wallet,
+            reused_addr,
+            Amount::from_sat(20_000),
+            ReceiveTo::Mempool(0),
+        );
+
+        assert_eq!(wallet.list_unspent().count(), 3);
+
+        let recipient = Address::from_str("bcrt1q3qtze4ys45tgdvguj66zrk4fu6hq3a3v9pfly5")
+            .unwrap()
+            .assume_checked();
+
+        // With avoid_reuse, only the fresh 50_000 UTXO is selectable; a 20_000 send must use it and
+        // must not touch the reused-address coins.
+        let mut builder = wallet.build_tx();
+        builder
+            .add_recipient(recipient.script_pubkey(), Amount::from_sat(20_000))
+            .avoid_reuse();
+        let psbt = builder.finish().unwrap();
+        let selected: Vec<OutPoint> = psbt
+            .unsigned_tx
+            .input
+            .iter()
+            .map(|i| i.previous_output)
+            .collect();
+        assert!(selected.contains(&used_once_outpoint));
+        assert!(!selected.contains(&reused_outpoint));
+        assert!(!selected.contains(&reused_outpoint_2));
+
+        // Requesting more than the fresh UTXO can cover now fails, since reused coins are
+        // off-limits.
+        let mut builder = wallet.build_tx();
+        builder
+            .add_recipient(recipient.script_pubkey(), Amount::from_sat(80_000))
+            .avoid_reuse();
+        assert!(matches!(
+            builder.finish(),
+            Err(CreateTxError::CoinSelection(_))
+        ));
+
+        // reused coins remain spendable when selected explicitly
+        let mut builder = wallet.build_tx();
+        builder.add_recipient(recipient.script_pubkey(), Amount::from_sat(80_000));
+        builder.avoid_reuse();
+        builder
+            .add_utxo(reused_outpoint)
+            .unwrap()
+            .add_utxo(reused_outpoint_2)
+            .unwrap();
+        assert!(builder.finish().is_ok());
     }
 }
