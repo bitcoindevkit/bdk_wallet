@@ -619,6 +619,50 @@ impl<'a, Cs> TxBuilder<'a, Cs> {
         self.exclude_below_confirmations(1)
     }
 
+    /// Avoid spending UTXOs that sit on an address the wallet has used more than once.
+    ///
+    /// When called, every currently-unspent UTXO whose address (script pubkey) appears in more
+    /// than one of the wallet's indexed outputs is added to the "unspendable" list (see
+    /// [`TxBuilder::unspendable`]), so automatic coin selection will not pick it. This improves
+    /// privacy by thwarting *forced address reuse* — e.g. an adversary peppering an already-used
+    /// address of yours with dust, hoping your wallet later merges it into a payment and thereby
+    /// links your UTXOs together.
+    ///
+    /// Reused-address UTXOs can still be spent by selecting them explicitly with
+    /// [`TxBuilder::add_utxo`], since manual selection overrides the unspendable list.
+    ///
+    /// This inspects the wallet's current state, so call it after syncing. Chaining it with other
+    /// filtering methods yields the union of all excluded outpoints.
+    ///
+    /// This mirrors Bitcoin Core's `avoid_reuse` wallet flag (`bitcoin/bitcoin#13756`).
+    pub fn avoid_reuse(&mut self) -> &mut Self {
+        // Count the wallet's indexed outputs (spent or unspent) per address. Each
+        // `(keychain, derivation index)` maps 1:1 to a script pubkey, so a count > 1 means the
+        // address received funds more than once, i.e. it was reused.
+        let mut output_counts: HashMap<(KeychainKind, u32), usize> = HashMap::new();
+        for &((keychain, index), _) in self.wallet.spk_index().outpoints() {
+            *output_counts.entry((keychain, index)).or_default() += 1;
+        }
+
+        let to_exclude = self
+            .wallet
+            .list_unspent()
+            .filter(|utxo| {
+                output_counts
+                    .get(&(utxo.keychain, utxo.derivation_index))
+                    .copied()
+                    .unwrap_or(0)
+                    > 1
+            })
+            .map(|utxo| utxo.outpoint)
+            .collect::<Vec<_>>();
+
+        for outpoint in to_exclude {
+            self.params.unspendable.insert(outpoint);
+        }
+        self
+    }
+
     /// Sign with a specific sig hash
     ///
     /// **Use this option very carefully**
