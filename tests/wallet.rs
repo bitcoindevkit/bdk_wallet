@@ -24,7 +24,7 @@ use bitcoin::sighash::{EcdsaSighashType, TapSighashType};
 use bitcoin::taproot::TapNodeHash;
 use bitcoin::{
     Address, Amount, BlockHash, FeeRate, Network, OutPoint, ScriptBuf, Sequence, SignedAmount,
-    Transaction, TxIn, TxOut, Txid, absolute, transaction,
+    Transaction, TxIn, TxOut, Txid, WPubkeyHash, Weight, absolute, psbt, transaction,
 };
 use miniscript::descriptor::KeyMapWrapper;
 use rand::SeedableRng;
@@ -3696,4 +3696,118 @@ fn test_create_and_spend_from_truc_tx() -> anyhow::Result<()> {
     );
 
     Ok(())
+}
+
+/// Fund `wallet` with `n` confirmed outputs of `value` in a single transaction.
+fn fund_wallet_with_n_utxos(wallet: &mut Wallet, n: u32, value: Amount) {
+    let last_index = n.saturating_sub(1);
+    let _revealed: Vec<_> = wallet
+        .reveal_addresses_to(KeychainKind::External, last_index)
+        .collect();
+
+    let outputs = (0..n)
+        .map(|i| TxOut {
+            script_pubkey: wallet
+                .peek_address(KeychainKind::External, i)
+                .script_pubkey(),
+            value,
+        })
+        .collect();
+
+    let tx = Transaction {
+        version: transaction::Version::ONE,
+        lock_time: absolute::LockTime::ZERO,
+        input: vec![],
+        output: outputs,
+    };
+
+    let height = wallet.latest_checkpoint().height() + 1;
+    let mut hash_bytes = [0u8; 32];
+    hash_bytes[0] = 0x42;
+    hash_bytes[1] = (height % 256) as u8;
+    insert_tx_anchor(
+        wallet,
+        tx,
+        BlockId {
+            height,
+            hash: BlockHash::from_byte_array(hash_bytes),
+        },
+    );
+}
+
+#[test]
+fn test_create_tx_rejects_over_max_standard_tx_weight() {
+    // A drain of many small P2WPKH UTXOs is the reported failure mode: the unsigned
+    // transaction stays under the limit, but the estimated signed weight does not.
+    let (desc, change_desc) = get_test_wpkh_and_change_desc();
+    let mut wallet = Wallet::create(desc, change_desc)
+        .network(Network::Regtest)
+        .create_wallet_no_persist()
+        .unwrap();
+
+    // ~1,500 P2WPKH inputs ≈ 408k WU once satisfied (issue #543).
+    const N_UTXOS: u32 = 1_500;
+    fund_wallet_with_n_utxos(&mut wallet, N_UTXOS, Amount::from_sat(1_000));
+    assert_eq!(wallet.list_unspent().count(), N_UTXOS as usize);
+
+    let drain_addr = Address::from_str("bcrt1q3qtze4ys45tgdvguj66zrk4fu6hq3a3v9pfly5")
+        .unwrap()
+        .assume_checked();
+    let mut builder = wallet.build_tx();
+    builder
+        .drain_wallet()
+        .drain_to(drain_addr.script_pubkey())
+        .fee_rate(FeeRate::BROADCAST_MIN);
+
+    assert_matches!(
+        builder.finish(),
+        Err(CreateTxError::TxWeightLimitExceeded { weight, limit })
+            if weight > limit
+                && limit == Weight::from_wu(u64::from(bitcoin::policy::MAX_STANDARD_TX_WEIGHT))
+    );
+}
+
+#[test]
+fn test_create_tx_rejects_over_max_standard_tx_weight_foreign_satisfaction() {
+    // Unit-level construction: a single foreign input whose satisfaction weight
+    // alone pushes the estimated signed weight over the standardness limit.
+    let (mut wallet, _) = get_funded_wallet_wpkh();
+    let addr = wallet.next_unused_address(KeychainKind::External);
+
+    let foreign_prev_tx = Transaction {
+        version: transaction::Version::TWO,
+        lock_time: absolute::LockTime::ZERO,
+        input: vec![],
+        output: vec![TxOut {
+            value: Amount::from_sat(100_000),
+            script_pubkey: ScriptBuf::new_p2wpkh(&WPubkeyHash::all_zeros()),
+        }],
+    };
+    let outpoint = OutPoint {
+        txid: foreign_prev_tx.compute_txid(),
+        vout: 0,
+    };
+    let psbt_input = psbt::Input {
+        witness_utxo: Some(foreign_prev_tx.output[0].clone()),
+        non_witness_utxo: Some(foreign_prev_tx),
+        ..Default::default()
+    };
+
+    let mut builder = wallet.build_tx();
+    builder
+        .add_recipient(addr.script_pubkey(), Amount::from_sat(25_000))
+        .only_witness_utxo()
+        .add_foreign_utxo(
+            outpoint,
+            psbt_input,
+            Weight::from_wu(u64::from(bitcoin::policy::MAX_STANDARD_TX_WEIGHT)),
+        )
+        .unwrap();
+
+    assert_matches!(
+        builder.finish(),
+        Err(CreateTxError::TxWeightLimitExceeded { weight, limit })
+            if weight > limit
+                && limit == Weight::from_wu(u64::from(bitcoin::policy::MAX_STANDARD_TX_WEIGHT))
+    );
 }
