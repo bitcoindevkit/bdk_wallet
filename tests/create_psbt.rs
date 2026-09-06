@@ -1,6 +1,8 @@
 //! Integration tests for the unstable `create_psbt` and `replace_by_fee` APIs.
 #![cfg(all(bdk_wallet_unstable, feature = "bdk-tx"))]
 
+use std::str::FromStr;
+
 use bdk_chain::{BlockId, ConfirmationBlockTime};
 use bdk_tx::{ChangeScript, bdk_coin_select};
 use bdk_wallet::bitcoin;
@@ -9,8 +11,8 @@ use bdk_wallet::{
     KeychainKind, PsbtParams, SelectionStrategy, Wallet, error::CreatePsbtError, psbt,
 };
 use bitcoin::{
-    Amount, FeeRate, Network, OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut, absolute,
-    hashes::Hash,
+    Address, Amount, BlockHash, FeeRate, Network, OutPoint, ScriptBuf, Sequence, Transaction, TxIn,
+    TxOut, Weight, absolute, hashes::Hash, transaction,
 };
 use miniscript::plan::Assets;
 
@@ -1210,4 +1212,78 @@ fn test_add_planned_psbt_input() -> anyhow::Result<()> {
     );
 
     Ok(())
+}
+
+/// Fund `wallet` with `n` confirmed outputs of `value` in a single transaction.
+fn fund_wallet_with_n_utxos(wallet: &mut Wallet, n: u32, value: Amount) {
+    let last_index = n.saturating_sub(1);
+    let _revealed: Vec<_> = wallet
+        .reveal_addresses_to(KeychainKind::External, last_index)
+        .collect();
+
+    let outputs = (0..n)
+        .map(|i| TxOut {
+            script_pubkey: wallet
+                .peek_address(KeychainKind::External, i)
+                .script_pubkey(),
+            value,
+        })
+        .collect();
+
+    let tx = Transaction {
+        version: transaction::Version::ONE,
+        lock_time: absolute::LockTime::ZERO,
+        input: vec![],
+        output: outputs,
+    };
+
+    let height = wallet.latest_checkpoint().height() + 1;
+    let mut hash_bytes = [0u8; 32];
+    hash_bytes[0] = 0x42;
+    hash_bytes[1] = (height % 256) as u8;
+    insert_tx_anchor(
+        wallet,
+        tx,
+        BlockId {
+            height,
+            hash: BlockHash::from_byte_array(hash_bytes),
+        },
+    );
+}
+
+#[test]
+fn test_create_psbt_rejects_over_max_standard_tx_weight() {
+    let (desc, change_desc) = get_test_wpkh_and_change_desc();
+    let mut wallet = Wallet::create(desc, change_desc)
+        .network(Network::Regtest)
+        .create_wallet_no_persist()
+        .unwrap();
+
+    // ~1,500 P2WPKH inputs ≈ 408k WU once satisfied (issue #543).
+    const N_UTXOS: u32 = 1_500;
+    fund_wallet_with_n_utxos(&mut wallet, N_UTXOS, Amount::from_sat(1_000));
+    assert_eq!(wallet.list_unspent().count(), N_UTXOS as usize);
+
+    let drain_addr = Address::from_str("bcrt1q3qtze4ys45tgdvguj66zrk4fu6hq3a3v9pfly5")
+        .unwrap()
+        .assume_checked();
+
+    let mut params = PsbtParams::default();
+    params.fee_rate(FeeRate::BROADCAST_MIN);
+    params.coin_selection(SelectionStrategy::All);
+    params.change_script(ChangeScript::from_script(
+        drain_addr.script_pubkey(),
+        Weight::from_wu(107),
+    ));
+
+    let err = wallet.create_psbt(params).expect_err("overweight drain");
+    assert!(
+        matches!(
+            err,
+            CreatePsbtError::TxWeightLimitExceeded { weight, limit }
+                if weight > limit
+                    && limit == Weight::from_wu(u64::from(bitcoin::policy::MAX_STANDARD_TX_WEIGHT))
+        ),
+        "expected TxWeightLimitExceeded, got: {err:?}"
+    );
 }
