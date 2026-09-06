@@ -1505,6 +1505,12 @@ impl Wallet {
             }
         };
 
+        let satisfaction_by_outpoint: HashMap<OutPoint, Weight> = required_utxos
+            .iter()
+            .chain(optional_utxos.iter())
+            .map(|weighted| (weighted.utxo.outpoint(), weighted.satisfaction_weight))
+            .collect();
+
         // Get drain script.
         let mut drain_index = Option::<(KeychainKind, u32)>::None;
         let drain_script = match params.drain_to {
@@ -1598,6 +1604,18 @@ impl Wallet {
 
         // Sort inputs/outputs according to the chosen algorithm.
         params.ordering.sort_tx_with_aux_rand(&mut tx, rng);
+
+        // Reject transactions that would exceed the standardness weight limit once signed.
+        // `tx.weight()` is the unsigned weight (empty witnesses); add each input's satisfaction
+        // weight so we compare against the same limit mempools enforce on the final tx.
+        let satisfaction_weights = tx.input.iter().map(|txin| {
+            satisfaction_by_outpoint
+                .get(&txin.previous_output)
+                .copied()
+                .unwrap_or_else(|| self.satisfaction_weight_for_outpoint(txin.previous_output))
+        });
+        check_max_standard_tx_weight(&tx, satisfaction_weights)
+            .map_err(|(weight, limit)| CreateTxError::TxWeightLimitExceeded { weight, limit })?;
 
         let psbt = self.complete_transaction(tx, coin_selection.selected, params)?;
 
@@ -2944,6 +2962,48 @@ impl Wallet {
             })
             .collect()
     }
+
+    /// Satisfaction weight used to estimate the signed size of spending `outpoint`.
+    ///
+    /// Local wallet UTXOs use the descriptor's [`max_weight_to_satisfy`]. Foreign or unknown
+    /// outpoints return [`Weight::ZERO`], which underestimates; callers that still have the
+    /// original [`WeightedUtxo`] should prefer that value.
+    ///
+    /// [`max_weight_to_satisfy`]: miniscript::Descriptor::max_weight_to_satisfy
+    fn satisfaction_weight_for_outpoint(&self, outpoint: OutPoint) -> Weight {
+        self.get_utxo(outpoint)
+            .and_then(|utxo| {
+                self.public_descriptor(utxo.keychain)
+                    .max_weight_to_satisfy()
+                    .ok()
+            })
+            .unwrap_or(Weight::ZERO)
+    }
+}
+
+/// Estimate the signed weight of an assembled unsigned transaction and reject it when it
+/// exceeds [`bitcoin::policy::MAX_STANDARD_TX_WEIGHT`].
+///
+/// `tx` is unsigned (empty witnesses). `satisfaction_weights` are the additional scriptSig /
+/// witness weights for each input. Empty-witness transactions serialize without the 2-WU
+/// segwit marker/flag; that is added once any satisfaction weight is present.
+fn check_max_standard_tx_weight(
+    tx: &Transaction,
+    satisfaction_weights: impl IntoIterator<Item = Weight>,
+) -> Result<(), (Weight, Weight)> {
+    let satisfaction: Weight = satisfaction_weights.into_iter().sum();
+    let segwit_marker = if satisfaction > Weight::ZERO {
+        Weight::from_wu(2)
+    } else {
+        Weight::ZERO
+    };
+    let weight = tx.weight() + satisfaction + segwit_marker;
+    let limit = Weight::from_wu(u64::from(bitcoin::policy::MAX_STANDARD_TX_WEIGHT));
+    if weight > limit {
+        Err((weight, limit))
+    } else {
+        Ok(())
+    }
 }
 
 /// Methods to construct sync/full-scan requests for spk-based chain sources.
@@ -3220,6 +3280,7 @@ impl Wallet {
     /// - A manually selected input is missing from the wallet, or could not be planned
     /// - The input value is insufficient to fund the outputs
     /// - Failure to complete coin selection
+    /// - The assembled transaction exceeds [`bitcoin::policy::MAX_STANDARD_TX_WEIGHT`]
     /// - Failure to create or update the PSBT.
     ///
     /// # Change address
@@ -3423,6 +3484,14 @@ impl Wallet {
                 rng,
             )
             .map_err(CreatePsbtError::Psbt)?;
+
+        let satisfaction_weights = psbt
+            .unsigned_tx
+            .input
+            .iter()
+            .map(|txin| self.satisfaction_weight_for_outpoint(txin.previous_output));
+        check_max_standard_tx_weight(&psbt.unsigned_tx, satisfaction_weights)
+            .map_err(|(weight, limit)| CreatePsbtError::TxWeightLimitExceeded { weight, limit })?;
 
         // Add global xpubs.
         if params.add_global_xpubs {
