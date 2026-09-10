@@ -7,20 +7,38 @@ Contributors do not need to change this file but do need to add changelog detail
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [v3.2.0]
 
 ### Added
 
-- feat(wallet): add unstable `Wallet::create_psbt` and `Wallet::replace_by_fee` behind the
-  `bdk-tx` cargo feature and the `--cfg bdk_wallet_unstable` rustc flag. These APIs are
-  explicitly **unstable**: breaking changes may land in minor releases without a semver bump.
-  To opt in, enable the `bdk-tx` feature **and** pass `--cfg bdk_wallet_unstable` to rustc,
-  for example via `RUSTFLAGS="--cfg bdk_wallet_unstable"` or by adding the following to your
-  workspace's `.cargo/config.toml`:
+- feat(wallet): add unstable `Wallet::create_psbt` and `Wallet::replace_by_fee` behind the `bdk-tx` cargo feature
+  and the `--cfg bdk_wallet_unstable` rustc flag. These APIs are explicitly **unstable**: breaking changes may land
+  in minor releases without a semver bump. To opt in, enable the `bdk-tx` feature **and** pass `--cfg bdk_wallet_unstable` to rustc,
+  for example via `RUSTFLAGS="--cfg bdk_wallet_unstable"` or by adding the following to your workspace's `.cargo/config.toml` [#516](https://github.com/bitcoindevkit/bdk_wallet/pull/516)
+
   ```toml
   [build]
   rustflags = ["--cfg", "bdk_wallet_unstable"]
   ```
+
+- feat(wallet): add `Wallet::try_finalize_psbt` returning `FinalizePsbtOutcome` with per-input finalization outcomes [#433](https://github.com/bitcoindevkit/bdk_wallet/pull/433)
+- feat(wallet): add `TxBuilder::set_condition` as replacement for `TxBuilder::policy_path` [#536](https://github.com/bitcoindevkit/bdk_wallet/pull/536)
+
+### Fixed
+
+- fix(wallet): add support for bip-431 rule 2 [#478](https://github.com/bitcoindevkit/bdk_wallet/pull/478)
+- fix(wallet): fix ChangeSet write-once invariants [#517](https://github.com/bitcoindevkit/bdk_wallet/pull/517)
+- docs(wallet,params): Fix doc for LoadParams::two_path_descriptor [#510](https://github.com/bitcoindevkit/bdk_wallet/pull/510)
+
+### Changed
+
+- refactor(wallet): deprecated `Wallet::{add_signer, set_keymap, set_keymaps, get_signers, sign, policies}`, `CreateParams::keymap`, `LoadParams::{keymap, extract_keys}`,
+  and `TxBuilder::policy_path` in favor of caller-owned keys with `bitcoin::Psbt::sign` / `Wallet::sign_with_signers` [#536](https://github.com/bitcoindevkit/bdk_wallet/pull/536)
+- chore: Update rust edition to 2024 in Cargo.toml [#425](https://github.com/bitcoindevkit/bdk_wallet/pull/425)
+- chore(ci): add stale issue triage workflow [#497](https://github.com/bitcoindevkit/bdk_wallet/pull/497)
+- build(deps): bump actions/stale from 10.3.0 to 10.4.0 [#515](https://github.com/bitcoindevkit/bdk_wallet/pull/515)
+- build(deps): bump actions/checkout from 6 to 7 [#504](https://github.com/bitcoindevkit/bdk_wallet/pull/504)
+- build(deps): bump codecov/codecov-action from 6.0.0 to 7.0.0 [#498](https://github.com/bitcoindevkit/bdk_wallet/pull/498)
 
 ## [v3.1.0]
 
@@ -1476,3 +1494,4 @@ final transaction is created by calling `finish` on the builder.
 [wallet-2.3.0]: https://github.com/bitcoindevkit/bdk_wallet/releases/tag/wallet-2.3.0
 [v3.0.0]: https://github.com/bitcoindevkit/bdk_wallet/releases/tag/v3.0.0
 [v3.1.0]: https://github.com/bitcoindevkit/bdk_wallet/releases/tag/v3.1.0
+[v3.2.0]: https://github.com/bitcoindevkit/bdk_wallet/releases/tag/v3.2.0
