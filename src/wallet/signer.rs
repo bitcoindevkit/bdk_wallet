@@ -582,9 +582,6 @@ impl InputSigner for SignerWrapper<PrivateKey> {
                 }
             }
             SignerContext::Segwitv0 | SignerContext::Legacy => {
-                
-                }
-
                 let mut sighasher = sighash::SighashCache::new(psbt.unsigned_tx.clone());
                 let (msg, sighash_type) = psbt
                     .sighash_ecdsa(input_index, &mut sighasher)
@@ -604,6 +601,7 @@ impl InputSigner for SignerWrapper<PrivateKey> {
 
         Ok(())
     }
+}
 
 fn sign_psbt_ecdsa(
     secret_key: &secp256k1::SecretKey,
