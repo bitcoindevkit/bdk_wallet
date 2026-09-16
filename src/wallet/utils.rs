@@ -109,12 +109,19 @@ impl<Pk: MiniscriptKey + ToPublicKey> Satisfier<Pk> for Older {
     fn check_older(&self, n: relative::LockTime) -> bool {
         if let Some(current_height) = self.current_height {
             // TODO: test >= / >
-            current_height
-                >= self
-                    .create_height
-                    .unwrap_or(0)
-                    .checked_add(n.to_consensus_u32())
-                    .expect("Overflowing addition")
+            match self
+                .create_height
+                .unwrap_or(0)
+                .checked_add(n.to_consensus_u32())
+            {
+                Some(satisfaction_height) => current_height >= satisfaction_height,
+                // The height at which the relative locktime would be satisfied does not fit in
+                // a `u32` and can therefore never be reached, so the branch is not satisfied.
+                // `Wallet::finalize_psbt` maps an unconfirmed previous transaction to a
+                // `create_height` of `u32::MAX`, which makes this reachable for any `older(n)`
+                // with `n` greater than zero.
+                None => false,
+            }
         } else {
             self.assume_height_reached
         }
@@ -170,10 +177,11 @@ mod test {
     // otherwise it's time-based
     pub(crate) const SEQUENCE_LOCKTIME_TYPE_FLAG: u32 = 1 << 22;
 
-    use super::{IsDust, check_nsequence_rbf, shuffle_slice};
-    use crate::bitcoin::{Address, Network, Sequence};
+    use super::{IsDust, Older, check_nsequence_rbf, shuffle_slice};
+    use crate::bitcoin::{Address, Network, PublicKey, Sequence, relative};
     use alloc::vec::Vec;
     use core::str::FromStr;
+    use miniscript::Satisfier;
     use rand::{SeedableRng, rngs::StdRng, thread_rng};
 
     #[test]
@@ -277,5 +285,31 @@ mod test {
         let mut test: Vec<u8> = vec![0, 1, 2, 4, 5];
         shuffle_slice(&mut test, &mut rng);
         assert_eq!(test, &[0, 4, 1, 2, 5]);
+    }
+
+    #[test]
+    fn test_check_older_compares_against_the_satisfaction_height() {
+        let older = Older::new(Some(300), Some(100), false);
+        assert!(<Older as Satisfier<PublicKey>>::check_older(
+            &older,
+            relative::LockTime::from_height(144)
+        ));
+
+        let older = Older::new(Some(200), Some(100), false);
+        assert!(!<Older as Satisfier<PublicKey>>::check_older(
+            &older,
+            relative::LockTime::from_height(144)
+        ));
+    }
+
+    #[test]
+    fn test_check_older_unreachable_satisfaction_height_is_not_satisfied() {
+        // `Wallet::finalize_psbt` maps an unconfirmed previous transaction to a `create_height`
+        // of `u32::MAX`, so adding a relative locktime to it does not fit in a `u32`.
+        let older = Older::new(Some(100_000), Some(u32::MAX), false);
+        assert!(!<Older as Satisfier<PublicKey>>::check_older(
+            &older,
+            relative::LockTime::from_height(144)
+        ));
     }
 }

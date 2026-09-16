@@ -2039,6 +2039,54 @@ fn test_try_finalize_psbt_uses_psbt_timelocks() {
 }
 
 #[test]
+fn test_finalize_psbt_with_unconfirmed_input_and_unused_csv_branch() {
+    // `wsh(or_d(pk(A),and_v(v:pk(B),older(144))))`. Spending through the `pk(A)` branch leaves
+    // the `older(144)` branch for the finalizer to evaluate, and `finalize_psbt` maps an
+    // unconfirmed previous transaction to a confirmation height of `u32::MAX`. Adding the
+    // relative locktime to that height overflows, which used to panic.
+    let descriptor = get_test_a_or_b_plus_csv();
+    let mut wallet = Wallet::create_single(descriptor)
+        .network(Network::Regtest)
+        .create_wallet_no_persist()
+        .unwrap();
+    let addr = wallet.next_unused_address(KeychainKind::External);
+
+    // Fund the wallet with a transaction that stays unconfirmed.
+    let funding_tx = Transaction {
+        output: vec![TxOut {
+            value: Amount::from_sat(50_000),
+            script_pubkey: addr.script_pubkey(),
+        }],
+        ..new_tx(0)
+    };
+    insert_tx(&mut wallet, funding_tx);
+
+    let policy = wallet
+        .public_descriptor(KeychainKind::External)
+        .extract_policy(
+            &SignersContainer::default(),
+            BuildSatisfaction::None,
+            wallet.secp_ctx(),
+        )
+        .unwrap()
+        .expect("descriptor has a spending policy");
+    // Child #0 is `pk(A)`, so the `older(144)` branch is not the one being used.
+    let path = [(policy.id.clone(), vec![0])].into_iter().collect();
+    let condition = policy.get_condition(&path).unwrap();
+
+    let mut builder = wallet.build_tx();
+    builder
+        .add_recipient(addr.script_pubkey(), Amount::from_sat(10_000))
+        .set_condition(condition);
+    let mut psbt = builder.finish().unwrap();
+
+    let finalized = wallet
+        .finalize_psbt(&mut psbt, SignOptions::default())
+        .unwrap();
+    assert!(!finalized, "an unsigned PSBT cannot be finalized");
+}
+
+#[test]
 fn test_taproot_try_finalize_sign_option() {
     let descriptor = get_test_tr_with_taptree();
     let (mut wallet, _) = get_funded_wallet_single(descriptor);
