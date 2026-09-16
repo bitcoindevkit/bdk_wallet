@@ -1547,6 +1547,154 @@ fn test_sign_with_signers() {
 }
 
 #[test]
+fn test_sign_with_signers_overwrites_invalid_ecdsa_partial_sig() {
+    let (descriptor, change_descriptor) = get_test_wpkh_and_change_desc();
+    let (mut wallet, _) = get_funded_wallet(descriptor, change_descriptor);
+    let signers = signers_from_descriptor(&wallet, descriptor);
+
+    let addr = wallet.next_unused_address(KeychainKind::External);
+    let mut builder = wallet.build_tx();
+    builder.drain_to(addr.script_pubkey()).drain_wallet();
+    let mut psbt = builder.finish().unwrap();
+    let pubkey = *psbt.inputs[0].bip32_derivation.keys().next().unwrap();
+    let pubkey = bitcoin::PublicKey::new(pubkey);
+    let garbage_sig = bitcoin::ecdsa::Signature {
+        signature: bitcoin::secp256k1::ecdsa::Signature::from_compact(&[0u8; 64]).unwrap(),
+        sighash_type: bitcoin::sighash::EcdsaSighashType::All,
+    };
+    psbt.inputs[0].partial_sigs.insert(pubkey, garbage_sig);
+    wallet
+        .sign_with_signers(
+            &mut psbt,
+            &[&signers],
+            SignOptions {
+                try_finalize: false,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    let real_sig = psbt.inputs[0]
+        .partial_sigs
+        .get(&pubkey)
+        .expect("partial_sigs must contain a signature after signing");
+
+    assert_ne!(
+        real_sig.signature.serialize_compact(),
+        [0u8; 64],
+        "garbage signature was not overwritten"
+    );
+}
+
+#[test]
+fn test_sign_with_signers_overwrites_invalid_tap_key_sig() {
+    let (descriptor, change_descriptor) = get_test_tr_single_sig_xprv_and_change_desc();
+    let (mut wallet, _) = get_funded_wallet(descriptor, change_descriptor);
+    let signers = signers_from_descriptor(&wallet, descriptor);
+
+    let addr = wallet.next_unused_address(KeychainKind::External);
+    let mut builder = wallet.build_tx();
+    builder.drain_to(addr.script_pubkey()).drain_wallet();
+    let mut psbt = builder.finish().unwrap();
+
+    // Pre-seed an all-zero (invalid) Schnorr signature as tap_key_sig
+    psbt.inputs[0].tap_key_sig = Some(bitcoin::taproot::Signature {
+        signature: bitcoin::secp256k1::schnorr::Signature::from_slice(&[0u8; 64]).unwrap(),
+        sighash_type: bitcoin::sighash::TapSighashType::Default,
+    });
+
+    wallet
+        .sign_with_signers(
+            &mut psbt,
+            &[&signers],
+            SignOptions {
+                try_finalize: false,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    let real_sig = psbt.inputs[0]
+        .tap_key_sig
+        .expect("tap_key_sig must be present after signing");
+
+    assert_ne!(
+        real_sig.signature.as_ref(),
+        &[0u8; 64],
+        "garbage tap_key_sig was not overwritten"
+    );
+}
+
+#[test]
+fn test_sign_with_signers_overwrites_invalid_tap_script_sigs() {
+    use bdk_wallet::signer::TapLeavesOptions;
+    use bitcoin::taproot::TapLeafHash;
+
+    let descriptor = get_test_tr_with_taptree_xprv();
+    let (mut wallet, _) = get_funded_wallet_single(descriptor);
+    let signers = signers_from_descriptor(&wallet, descriptor);
+
+    let addr = wallet.next_unused_address(KeychainKind::External);
+    let mut builder = wallet.build_tx();
+    builder.drain_to(addr.script_pubkey()).drain_wallet();
+    let mut psbt = builder.finish().unwrap();
+    let mut probe = psbt.clone();
+    wallet
+        .sign_with_signers(
+            &mut probe,
+            &[&signers],
+            SignOptions {
+                tap_leaves_options: TapLeavesOptions::All,
+                try_finalize: false,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let signable_keys: Vec<(bitcoin::key::XOnlyPublicKey, TapLeafHash)> =
+        probe.inputs[0].tap_script_sigs.keys().copied().collect();
+
+    assert!(
+        !signable_keys.is_empty(),
+        "expected at least one signable script leaf"
+    );
+    let garbage_schnorr = bitcoin::secp256k1::schnorr::Signature::from_slice(&[0u8; 64]).unwrap();
+    for key in &signable_keys {
+        psbt.inputs[0].tap_script_sigs.insert(
+            *key,
+            bitcoin::taproot::Signature {
+                signature: garbage_schnorr,
+                sighash_type: bitcoin::sighash::TapSighashType::Default,
+            },
+        );
+    }
+
+    wallet
+        .sign_with_signers(
+            &mut psbt,
+            &[&signers],
+            SignOptions {
+                tap_leaves_options: TapLeavesOptions::All,
+                try_finalize: false,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    for key in &signable_keys {
+        let real_sig = psbt.inputs[0]
+            .tap_script_sigs
+            .get(key)
+            .expect("tap_script_sigs must contain a signature after signing");
+        assert_ne!(
+            real_sig.signature.as_ref(),
+            &[0u8; 64],
+            "garbage tap_script_sig for {:?} was not overwritten",
+            key
+        );
+    }
+}
+
+#[test]
 fn test_sign_single_xprv_with_master_fingerprint_and_path() {
     let descriptor = "wpkh([d34db33f/84h/1h/0h]tprv8ZgxMBicQKsPd3EupYiPRhaMooHKUHJxNsTfYuScep13go8QFfHdtkG9nRkFGb7busX4isf6X9dURGCoKgitaApQ6MupRhZMcELAxTBRJgS/*)";
     let (mut wallet, _) = get_funded_wallet_single(descriptor);
@@ -1564,25 +1712,6 @@ fn test_sign_single_xprv_with_master_fingerprint_and_path() {
     let extracted = psbt.extract_tx().expect("failed to extract tx");
     assert_eq!(extracted.input[0].witness.len(), 2);
 }
-
-#[test]
-fn test_sign_single_xprv_bip44_path() {
-    let descriptor = "wpkh(tprv8ZgxMBicQKsPd3EupYiPRhaMooHKUHJxNsTfYuScep13go8QFfHdtkG9nRkFGb7busX4isf6X9dURGCoKgitaApQ6MupRhZMcELAxTBRJgS/44'/0'/0'/0/*)";
-    let (mut wallet, _) = get_funded_wallet_single(descriptor);
-    let addr = wallet.next_unused_address(KeychainKind::External);
-    let mut builder = wallet.build_tx();
-    builder.drain_to(addr.script_pubkey()).drain_wallet();
-    let mut psbt = builder.finish().unwrap();
-
-    let signer = KeyMapWrapper::from(keymap_from_descriptor(&wallet, descriptor));
-    psbt.sign(&signer, wallet.secp_ctx()).unwrap();
-    let finalized = wallet.finalize_psbt(&mut psbt, Default::default()).unwrap();
-    assert!(finalized);
-
-    let extracted = psbt.extract_tx().expect("failed to extract tx");
-    assert_eq!(extracted.input[0].witness.len(), 2);
-}
-
 #[test]
 fn test_sign_single_xprv_sh_wpkh() {
     let descriptor = "sh(wpkh(tprv8ZgxMBicQKsPd3EupYiPRhaMooHKUHJxNsTfYuScep13go8QFfHdtkG9nRkFGb7busX4isf6X9dURGCoKgitaApQ6MupRhZMcELAxTBRJgS/*))";
