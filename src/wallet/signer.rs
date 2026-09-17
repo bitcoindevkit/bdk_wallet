@@ -106,7 +106,7 @@ use bitcoin::{key::TapTweak, key::XOnlyPublicKey, secp256k1};
 
 use miniscript::descriptor::{
     Descriptor, DescriptorMultiXKey, DescriptorPublicKey, DescriptorSecretKey, DescriptorXKey,
-    InnerXKey, KeyMap, SinglePriv, SinglePubKey,
+    InnerXKey, KeyMap, SinglePriv, SinglePubKey, Wildcard,
 };
 use miniscript::{SigType, ToPublicKey};
 
@@ -356,7 +356,20 @@ impl InputSigner for SignerWrapper<DescriptorXKey<Xpriv>> {
             .map(|(pk, keysource)| (SinglePubKey::FullKey(PublicKey::new(*pk)), keysource))
             .chain(tap_key_origins)
             .find_map(|(pk, keysource)| {
-                if self.matches(keysource, secp).is_some() {
+                self.matches(keysource, secp)?;
+                // `matches()` ignores the wildcard's final path step, so verify its
+                // hardness against `self.wildcard` separately.
+                let last_step = keysource.1.into_iter().last();
+                let wildcard_step_is_valid = match self.wildcard {
+                    Wildcard::None => true,
+                    Wildcard::Unhardened => {
+                        matches!(last_step, Some(step) if !step.is_hardened())
+                    }
+                    Wildcard::Hardened => {
+                        matches!(last_step, Some(step) if step.is_hardened())
+                    }
+                };
+                if wildcard_step_is_valid {
                     Some((pk, keysource.1.clone()))
                 } else {
                     None
@@ -1191,6 +1204,89 @@ mod signers_container_tests {
     const TPRV1_STR: &str = "tprv8ZgxMBicQKsPdpkqS7Eair4YxjcuuvDPNYmKX3sCniCf16tHEVrjjiSXEkFRnUH77yXc6ZcwHHcLNfjdi5qUvw3VDfgYiH5mNsj5izuiu2N";
 
     const PATH: &str = "m/44'/1'/0'/0";
+
+    fn sign_with_wildcard(desc_suffix: &str, psbt_path: &str) -> bool {
+        use bitcoin::{
+            Amount, OutPoint, PrivateKey, ScriptBuf, Sequence, TxIn, TxOut, Witness, absolute,
+            transaction,
+        };
+
+        let secp = Secp256k1::new();
+        let (wallet_desc, keymap) = format!("wpkh({TPRV0_STR}/{desc_suffix})")
+            .as_str()
+            .into_wallet_descriptor(&secp, NetworkKind::Test)
+            .unwrap();
+        let signers = SignersContainer::build(keymap, &wallet_desc, &secp);
+
+        let tprv = bip32::Xpriv::from_str(TPRV0_STR).unwrap();
+        let full_path = bip32::DerivationPath::from_str(psbt_path).unwrap();
+        let child = tprv.derive_priv(&secp, &full_path).unwrap();
+        let child_pub = PrivateKey::new(child.private_key, NetworkKind::Test).public_key(&secp);
+        let child_spk = Descriptor::<bitcoin::PublicKey>::from_str(&format!("wpkh({child_pub})"))
+            .unwrap()
+            .script_pubkey();
+
+        let prev_tx = bitcoin::Transaction {
+            version: transaction::Version::TWO,
+            lock_time: absolute::LockTime::ZERO,
+            input: vec![TxIn {
+                previous_output: OutPoint::null(),
+                script_sig: ScriptBuf::default(),
+                sequence: Sequence::MAX,
+                witness: Witness::default(),
+            }],
+            output: vec![TxOut {
+                value: Amount::from_sat(100_000),
+                script_pubkey: child_spk,
+            }],
+        };
+        let unsigned_tx = bitcoin::Transaction {
+            version: transaction::Version::TWO,
+            lock_time: absolute::LockTime::ZERO,
+            input: vec![TxIn {
+                previous_output: OutPoint::new(prev_tx.compute_txid(), 0),
+                script_sig: ScriptBuf::default(),
+                sequence: Sequence::MAX,
+                witness: Witness::default(),
+            }],
+            output: vec![TxOut {
+                value: Amount::from_sat(90_000),
+                script_pubkey: ScriptBuf::default(),
+            }],
+        };
+        let mut psbt = Psbt::from_unsigned_tx(unsigned_tx).unwrap();
+        psbt.inputs[0].witness_utxo = Some(prev_tx.output[0].clone());
+        psbt.inputs[0].non_witness_utxo = Some(prev_tx);
+        psbt.inputs[0]
+            .bip32_derivation
+            .insert(child_pub.inner, (tprv.fingerprint(&secp), full_path));
+
+        signers.signers()[0]
+            .sign_transaction(&mut psbt, &SignOptions::default(), &secp)
+            .unwrap();
+
+        !psbt.inputs[0].partial_sigs.is_empty()
+    }
+
+    #[test]
+    fn sign_input_accepts_unhardened_wildcard_with_unhardened_child() {
+        assert!(sign_with_wildcard("0/*", "m/0/1"));
+    }
+
+    #[test]
+    fn sign_input_rejects_unhardened_wildcard_with_hardened_child() {
+        assert!(!sign_with_wildcard("0/*", "m/0/1h"));
+    }
+
+    #[test]
+    fn sign_input_accepts_hardened_wildcard_with_hardened_child() {
+        assert!(sign_with_wildcard("0/*h", "m/0/1h"));
+    }
+
+    #[test]
+    fn sign_input_rejects_hardened_wildcard_with_unhardened_child() {
+        assert!(!sign_with_wildcard("0/*h", "m/0/1"));
+    }
 
     fn setup_keys<Ctx: ScriptContext>(
         tprv: &str,
