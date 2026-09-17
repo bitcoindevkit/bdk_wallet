@@ -1432,11 +1432,12 @@ impl Wallet {
             (Some(sequence), _) => sequence,
         };
 
-        let (fee_rate, mut fee_amount) = match params.fee_policy.unwrap_or_default() {
+        let fee_policy = params.fee_policy.unwrap_or_default();
+        let (fee_rate, mut fee_amount) = match fee_policy {
             //FIXME: see https://github.com/bitcoindevkit/bdk/issues/256
             FeePolicy::FeeAmount(fee) => {
                 if let Some(previous_fee) = params.bumping_fee {
-                    if fee < previous_fee.absolute {
+                    if fee <= previous_fee.absolute {
                         return Err(CreateTxError::FeeTooLow {
                             required: previous_fee.absolute,
                         });
@@ -1598,6 +1599,32 @@ impl Wallet {
 
         // Sort inputs/outputs according to the chosen algorithm.
         params.ordering.sort_tx_with_aux_rand(&mut tx, rng);
+
+        if matches!(fee_policy, FeePolicy::FeeAmount(_)) {
+            if let Some(previous_fee) = params.bumping_fee {
+                let required_feerate = FeeRate::from_sat_per_kwu(
+                    previous_fee.rate.to_sat_per_kwu() + FeeRate::BROADCAST_MIN.to_sat_per_kwu(),
+                );
+                if fee_amount / tx.weight() < required_feerate {
+                    return Err(CreateTxError::FeeRateTooLow {
+                        required: required_feerate,
+                    });
+                }
+            }
+        }
+
+        if matches!(fee_policy, FeePolicy::FeeAmount(_)) {
+            if let Some(previous_fee) = params.bumping_fee {
+                let required_feerate = FeeRate::from_sat_per_kwu(
+                    previous_fee.rate.to_sat_per_kwu() + FeeRate::BROADCAST_MIN.to_sat_per_kwu(),
+                );
+                if fee_amount / tx.weight() < required_feerate {
+                    return Err(CreateTxError::FeeRateTooLow {
+                        required: required_feerate,
+                    });
+                }
+            }
+        }
 
         let psbt = self.complete_transaction(tx, coin_selection.selected, params)?;
 
