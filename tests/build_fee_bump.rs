@@ -120,6 +120,55 @@ fn test_bump_fee_zero_abs() {
 }
 
 #[test]
+fn test_bump_fee_absolute_equal() {
+    let (mut wallet, _) = get_funded_wallet_wpkh();
+    let addr = wallet.next_unused_address(KeychainKind::External);
+    let mut builder = wallet.build_tx();
+    builder.add_recipient(addr.script_pubkey(), Amount::from_sat(25_000));
+    let psbt = builder.finish().unwrap();
+    let fee = check_fee!(wallet, psbt);
+
+    let tx = psbt.extract_tx().expect("failed to extract tx");
+    let txid = tx.compute_txid();
+    insert_tx(&mut wallet, tx);
+
+    let mut builder = wallet.build_fee_bump(txid).unwrap();
+    builder.fee_absolute(fee);
+    assert_matches!(
+        builder.finish(),
+        Err(CreateTxError::FeeTooLow { required }) if required == fee
+    );
+}
+
+#[test]
+fn test_bump_fee_absolute_lower_fee_rate() {
+    let (mut wallet, _) = get_funded_wallet_wpkh();
+    let incoming_op = receive_output_in_latest_block(&mut wallet, Amount::from_sat(25_000));
+    let addr = wallet.next_unused_address(KeychainKind::External);
+    let mut builder = wallet.build_tx().coin_selection(LargestFirstCoinSelection);
+    builder
+        .add_recipient(addr.script_pubkey(), Amount::from_sat(25_000))
+        .fee_rate(FeeRate::from_sat_per_vb_u32(50));
+    let psbt = builder.finish().unwrap();
+    let fee = check_fee!(wallet, psbt);
+
+    let mut tx = psbt.extract_tx().expect("failed to extract tx");
+    let txid = tx.compute_txid();
+    for txin in &mut tx.input {
+        txin.witness.push([0x00; P2WPKH_FAKE_SIG_SIZE]);
+        txin.witness.push([0x00; P2WPKH_FAKE_PK_SIZE]);
+    }
+    insert_tx(&mut wallet, tx);
+
+    let mut builder = wallet.build_fee_bump(txid).unwrap();
+    builder
+        .add_utxo(incoming_op)
+        .unwrap()
+        .fee_absolute(fee + Amount::from_sat(1));
+    assert_matches!(builder.finish(), Err(CreateTxError::FeeRateTooLow { .. }));
+}
+
+#[test]
 fn test_bump_fee_reduce_change() {
     let (mut wallet, _) = get_funded_wallet_wpkh();
     let addr = Address::from_str("2N1Ffz3WaNzbeLFBb51xyFMHYSEUXcbiSoX")
