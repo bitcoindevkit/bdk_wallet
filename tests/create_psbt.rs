@@ -1287,3 +1287,68 @@ fn test_create_psbt_rejects_over_max_standard_tx_weight() {
         "expected TxWeightLimitExceeded, got: {err:?}"
     );
 }
+
+#[test]
+fn test_create_psbt_rejects_planned_input_over_max_standard_tx_weight() {
+    // Planned/foreign inputs are not wallet UTXOs. Their satisfaction weight is tracked on the
+    // selection candidate and must still be counted. Satisfaction alone is the standardness limit,
+    // so the signed tx is over even before the rest of the transaction.
+    let (desc, change_desc) = get_test_wpkh_and_change_desc();
+    let mut wallet = Wallet::create(desc, change_desc)
+        .network(Network::Regtest)
+        .create_wallet_no_persist()
+        .unwrap();
+
+    let prev_tx = Transaction {
+        version: transaction::Version::TWO,
+        lock_time: absolute::LockTime::ZERO,
+        input: vec![],
+        output: vec![TxOut {
+            value: Amount::from_sat(500_000),
+            script_pubkey: ScriptBuf::new_p2wpkh(&bitcoin::WPubkeyHash::all_zeros()),
+        }],
+    };
+    let outpoint = OutPoint {
+        txid: prev_tx.compute_txid(),
+        vout: 0,
+    };
+    let psbt_input = bitcoin::psbt::Input {
+        witness_utxo: Some(prev_tx.output[0].clone()),
+        non_witness_utxo: Some(prev_tx),
+        ..Default::default()
+    };
+    let planned = bdk_tx::Input::from_psbt_input(
+        outpoint,
+        Sequence::ENABLE_RBF_NO_LOCKTIME,
+        psbt_input,
+        usize::try_from(bitcoin::policy::MAX_STANDARD_TX_WEIGHT).unwrap(),
+        None,
+        false,
+        None,
+    )
+    .unwrap();
+
+    let dest = wallet
+        .reveal_next_address(KeychainKind::External)
+        .address
+        .script_pubkey();
+    let mut params = PsbtParams::default();
+    params
+        .add_planned_input(planned)
+        .add_recipients([(dest, Amount::from_sat(10_000))])
+        .manually_selected_only()
+        .fee_rate(FeeRate::ZERO);
+
+    let err = wallet
+        .create_psbt(params)
+        .expect_err("planned input satisfaction exceeds the standardness limit");
+    assert!(
+        matches!(
+            err,
+            CreatePsbtError::TxWeightLimitExceeded { weight, limit }
+                if weight > limit
+                    && limit == Weight::from_wu(u64::from(bitcoin::policy::MAX_STANDARD_TX_WEIGHT))
+        ),
+        "expected TxWeightLimitExceeded, got: {err:?}"
+    );
+}
