@@ -1505,10 +1505,10 @@ impl Wallet {
             }
         };
 
-        let satisfaction_by_outpoint: HashMap<OutPoint, Weight> = required_utxos
+        let satisfaction_by_outpoint: HashMap<OutPoint, InputSatisfaction> = required_utxos
             .iter()
             .chain(optional_utxos.iter())
-            .map(|weighted| (weighted.utxo.outpoint(), weighted.satisfaction_weight))
+            .map(|weighted| (weighted.utxo.outpoint(), self.input_satisfaction(weighted)))
             .collect();
 
         // Get drain script.
@@ -1606,15 +1606,15 @@ impl Wallet {
         params.ordering.sort_tx_with_aux_rand(&mut tx, rng);
 
         // Reject transactions that would exceed the standardness weight limit once signed.
-        // `tx.weight()` is the unsigned weight (empty witnesses); add each input's satisfaction
-        // weight so we compare against the same limit mempools enforce on the final tx.
-        let satisfaction_weights = tx.input.iter().map(|txin| {
+        // `tx.weight()` is the unsigned weight (empty witnesses). Each input contributes the
+        // satisfaction weight tracked on its selection candidate, including foreign UTXOs.
+        let satisfactions = tx.input.iter().map(|txin| {
             satisfaction_by_outpoint
                 .get(&txin.previous_output)
                 .copied()
-                .unwrap_or_else(|| self.satisfaction_weight_for_outpoint(txin.previous_output))
+                .unwrap_or_else(|| self.satisfaction_for_outpoint(txin.previous_output))
         });
-        check_max_standard_tx_weight(&tx, satisfaction_weights)
+        check_max_standard_tx_weight(&tx, satisfactions)
             .map_err(|(weight, limit)| CreateTxError::TxWeightLimitExceeded { weight, limit })?;
 
         let psbt = self.complete_transaction(tx, coin_selection.selected, params)?;
@@ -2963,42 +2963,167 @@ impl Wallet {
             .collect()
     }
 
-    /// Satisfaction weight used to estimate the signed size of spending `outpoint`.
+    /// Satisfaction of a coin-selection candidate, including foreign UTXOs.
     ///
-    /// Local wallet UTXOs use the descriptor's [`max_weight_to_satisfy`]. Foreign or unknown
-    /// outpoints return [`Weight::ZERO`], which underestimates; callers that still have the
-    /// original [`WeightedUtxo`] should prefer that value.
+    /// Local inputs use the descriptor's [`max_weight_to_satisfy`]. Foreign inputs use the weight
+    /// supplied with the UTXO. Segwit (native or nested) is recorded separately so the standardness
+    /// check can apply BIP 141 witness overhead.
     ///
     /// [`max_weight_to_satisfy`]: miniscript::Descriptor::max_weight_to_satisfy
-    fn satisfaction_weight_for_outpoint(&self, outpoint: OutPoint) -> Weight {
-        self.get_utxo(outpoint)
-            .and_then(|utxo| {
-                self.public_descriptor(utxo.keychain)
-                    .max_weight_to_satisfy()
-                    .ok()
-            })
-            .unwrap_or(Weight::ZERO)
+    fn input_satisfaction(&self, weighted: &WeightedUtxo) -> InputSatisfaction {
+        let segwit = match &weighted.utxo {
+            Utxo::Local(local) => self.descriptor_spends_with_witness(local.keychain),
+            Utxo::Foreign { psbt_input, .. } => spends_with_witness(
+                weighted.utxo.txout().script_pubkey.as_script(),
+                Some(psbt_input),
+            ),
+        };
+        InputSatisfaction {
+            weight: weighted.satisfaction_weight,
+            segwit,
+        }
     }
+
+    /// Fallback satisfaction when an outpoint was not part of coin selection.
+    ///
+    /// Local wallet UTXOs use the descriptor's [`max_weight_to_satisfy`]. Unknown outpoints
+    /// contribute nothing.
+    ///
+    /// [`max_weight_to_satisfy`]: miniscript::Descriptor::max_weight_to_satisfy
+    fn satisfaction_for_outpoint(&self, outpoint: OutPoint) -> InputSatisfaction {
+        let Some(utxo) = self.get_utxo(outpoint) else {
+            return InputSatisfaction {
+                weight: Weight::ZERO,
+                segwit: false,
+            };
+        };
+        let weight = self
+            .public_descriptor(utxo.keychain)
+            .max_weight_to_satisfy()
+            .unwrap_or(Weight::ZERO);
+        InputSatisfaction {
+            weight,
+            segwit: self.descriptor_spends_with_witness(utxo.keychain),
+        }
+    }
+
+    /// Whether spends of this keychain serialize a witness (native or nested segwit, or taproot).
+    fn descriptor_spends_with_witness(&self, keychain: KeychainKind) -> bool {
+        let desc = self.public_descriptor(keychain);
+        desc.is_witness() || desc.is_taproot()
+    }
+}
+
+/// Extra weight of satisfying one input, and whether that satisfaction is a witness.
+///
+/// `weight` is the miniscript [`max_weight_to_satisfy`] delta: the difference between
+/// `TxIn::default().segwit_weight()` and the satisfied input. That delta does not include the
+/// 1-WU empty witness stack length already assumed by `segwit_weight`.
+///
+/// [`max_weight_to_satisfy`]: miniscript::Descriptor::max_weight_to_satisfy
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct InputSatisfaction {
+    weight: Weight,
+    /// `true` when satisfying this input serializes a witness (native segwit, nested segwit, or
+    /// taproot). Pure legacy scriptSig satisfaction is `false`.
+    segwit: bool,
+}
+
+/// Whether `script_pubkey` (or the PSBT metadata spending it) puts satisfaction in a witness.
+///
+/// Native segwit and taproot are witness programs. Nested segwit is a P2SH script pubkey, so it
+/// is recognized from the PSBT input: a witness UTXO, witness script, final witness, or a redeem
+/// script that is itself a witness program.
+fn spends_with_witness(script_pubkey: &bitcoin::Script, psbt_input: Option<&psbt::Input>) -> bool {
+    if script_pubkey.witness_version().is_some() {
+        return true;
+    }
+    let Some(psbt_input) = psbt_input else {
+        return false;
+    };
+    if psbt_input.witness_utxo.is_some()
+        || psbt_input.final_script_witness.is_some()
+        || psbt_input.witness_script.is_some()
+    {
+        return true;
+    }
+    psbt_input
+        .redeem_script
+        .as_ref()
+        .is_some_and(|redeem| redeem.witness_version().is_some())
+}
+
+/// [`bdk_tx::Input`] satisfaction, using the weight already tracked on the selected input.
+///
+/// Planned inputs created from a PSBT do not report [`Input::is_segwit`] unless
+/// `final_script_witness` is set, so witness-ness also comes from the prevout and PSBT metadata.
+#[cfg(all(bdk_wallet_unstable, feature = "bdk-tx"))]
+fn selection_input_satisfaction(input: &Input) -> InputSatisfaction {
+    let segwit = if input.plan().is_some() {
+        input.is_segwit()
+    } else {
+        spends_with_witness(
+            input.prev_txout().script_pubkey.as_script(),
+            input.psbt_input(),
+        )
+    };
+    InputSatisfaction {
+        weight: Weight::from_wu(input.satisfaction_weight()),
+        segwit,
+    }
+}
+
+/// Signed weight of an unsigned transaction.
+///
+/// `tx.weight()` is the legacy serialization (empty witnesses, no BIP 141 marker). Satisfaction
+/// weights are miniscript deltas from `TxIn::default().segwit_weight()`.
+///
+/// * Pure legacy (no witness satisfaction): overhead is 0. The delta already accounts for the
+///   scriptSig.
+/// * Any witness satisfaction: overhead is 2 WU (marker and flag) plus 1 WU per input. BIP 141
+///   writes a witness stack length for every input, and the miniscript delta assumed that byte
+///   was already present in `segwit_weight`.
+///
+/// Returns [`None`] when the sum overflows `u64`.
+fn estimated_signed_weight(
+    tx: &Transaction,
+    satisfactions: impl IntoIterator<Item = InputSatisfaction>,
+) -> Option<Weight> {
+    let (satisfaction, any_segwit) =
+        satisfactions
+            .into_iter()
+            .try_fold((Weight::ZERO, false), |(acc, any_segwit), sat| {
+                acc.checked_add(sat.weight)
+                    .map(|sum| (sum, any_segwit || sat.segwit))
+            })?;
+
+    let witness_overhead = if any_segwit {
+        // One stack-length byte per input, plus the 2-byte marker/flag.
+        // `usize` fits in `u64` on every supported target.
+        let n_inputs = tx.input.len() as u64;
+        Weight::from_wu(2).checked_add(Weight::from_wu(n_inputs))?
+    } else {
+        Weight::ZERO
+    };
+
+    tx.weight()
+        .checked_add(satisfaction)?
+        .checked_add(witness_overhead)
 }
 
 /// Estimate the signed weight of an assembled unsigned transaction and reject it when it
 /// exceeds [`bitcoin::policy::MAX_STANDARD_TX_WEIGHT`].
 ///
-/// `tx` is unsigned (empty witnesses). `satisfaction_weights` are the additional scriptSig /
-/// witness weights for each input. Empty-witness transactions serialize without the 2-WU
-/// segwit marker/flag; that is added once any satisfaction weight is present.
+/// On overflow the estimated weight is reported as [`Weight::MAX`], which is above the limit, so
+/// callers surface [`CreateTxError::TxWeightLimitExceeded`] instead of panicking or wrapping.
 fn check_max_standard_tx_weight(
     tx: &Transaction,
-    satisfaction_weights: impl IntoIterator<Item = Weight>,
+    satisfactions: impl IntoIterator<Item = InputSatisfaction>,
 ) -> Result<(), (Weight, Weight)> {
-    let satisfaction: Weight = satisfaction_weights.into_iter().sum();
-    let segwit_marker = if satisfaction > Weight::ZERO {
-        Weight::from_wu(2)
-    } else {
-        Weight::ZERO
-    };
-    let weight = tx.weight() + satisfaction + segwit_marker;
     let limit = Weight::from_wu(u64::from(bitcoin::policy::MAX_STANDARD_TX_WEIGHT));
+    let Some(weight) = estimated_signed_weight(tx, satisfactions) else {
+        return Err((Weight::MAX, limit));
+    };
     if weight > limit {
         Err((weight, limit))
     } else {
@@ -3485,12 +3610,10 @@ impl Wallet {
             )
             .map_err(CreatePsbtError::Psbt)?;
 
-        let satisfaction_weights = psbt
-            .unsigned_tx
-            .input
-            .iter()
-            .map(|txin| self.satisfaction_weight_for_outpoint(txin.previous_output));
-        check_max_standard_tx_weight(&psbt.unsigned_tx, satisfaction_weights)
+        // Planned and foreign inputs are not in the wallet UTXO set, so their satisfaction
+        // weights live on the selection candidates rather than on a local descriptor.
+        let satisfactions = selection.inputs().iter().map(selection_input_satisfaction);
+        check_max_standard_tx_weight(&psbt.unsigned_tx, satisfactions)
             .map_err(|(weight, limit)| CreatePsbtError::TxWeightLimitExceeded { weight, limit })?;
 
         // Add global xpubs.
@@ -4272,5 +4395,87 @@ mod test {
         assert!(deprecated_finalized);
         assert_eq!(deprecated_finalized, signers_finalized);
         assert_eq!(deprecated_psbt, signers_psbt);
+    }
+
+    fn p2pkh_script() -> ScriptBuf {
+        use bitcoin::hashes::Hash;
+        ScriptBuf::new_p2pkh(&bitcoin::PubkeyHash::all_zeros())
+    }
+
+    fn p2wpkh_script() -> ScriptBuf {
+        use bitcoin::hashes::Hash;
+        ScriptBuf::new_p2wpkh(&bitcoin::WPubkeyHash::all_zeros())
+    }
+
+    /// Unsigned tx: `n_inputs` empty inputs and one output. Witnesses are empty, so
+    /// [`Transaction::weight`] is the legacy serialization.
+    fn unsigned_tx(n_inputs: usize, output_script: ScriptBuf) -> Transaction {
+        Transaction {
+            version: transaction::Version::TWO,
+            lock_time: absolute::LockTime::ZERO,
+            input: (0..n_inputs)
+                .map(|_| bitcoin::TxIn {
+                    previous_output: OutPoint::null(),
+                    script_sig: ScriptBuf::new(),
+                    sequence: Sequence::MAX,
+                    witness: Witness::new(),
+                })
+                .collect(),
+            output: vec![TxOut {
+                value: Amount::from_sat(50_000),
+                script_pubkey: output_script,
+            }],
+        }
+    }
+
+    fn sat(weight: u64, segwit: bool) -> InputSatisfaction {
+        InputSatisfaction {
+            weight: Weight::from_wu(weight),
+            segwit,
+        }
+    }
+
+    #[test]
+    fn signed_weight_matches_bip141_overhead() {
+        // Review table: pure legacy must not add the segwit marker. P2PKH satisfaction is the
+        // scriptSig delta (428 WU); actual signed weight is unsigned + 428.
+        let legacy = unsigned_tx(1, p2pkh_script());
+        assert_eq!(legacy.weight(), Weight::from_wu(340));
+        assert_eq!(
+            estimated_signed_weight(&legacy, [sat(428, false)]).unwrap(),
+            Weight::from_wu(768)
+        );
+
+        // Mixed: 1 P2WPKH (107 WU) + 2 P2PKH (428 WU). Overhead is 2 + K, K = 3.
+        let mixed = unsigned_tx(3, p2wpkh_script());
+        assert_eq!(mixed.weight(), Weight::from_wu(656));
+        assert_eq!(
+            estimated_signed_weight(&mixed, [sat(107, true), sat(428, false), sat(428, false)])
+                .unwrap(),
+            Weight::from_wu(1_624)
+        );
+
+        // Pure P2WPKH, K = 100. Overhead is 2 + 100; satisfaction is 107 WU each.
+        let segwit = unsigned_tx(100, p2wpkh_script());
+        assert_eq!(segwit.weight(), Weight::from_wu(16_564));
+        let satisfactions = (0..100).map(|_| sat(107, true));
+        assert_eq!(
+            estimated_signed_weight(&segwit, satisfactions).unwrap(),
+            Weight::from_wu(27_366)
+        );
+    }
+
+    #[test]
+    fn signed_weight_overflow_is_tx_weight_limit_exceeded() {
+        let tx = unsigned_tx(1, p2wpkh_script());
+        let limit = Weight::from_wu(u64::from(bitcoin::policy::MAX_STANDARD_TX_WEIGHT));
+        // Summing the satisfaction itself overflows, before the base tx weight is added.
+        let overflow =
+            check_max_standard_tx_weight(&tx, [sat(u64::MAX - 10, false), sat(100, false)]);
+        assert_eq!(overflow, Err((Weight::MAX, limit)));
+
+        // A single astronomical satisfaction plus the unsigned tx weight overflows.
+        let astronomical = check_max_standard_tx_weight(&tx, [sat(u64::MAX - 200, true)]);
+        assert_eq!(astronomical, Err((Weight::MAX, limit)));
     }
 }
