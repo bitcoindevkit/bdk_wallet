@@ -3811,3 +3811,47 @@ fn test_create_tx_rejects_over_max_standard_tx_weight_foreign_satisfaction() {
                 && limit == Weight::from_wu(u64::from(bitcoin::policy::MAX_STANDARD_TX_WEIGHT))
     );
 }
+
+#[test]
+fn test_create_tx_rejects_astronomical_foreign_satisfaction_without_overflow() {
+    // A caller-supplied satisfaction near u64::MAX must not panic (debug) or wrap (release).
+    // Either failure mode used to skip TxWeightLimitExceeded.
+    let (mut wallet, _) = get_funded_wallet_wpkh();
+    let addr = wallet.next_unused_address(KeychainKind::External);
+
+    let foreign_prev_tx = Transaction {
+        version: transaction::Version::TWO,
+        lock_time: absolute::LockTime::ZERO,
+        input: vec![],
+        output: vec![TxOut {
+            value: Amount::from_sat(100_000),
+            script_pubkey: ScriptBuf::new_p2wpkh(&WPubkeyHash::all_zeros()),
+        }],
+    };
+    let outpoint = OutPoint {
+        txid: foreign_prev_tx.compute_txid(),
+        vout: 0,
+    };
+    let psbt_input = psbt::Input {
+        witness_utxo: Some(foreign_prev_tx.output[0].clone()),
+        non_witness_utxo: Some(foreign_prev_tx),
+        ..Default::default()
+    };
+
+    let mut builder = wallet.build_tx();
+    builder
+        .add_foreign_utxo(outpoint, psbt_input, Weight::from_wu(u64::MAX - 200))
+        .unwrap();
+    builder
+        .manually_selected_only()
+        .fee_absolute(Amount::from_sat(1000))
+        .drain_wallet()
+        .drain_to(addr.script_pubkey());
+
+    assert_matches!(
+        builder.finish(),
+        Err(CreateTxError::TxWeightLimitExceeded { weight, limit })
+            if weight > limit
+                && limit == Weight::from_wu(u64::from(bitcoin::policy::MAX_STANDARD_TX_WEIGHT))
+    );
+}
