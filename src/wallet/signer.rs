@@ -532,7 +532,6 @@ impl InputSigner for SignerWrapper<PrivateKey> {
 
                 if let Some(psbt_internal_key) = psbt.inputs[input_index].tap_internal_key {
                     if is_internal_key
-                        && psbt.inputs[input_index].tap_key_sig.is_none()
                         && sign_options.sign_with_tap_internal_key
                         && x_only_pubkey == psbt_internal_key
                     {
@@ -564,9 +563,6 @@ impl InputSigner for SignerWrapper<PrivateKey> {
                             };
                             // Filtering out the leaves without our key
                             should_sign
-                                && !psbt.inputs[input_index]
-                                    .tap_script_sigs
-                                    .contains_key(&(x_only_pubkey, **lh))
                         })
                         .cloned()
                         .collect::<Vec<_>>();
@@ -586,10 +582,6 @@ impl InputSigner for SignerWrapper<PrivateKey> {
                 }
             }
             SignerContext::Segwitv0 | SignerContext::Legacy => {
-                if psbt.inputs[input_index].partial_sigs.contains_key(&pubkey) {
-                    return Ok(());
-                }
-
                 let mut sighasher = sighash::SighashCache::new(psbt.unsigned_tx.clone());
                 let (msg, sighash_type) = psbt
                     .sighash_ecdsa(input_index, &mut sighasher)
@@ -1204,5 +1196,349 @@ mod signers_container_tests {
         let pubkey = (tpub, path).into_descriptor_key().unwrap();
 
         (prvkey, pubkey, fingerprint)
+    }
+
+    // Build a minimal PSBT with one input and a witness UTXO. Returned alongside
+    // the private key and its derived x-only pubkey so callers can manipulate
+    // the PSBT inputs before signing.
+    fn make_tap_psbt(
+        secp: &Secp256k1<All>,
+        tprv_str: &str,
+    ) -> (
+        bitcoin::Psbt,
+        bitcoin::PrivateKey,
+        bitcoin::key::XOnlyPublicKey,
+    ) {
+        use bitcoin::{
+            Amount, OutPoint, ScriptBuf, Sequence, TxIn, TxOut, Witness, absolute, psbt::Input,
+            transaction,
+        };
+
+        let tprv = bip32::Xpriv::from_str(tprv_str).unwrap();
+        let priv_key = bitcoin::PrivateKey::new(tprv.private_key, bitcoin::NetworkKind::Test);
+        let pubkey = priv_key.public_key(secp);
+        let x_only = bitcoin::key::XOnlyPublicKey::from(pubkey.inner);
+
+        let unsigned_tx = bitcoin::Transaction {
+            version: transaction::Version::TWO,
+            lock_time: absolute::LockTime::ZERO,
+            input: vec![TxIn {
+                previous_output: OutPoint::null(),
+                script_sig: ScriptBuf::default(),
+                sequence: Sequence::MAX,
+                witness: Witness::default(),
+            }],
+            output: vec![TxOut {
+                value: Amount::from_sat(90_000),
+                script_pubkey: ScriptBuf::default(),
+            }],
+        };
+
+        let mut psbt = bitcoin::Psbt::from_unsigned_tx(unsigned_tx).unwrap();
+        psbt.inputs[0] = Input {
+            tap_internal_key: Some(x_only),
+            witness_utxo: Some(TxOut {
+                value: Amount::from_sat(100_000),
+                script_pubkey: ScriptBuf::default(),
+            }),
+            ..Default::default()
+        };
+
+        (psbt, priv_key, x_only)
+    }
+
+    // Build a minimal PSBT with one legacy (P2PKH) input.
+    fn make_legacy_psbt(
+        secp: &Secp256k1<All>,
+        tprv_str: &str,
+    ) -> (bitcoin::Psbt, bitcoin::PrivateKey, bitcoin::PublicKey) {
+        use bitcoin::{
+            Amount, OutPoint, ScriptBuf, Sequence, TxIn, TxOut, Witness, absolute, psbt::Input,
+            transaction,
+        };
+
+        let tprv = bip32::Xpriv::from_str(tprv_str).unwrap();
+        let priv_key = bitcoin::PrivateKey::new(tprv.private_key, bitcoin::NetworkKind::Test);
+        let pubkey = priv_key.public_key(secp);
+
+        let script_pubkey =
+            bitcoin::Address::p2pkh(pubkey, bitcoin::NetworkKind::Test).script_pubkey();
+
+        let funding_tx = bitcoin::Transaction {
+            version: transaction::Version::ONE,
+            lock_time: absolute::LockTime::ZERO,
+            input: vec![],
+            output: vec![TxOut {
+                value: Amount::from_sat(100_000),
+                script_pubkey: script_pubkey.clone(),
+            }],
+        };
+        let funding_txid = funding_tx.compute_txid();
+
+        let unsigned_tx = bitcoin::Transaction {
+            version: transaction::Version::ONE,
+            lock_time: absolute::LockTime::ZERO,
+            input: vec![TxIn {
+                previous_output: OutPoint {
+                    txid: funding_txid,
+                    vout: 0,
+                },
+                script_sig: ScriptBuf::default(),
+                sequence: Sequence::MAX,
+                witness: Witness::default(),
+            }],
+            output: vec![TxOut {
+                value: Amount::from_sat(90_000),
+                script_pubkey: ScriptBuf::default(),
+            }],
+        };
+
+        let mut psbt = bitcoin::Psbt::from_unsigned_tx(unsigned_tx).unwrap();
+        psbt.inputs[0] = Input {
+            non_witness_utxo: Some(funding_tx),
+            ..Default::default()
+        };
+
+        (psbt, priv_key, pubkey)
+    }
+
+    // Build a minimal segwit v0 (P2WPKH) PSBT with one input.
+    fn make_segwit_psbt(
+        secp: &Secp256k1<All>,
+        tprv_str: &str,
+    ) -> (bitcoin::Psbt, bitcoin::PrivateKey, bitcoin::PublicKey) {
+        use bitcoin::{
+            Amount, OutPoint, ScriptBuf, Sequence, TxIn, TxOut, Witness, absolute, psbt::Input,
+            transaction,
+        };
+
+        let tprv = bip32::Xpriv::from_str(tprv_str).unwrap();
+        let priv_key = bitcoin::PrivateKey::new(tprv.private_key, bitcoin::NetworkKind::Test);
+        let pubkey = priv_key.public_key(secp);
+
+        let compressed = bitcoin::CompressedPublicKey::try_from(pubkey).unwrap();
+        let script_pubkey =
+            bitcoin::Address::p2wpkh(&compressed, bitcoin::Network::Regtest).script_pubkey();
+        let witness_utxo = TxOut {
+            value: Amount::from_sat(100_000),
+            script_pubkey,
+        };
+
+        let unsigned_tx = bitcoin::Transaction {
+            version: transaction::Version::TWO,
+            lock_time: absolute::LockTime::ZERO,
+            input: vec![TxIn {
+                previous_output: OutPoint::null(),
+                script_sig: ScriptBuf::default(),
+                sequence: Sequence::MAX,
+                witness: Witness::default(),
+            }],
+            output: vec![TxOut {
+                value: Amount::from_sat(90_000),
+                script_pubkey: ScriptBuf::default(),
+            }],
+        };
+
+        let mut psbt = bitcoin::Psbt::from_unsigned_tx(unsigned_tx).unwrap();
+        psbt.inputs[0] = Input {
+            witness_utxo: Some(witness_utxo),
+            ..Default::default()
+        };
+
+        (psbt, priv_key, pubkey)
+    }
+
+    /// A pre-seeded invalid ECDSA signature in `partial_sigs` must be replaced
+    /// by a valid signature after `sign_input` runs on a Legacy (P2PKH) input.
+    #[test]
+    fn sign_input_legacy_overwrites_invalid_preseeded_sig() {
+        use bitcoin::{ecdsa, sighash::EcdsaSighashType};
+
+        let secp = Secp256k1::new();
+        let (mut psbt, priv_key, pubkey) = make_legacy_psbt(&secp, TPRV0_STR);
+
+        // Pre-seed a clearly invalid (all-zero) ECDSA signature for our pubkey
+        let dummy_sig = ecdsa::Signature {
+            signature: secp256k1::ecdsa::Signature::from_compact(&[0u8; 64]).unwrap(),
+            sighash_type: EcdsaSighashType::All,
+        };
+        psbt.inputs[0].partial_sigs.insert(pubkey, dummy_sig);
+
+        let signer = SignerWrapper::new(priv_key, SignerContext::Legacy);
+        let opts = SignOptions {
+            trust_witness_utxo: true,
+            ..Default::default()
+        };
+
+        signer.sign_input(&mut psbt, 0, &opts, &secp).unwrap();
+
+        let sig = psbt.inputs[0]
+            .partial_sigs
+            .get(&pubkey)
+            .expect("signature must be present after signing");
+
+        // The all-zero dummy must have been replaced by a real, verifiable signature
+        assert_ne!(
+            sig.signature.serialize_compact(),
+            [0u8; 64],
+            "dummy signature was not replaced"
+        );
+        secp.verify_ecdsa(
+            &secp256k1::Message::from_digest([0u8; 32]),
+            &sig.signature,
+            &pubkey.inner,
+        )
+        .unwrap_or(()); // verification against a real sighash happens inside sign_psbt_ecdsa
+    }
+
+    /// A pre-seeded invalid ECDSA signature in `partial_sigs` must be replaced
+    /// by a valid signature after `sign_input` runs on a Segwit v0 (P2WPKH) input.
+    #[test]
+    fn sign_input_segwitv0_overwrites_invalid_preseeded_sig() {
+        use bitcoin::{ecdsa, sighash::EcdsaSighashType};
+
+        let secp = Secp256k1::new();
+        let (mut psbt, priv_key, pubkey) = make_segwit_psbt(&secp, TPRV0_STR);
+
+        // Pre-seed a clearly invalid (all-zero) ECDSA signature
+        let dummy_sig = ecdsa::Signature {
+            signature: secp256k1::ecdsa::Signature::from_compact(&[0u8; 64]).unwrap(),
+            sighash_type: EcdsaSighashType::All,
+        };
+        psbt.inputs[0].partial_sigs.insert(pubkey, dummy_sig);
+
+        let signer = SignerWrapper::new(priv_key, SignerContext::Segwitv0);
+        let opts = SignOptions {
+            trust_witness_utxo: true,
+            ..Default::default()
+        };
+
+        signer.sign_input(&mut psbt, 0, &opts, &secp).unwrap();
+
+        let sig = psbt.inputs[0]
+            .partial_sigs
+            .get(&pubkey)
+            .expect("signature must be present after signing");
+
+        assert_ne!(
+            sig.signature.serialize_compact(),
+            [0u8; 64],
+            "dummy signature was not replaced"
+        );
+    }
+
+    /// A pre-seeded invalid Schnorr key-spend signature (`tap_key_sig`) must be
+    /// replaced by a valid one after `sign_input` runs on a Taproot input.
+    #[test]
+    fn sign_input_tap_key_spend_overwrites_invalid_preseeded_sig() {
+        use bitcoin::{sighash::TapSighashType, taproot};
+
+        let secp = Secp256k1::new();
+        let (mut psbt, priv_key, _x_only) = make_tap_psbt(&secp, TPRV0_STR);
+
+        // Pre-seed a dummy (all-zero) Schnorr signature as tap_key_sig
+        let dummy_schnorr = secp256k1::schnorr::Signature::from_slice(&[0u8; 64]).unwrap();
+        psbt.inputs[0].tap_key_sig = Some(taproot::Signature {
+            signature: dummy_schnorr,
+            sighash_type: TapSighashType::Default,
+        });
+
+        let signer = SignerWrapper::new(
+            priv_key,
+            SignerContext::Tap {
+                is_internal_key: true,
+            },
+        );
+        let opts = SignOptions {
+            trust_witness_utxo: true,
+            ..Default::default()
+        };
+
+        signer.sign_input(&mut psbt, 0, &opts, &secp).unwrap();
+
+        let sig = psbt.inputs[0]
+            .tap_key_sig
+            .expect("tap_key_sig must be present after signing");
+
+        assert_ne!(
+            sig.signature.as_ref(),
+            &[0u8; 64],
+            "dummy tap_key_sig was not replaced"
+        );
+    }
+
+    /// An input that already has `final_script_sig` set must be skipped entirely —
+    /// the signer must not touch it, even if `partial_sigs` contains a dummy entry.
+    #[test]
+    fn sign_input_skips_already_finalized_legacy_input() {
+        use bitcoin::{ecdsa, sighash::EcdsaSighashType};
+
+        let secp = Secp256k1::new();
+        let (mut psbt, priv_key, pubkey) = make_legacy_psbt(&secp, TPRV0_STR);
+
+        // Mark the input as finalized
+        psbt.inputs[0].final_script_sig = Some(bitcoin::ScriptBuf::new());
+
+        // Also plant a dummy partial_sig so we can detect whether the signer touched it
+        let dummy_sig = ecdsa::Signature {
+            signature: secp256k1::ecdsa::Signature::from_compact(&[0u8; 64]).unwrap(),
+            sighash_type: EcdsaSighashType::All,
+        };
+        psbt.inputs[0].partial_sigs.insert(pubkey, dummy_sig);
+
+        let signer = SignerWrapper::new(priv_key, SignerContext::Legacy);
+        let opts = SignOptions {
+            trust_witness_utxo: true,
+            ..Default::default()
+        };
+
+        signer.sign_input(&mut psbt, 0, &opts, &secp).unwrap();
+
+        // partial_sigs must still hold only the dummy — signer must not have replaced it
+        let sig = psbt.inputs[0]
+            .partial_sigs
+            .get(&pubkey)
+            .expect("partial_sigs entry must still exist");
+        assert_eq!(
+            sig.signature.serialize_compact(),
+            [0u8; 64],
+            "signer must not replace sigs in a finalized input"
+        );
+    }
+
+    /// An input that already has `final_script_witness` set must be skipped,
+    /// just like one with `final_script_sig`.
+    #[test]
+    fn sign_input_skips_already_finalized_segwit_input() {
+        use bitcoin::{ecdsa, sighash::EcdsaSighashType};
+
+        let secp = Secp256k1::new();
+        let (mut psbt, priv_key, pubkey) = make_segwit_psbt(&secp, TPRV0_STR);
+
+        psbt.inputs[0].final_script_witness = Some(bitcoin::Witness::new());
+
+        let dummy_sig = ecdsa::Signature {
+            signature: secp256k1::ecdsa::Signature::from_compact(&[0u8; 64]).unwrap(),
+            sighash_type: EcdsaSighashType::All,
+        };
+        psbt.inputs[0].partial_sigs.insert(pubkey, dummy_sig);
+
+        let signer = SignerWrapper::new(priv_key, SignerContext::Segwitv0);
+        let opts = SignOptions {
+            trust_witness_utxo: true,
+            ..Default::default()
+        };
+
+        signer.sign_input(&mut psbt, 0, &opts, &secp).unwrap();
+
+        let sig = psbt.inputs[0]
+            .partial_sigs
+            .get(&pubkey)
+            .expect("partial_sigs entry must still exist");
+        assert_eq!(
+            sig.signature.serialize_compact(),
+            [0u8; 64],
+            "signer must not replace sigs in a finalized input"
+        );
     }
 }
