@@ -1599,6 +1599,7 @@ impl Wallet {
         // Sort inputs/outputs according to the chosen algorithm.
         params.ordering.sort_tx_with_aux_rand(&mut tx, rng);
 
+        let lock_utxos = params.lock_utxos;
         let psbt = self.complete_transaction(tx, coin_selection.selected, params)?;
 
         // Recording changes to the change keychain.
@@ -1608,6 +1609,12 @@ impl Wallet {
             {
                 self.stage.merge(index_changeset.into());
                 self.mark_used(keychain, index);
+            }
+        }
+
+        if lock_utxos {
+            for input in &psbt.unsigned_tx.input {
+                self.lock_outpoint(input.previous_output);
             }
         }
 
@@ -3334,6 +3341,12 @@ impl Wallet {
                 {
                     self.stage.merge(index_changeset.into());
                 }
+            }
+        }
+
+        if params.lock_utxos {
+            for input in &psbt.unsigned_tx.input {
+                self.lock_outpoint(input.previous_output);
             }
         }
 
