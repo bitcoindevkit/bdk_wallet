@@ -1913,11 +1913,23 @@ impl Wallet {
         // If the user hasn't explicitly opted-in, refuse to sign the transaction unless every input
         // is using `SIGHASH_ALL` or `SIGHASH_DEFAULT` for Taproot.
         if !sign_options.allow_all_sighashes
-            && !psbt.inputs.iter().all(|i| {
-                i.sighash_type.is_none()
-                    || i.sighash_type == Some(EcdsaSighashType::All.into())
-                    || i.sighash_type == Some(TapSighashType::All.into())
-                    || i.sighash_type == Some(TapSighashType::Default.into())
+            && !psbt.inputs.iter().all(|i| match i.sighash_type {
+                None => true,
+                Some(sighash_type) => {
+                    let is_taproot = i
+                        .witness_utxo
+                        .as_ref()
+                        .map(|utxo| utxo.script_pubkey.is_p2tr())
+                        .unwrap_or(false);
+                    if is_taproot {
+                        matches!(
+                            sighash_type.taproot_hash_ty(),
+                            Ok(TapSighashType::All) | Ok(TapSighashType::Default)
+                        )
+                    } else {
+                        matches!(sighash_type.ecdsa_hash_ty(), Ok(EcdsaSighashType::All))
+                    }
+                }
             })
         {
             return Err(SignerError::NonStandardSighash);
@@ -3961,9 +3973,11 @@ macro_rules! doctest_wallet {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::bitcoin::BlockHash;
+    use crate::bitcoin::hashes::Hash;
     use crate::miniscript::Error::Unexpected;
     use crate::test_utils::get_test_tr_single_sig_xprv_and_change_desc;
-    use crate::test_utils::insert_tx;
+    use crate::test_utils::{insert_anchor, insert_checkpoint, insert_tx};
 
     #[test]
     fn not_duplicated_utxos_across_optional_and_required() {
@@ -4203,5 +4217,145 @@ mod test {
         assert!(deprecated_finalized);
         assert_eq!(deprecated_finalized, signers_finalized);
         assert_eq!(deprecated_psbt, signers_psbt);
+    }
+
+    #[test]
+    fn sign_rejects_ecdsa_input_with_taproot_default_sighash() {
+        let descriptor = "wpkh(tprv8ZgxMBicQKsPdy6LMhUtFHAgpocR8GC6QmwMSFpZs7h6Eziw3SpThFfczTDh5rW2krkqffa11UpX3XkeTTB2FvzZKWXqPY54Y6Rq4AQ5R8L/84'/1'/0'/0/*)";
+        let change_descriptor = "wpkh(tprv8ZgxMBicQKsPdy6LMhUtFHAgpocR8GC6QmwMSFpZs7h6Eziw3SpThFfczTDh5rW2krkqffa11UpX3XkeTTB2FvzZKWXqPY54Y6Rq4AQ5R8L/84'/1'/0'/1/*)";
+
+        let mut wallet = Wallet::create(descriptor, change_descriptor)
+            .network(Network::Regtest)
+            .create_wallet_no_persist()
+            .unwrap();
+
+        // Fund the wallet with a confirmed UTXO.
+        let address = wallet.peek_address(KeychainKind::External, 0).address;
+        let funding_tx = Transaction {
+            version: transaction::Version::TWO,
+            lock_time: absolute::LockTime::ZERO,
+            input: vec![],
+            output: vec![TxOut {
+                value: Amount::from_sat(500_000),
+                script_pubkey: address.script_pubkey(),
+            }],
+        };
+        let txid = funding_tx.compute_txid();
+        let block_id = BlockId {
+            height: 500,
+            hash: BlockHash::all_zeros(),
+        };
+        insert_checkpoint(&mut wallet, block_id);
+        insert_checkpoint(
+            &mut wallet,
+            BlockId {
+                height: 1_000,
+                hash: BlockHash::all_zeros(),
+            },
+        );
+        insert_tx(&mut wallet, funding_tx);
+        let anchor = ConfirmationBlockTime {
+            confirmation_time: 50_000,
+            block_id,
+        };
+        insert_anchor(&mut wallet, txid, anchor);
+
+        // Build a normal spend.
+        let to_address = wallet.peek_address(KeychainKind::External, 1).address;
+        let mut psbt = {
+            let mut builder = wallet.build_tx();
+            builder.add_recipient(to_address.script_pubkey(), Amount::from_sat(50_000));
+            builder.finish().unwrap()
+        };
+
+        // Corrupt input 0's sighash_type: this is a wpkh (Segwitv0/ECDSA) input, but we
+        // set its sighash type to TapSighashType::Default's underlying byte value, which
+        // should never be accepted on a non-Taproot input.
+        psbt.inputs[0].sighash_type = Some(TapSighashType::Default.into());
+
+        let sign_options = SignOptions {
+            allow_all_sighashes: false,
+            ..Default::default()
+        };
+
+        #[allow(deprecated)]
+        let result = wallet.sign_with_signers(
+            &mut psbt,
+            &[wallet.signers.as_ref(), wallet.change_signers.as_ref()],
+            sign_options,
+        );
+
+        assert!(
+            matches!(result, Err(SignerError::NonStandardSighash)),
+            "expected Err(SignerError::NonStandardSighash) for an ECDSA input carrying a \
+             Taproot-only sighash type, got: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn sign_allows_taproot_input_with_default_sighash() {
+        let descriptor = "tr([73c5da0a/86'/0'/0']tprv8fMn4hSKPRC1oaCPqxDb1JWtgkpeiQvZhsr8W2xuy3GEMkzoArcAWTfJxYb6Wj8XNNDWEjfYKK4wGQXh3ZUXhDF2NcnsALpWTeSwarJt7Vc/0/*)";
+        let change_descriptor = "tr([73c5da0a/86'/0'/0']tprv8fMn4hSKPRC1oaCPqxDb1JWtgkpeiQvZhsr8W2xuy3GEMkzoArcAWTfJxYb6Wj8XNNDWEjfYKK4wGQXh3ZUXhDF2NcnsALpWTeSwarJt7Vc/1/*)";
+
+        let mut wallet = Wallet::create(descriptor, change_descriptor)
+            .network(Network::Regtest)
+            .create_wallet_no_persist()
+            .unwrap();
+
+        // Fund the wallet with a confirmed UTXO.
+        let address = wallet.peek_address(KeychainKind::External, 0).address;
+        let funding_tx = Transaction {
+            version: transaction::Version::TWO,
+            lock_time: absolute::LockTime::ZERO,
+            input: vec![],
+            output: vec![TxOut {
+                value: Amount::from_sat(500_000),
+                script_pubkey: address.script_pubkey(),
+            }],
+        };
+        let txid = funding_tx.compute_txid();
+        let block_id = BlockId {
+            height: 500,
+            hash: BlockHash::all_zeros(),
+        };
+        insert_checkpoint(&mut wallet, block_id);
+        insert_checkpoint(
+            &mut wallet,
+            BlockId {
+                height: 1_000,
+                hash: BlockHash::all_zeros(),
+            },
+        );
+        insert_tx(&mut wallet, funding_tx);
+        let anchor = ConfirmationBlockTime {
+            confirmation_time: 50_000,
+            block_id,
+        };
+        insert_anchor(&mut wallet, txid, anchor);
+
+        // Build a normal Taproot spend — untouched sighash_type, whatever the builder sets by
+        // default for a Taproot input (should already satisfy the guard).
+        let to_address = wallet.peek_address(KeychainKind::External, 1).address;
+        let mut psbt = {
+            let mut builder = wallet.build_tx();
+            builder.add_recipient(to_address.script_pubkey(), Amount::from_sat(50_000));
+            builder.finish().unwrap()
+        };
+
+        let sign_options = SignOptions {
+            allow_all_sighashes: false,
+            ..Default::default()
+        };
+
+        #[allow(deprecated)]
+        let finalized = wallet
+            .sign_with_signers(
+                &mut psbt,
+                &[wallet.signers.as_ref(), wallet.change_signers.as_ref()],
+                sign_options,
+            )
+            .expect("a standard Taproot spend should be accepted and signed");
+        assert!(finalized, "we should have signed and finalized all inputs");
     }
 }
