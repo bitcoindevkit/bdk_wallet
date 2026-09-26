@@ -252,7 +252,7 @@ impl fmt::Display for CreateTxError {
                 )
             }
             CreateTxError::FeeTooLow { required } => {
-                write!(f, "Fee to low: required {}", required.display_dynamic())
+                write!(f, "Fee too low: required {}", required.display_dynamic())
             }
             CreateTxError::FeeRateTooLow { required } => {
                 write!(
