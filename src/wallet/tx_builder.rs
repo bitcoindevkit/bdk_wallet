@@ -619,6 +619,46 @@ impl<'a, Cs> TxBuilder<'a, Cs> {
         self.exclude_below_confirmations(1)
     }
 
+    /// Avoid spending UTXOs that sit on an address the wallet has already spent from.
+    ///
+    /// When called, every currently-unspent UTXO whose address (script pubkey) the wallet has
+    /// previously spent from is added to the "unspendable" list (see [`TxBuilder::unspendable`]),
+    /// so automatic coin selection will not pick it. This improves privacy by thwarting *forced
+    /// address reuse*: once you spend from an address it becomes publicly linked to you, and an
+    /// adversary can then send coins to it hoping your wallet later merges them into a payment,
+    /// linking your UTXOs together.
+    ///
+    /// Only addresses the wallet has *spent from* are avoided. Detection uses the wallet's
+    /// canonical history ([`Wallet::list_output`]).
+    ///
+    /// Coins on an avoided address can still be spent by selecting them explicitly with
+    /// [`TxBuilder::add_utxo`], as manual selection overrides the unspendable list.
+    ///
+    /// This inspects the wallet's current state, so call it after syncing. Chaining it with other
+    /// filtering methods yields the union of all excluded outpoints.
+    ///
+    /// This mirrors Bitcoin Core's `avoid_reuse` wallet flag (`bitcoin/bitcoin#13756`).
+    pub fn avoid_reuse(&mut self) -> &mut Self {
+        let outputs = self.wallet.list_output().collect::<Vec<_>>();
+
+        // Addresses the wallet has already spent from, keyed by `(keychain, derivation index)`
+        // which maps 1:1 to a script pubkey.
+        let spent_from: HashSet<(KeychainKind, u32)> = outputs
+            .iter()
+            .filter(|output| output.is_spent)
+            .map(|output| (output.keychain, output.derivation_index))
+            .collect();
+
+        // Exclude unspent outputs from any of those addresses.
+        for output in &outputs {
+            if !output.is_spent && spent_from.contains(&(output.keychain, output.derivation_index))
+            {
+                self.params.unspendable.insert(output.outpoint);
+            }
+        }
+        self
+    }
+
     /// Sign with a specific sig hash
     ///
     /// **Use this option very carefully**
@@ -1027,9 +1067,11 @@ mod test {
     }
 
     use crate::test_utils::*;
-    use bitcoin::TxOut;
+    use alloc::string::ToString;
     use bitcoin::consensus::deserialize;
     use bitcoin::hex::FromHex;
+    use bitcoin::{Address, Network, TxOut};
+    use core::str::FromStr;
 
     use super::*;
     #[test]
@@ -1569,5 +1611,185 @@ mod test {
         assert!(
             matches!(&builder.params.utxos[0].utxo, Utxo::Local(output) if output.outpoint == outpoint)
         );
+    }
+
+    // An address that received more than once and never spent from must NOT be excluded.
+    #[test]
+    fn test_avoid_reuse_keeps_never_spent_addresses() {
+        let (desc, change_desc) = get_test_wpkh_and_change_desc();
+        let mut wallet = Wallet::create(desc.to_string(), change_desc.to_string())
+            .network(Network::Regtest)
+            .create_wallet_no_persist()
+            .unwrap();
+
+        let addr = wallet.reveal_next_address(KeychainKind::External).address;
+        let first_op = receive_output_to_address(
+            &mut wallet,
+            addr.clone(),
+            Amount::from_sat(100_000),
+            ReceiveTo::Mempool(0),
+        );
+        let second_op = receive_output_to_address(
+            &mut wallet,
+            addr,
+            Amount::from_sat(546),
+            ReceiveTo::Mempool(0),
+        );
+
+        let recipient = Address::from_str("bcrt1q3qtze4ys45tgdvguj66zrk4fu6hq3a3v9pfly5")
+            .unwrap()
+            .assume_checked();
+
+        // Since the address was never spent from, both received outputs remain selectable.
+        let mut builder = wallet.build_tx();
+        builder
+            .drain_wallet()
+            .drain_to(recipient.script_pubkey())
+            .avoid_reuse();
+        let psbt = builder.finish().unwrap();
+        let selected: Vec<OutPoint> = psbt
+            .unsigned_tx
+            .input
+            .iter()
+            .map(|i| i.previous_output)
+            .collect();
+        assert!(selected.contains(&first_op));
+        assert!(selected.contains(&second_op));
+    }
+
+    // Once the wallet spends from an address, coins later sent to it must be excluded from
+    // automatic selection (but still spendable when selected explicitly).
+    #[test]
+    fn test_avoid_reuse_excludes_spent_from_address() {
+        let (desc, change_desc) = get_test_wpkh_and_change_desc();
+        let mut wallet = Wallet::create(desc.to_string(), change_desc.to_string())
+            .network(Network::Regtest)
+            .create_wallet_no_persist()
+            .unwrap();
+
+        let spent_addr = wallet.reveal_next_address(KeychainKind::External).address;
+        let fresh_addr = wallet.reveal_next_address(KeychainKind::External).address;
+        let recipient = Address::from_str("bcrt1q3qtze4ys45tgdvguj66zrk4fu6hq3a3v9pfly5")
+            .unwrap()
+            .assume_checked();
+
+        // Receive on `spent_addr`, then spend that output so the address becomes spent-from.
+        let first_op = receive_output_to_address(
+            &mut wallet,
+            spent_addr.clone(),
+            Amount::from_sat(50_000),
+            ReceiveTo::Mempool(0),
+        );
+        let spend_tx = Transaction {
+            input: vec![TxIn {
+                previous_output: first_op,
+                ..Default::default()
+            }],
+            output: vec![TxOut {
+                value: Amount::from_sat(40_000),
+                script_pubkey: recipient.script_pubkey(),
+            }],
+            ..new_tx(0)
+        };
+        insert_tx(&mut wallet, spend_tx);
+
+        // Attacker sends to the now-used address; a fresh address also receives coins.
+        let peppered_op = receive_output_to_address(
+            &mut wallet,
+            spent_addr,
+            Amount::from_sat(30_000),
+            ReceiveTo::Mempool(0),
+        );
+        let fresh_op = receive_output_to_address(
+            &mut wallet,
+            fresh_addr,
+            Amount::from_sat(50_000),
+            ReceiveTo::Mempool(0),
+        );
+
+        // avoid_reuse: selection uses the fresh coin, never the peppered one.
+        let mut builder = wallet.build_tx();
+        builder
+            .add_recipient(recipient.script_pubkey(), Amount::from_sat(20_000))
+            .avoid_reuse();
+        let psbt = builder.finish().unwrap();
+        let selected: Vec<OutPoint> = psbt
+            .unsigned_tx
+            .input
+            .iter()
+            .map(|i| i.previous_output)
+            .collect();
+        assert!(selected.contains(&fresh_op));
+        assert!(!selected.contains(&peppered_op));
+
+        // Needing more than the fresh coin holds fails, since the peppered coin is off-limits.
+        let mut builder = wallet.build_tx();
+        builder
+            .add_recipient(recipient.script_pubkey(), Amount::from_sat(60_000))
+            .avoid_reuse();
+        assert!(matches!(
+            builder.finish(),
+            Err(CreateTxError::CoinSelection(_))
+        ));
+
+        // can still be spent when selected explicitly.
+        let mut builder = wallet.build_tx();
+        builder.add_recipient(recipient.script_pubkey(), Amount::from_sat(60_000));
+        builder.avoid_reuse();
+        builder.add_utxo(peppered_op).unwrap();
+        assert!(builder.finish().is_ok());
+    }
+
+    // A fee-bumped incoming payment must not be mistaken for address reuse.
+    #[test]
+    fn test_avoid_reuse_ignores_replaced_payments() {
+        let (desc, change_desc) = get_test_wpkh_and_change_desc();
+        let mut wallet = Wallet::create(desc.to_string(), change_desc.to_string())
+            .network(Network::Regtest)
+            .create_wallet_no_persist()
+            .unwrap();
+
+        let addr = wallet.reveal_next_address(KeychainKind::External).address;
+
+        // Both versions of the payment spend the same parent outpoint, so they conflict (RBF).
+        let shared_input = OutPoint {
+            txid: new_tx(0).compute_txid(),
+            vout: 0,
+        };
+        let payment = |sequence: Sequence| Transaction {
+            input: vec![TxIn {
+                previous_output: shared_input,
+                sequence,
+                ..Default::default()
+            }],
+            output: vec![TxOut {
+                value: Amount::from_sat(50_000),
+                script_pubkey: addr.script_pubkey(),
+            }],
+            ..new_tx(0)
+        };
+
+        let original = payment(Sequence::ENABLE_RBF_NO_LOCKTIME);
+        let replacement = payment(Sequence(0xFFFF_FFFE));
+        let original_txid = original.compute_txid();
+        let replacement_txid = replacement.compute_txid();
+
+        insert_tx(&mut wallet, original);
+        insert_seen_at(&mut wallet, original_txid, 1_000);
+        insert_tx(&mut wallet, replacement);
+        insert_seen_at(&mut wallet, replacement_txid, 2_000);
+
+        // Canonically there is a single output on the address, never spent from.
+        assert_eq!(wallet.list_unspent().count(), 1);
+
+        let recipient = Address::from_str("bcrt1q3qtze4ys45tgdvguj66zrk4fu6hq3a3v9pfly5")
+            .unwrap()
+            .assume_checked();
+        let mut builder = wallet.build_tx();
+        builder
+            .add_recipient(recipient.script_pubkey(), Amount::from_sat(10_000))
+            .avoid_reuse();
+        // The replaced payment is not mistaken for reuse; the coin stays spendable.
+        assert!(builder.finish().is_ok());
     }
 }
