@@ -21,7 +21,7 @@ use alloc::{
 };
 #[cfg(all(bdk_wallet_unstable, feature = "bdk-tx"))]
 use bdk_tx::bdk_coin_select;
-use bitcoin::{Amount, BlockHash, Network, OutPoint, Sequence, Txid, absolute, psbt};
+use bitcoin::{Amount, BlockHash, Network, OutPoint, Sequence, Txid, Weight, absolute, psbt};
 use core::fmt;
 
 /// The error type when loading a [`Wallet`] from a [`ChangeSet`].
@@ -199,6 +199,17 @@ pub enum CreateTxError {
     NoUtxosSelected,
     /// Output created is under the dust limit, 546 satoshis
     OutputBelowDustLimit(usize),
+    /// Assembled transaction exceeds [`bitcoin::policy::MAX_STANDARD_TX_WEIGHT`].
+    ///
+    /// The reported `weight` is the estimated signed weight (unsigned transaction plus each
+    /// input's satisfaction weight). Standard mempools reject transactions above this limit,
+    /// so building them is treated as an error.
+    TxWeightLimitExceeded {
+        /// Estimated signed transaction weight.
+        weight: Weight,
+        /// Standardness weight limit that was exceeded.
+        limit: Weight,
+    },
     /// There was an error with coin selection
     CoinSelection(coin_selection::InsufficientFunds),
     /// Cannot build a tx without recipients
@@ -268,6 +279,12 @@ impl fmt::Display for CreateTxError {
             }
             CreateTxError::OutputBelowDustLimit(limit) => {
                 write!(f, "Output below the dust limit: {limit}")
+            }
+            CreateTxError::TxWeightLimitExceeded { weight, limit } => {
+                write!(
+                    f,
+                    "Transaction weight {weight} exceeds the standardness limit of {limit}"
+                )
             }
             CreateTxError::CoinSelection(e) => e.fmt(f),
             CreateTxError::NoRecipients => {
@@ -387,6 +404,17 @@ pub enum CreatePsbtError {
     /// After coin selection, all outputs fell below the dust threshold and were
     /// dropped to fees.
     AllOutputsBelowDust,
+    /// Assembled transaction exceeds [`bitcoin::policy::MAX_STANDARD_TX_WEIGHT`].
+    ///
+    /// The reported `weight` is the estimated signed weight (unsigned transaction plus each
+    /// input's satisfaction weight). Standard mempools reject transactions above this limit,
+    /// so building them is treated as an error.
+    TxWeightLimitExceeded {
+        /// Estimated signed transaction weight.
+        weight: Weight,
+        /// Standardness weight limit that was exceeded.
+        limit: Weight,
+    },
     /// Non-sufficient funds.
     InsufficientFunds(bdk_coin_select::InsufficientFunds),
     /// In order to use the [`add_global_xpubs`] option, every extended key in the descriptor must
@@ -414,6 +442,12 @@ impl fmt::Display for CreatePsbtError {
             Self::InsufficientFunds(e) => write!(f, "{e}"),
             Self::NoRecipients => write!(f, "no output destinations were configured"),
             Self::AllOutputsBelowDust => write!(f, "all outputs are below the dust threshold",),
+            Self::TxWeightLimitExceeded { weight, limit } => {
+                write!(
+                    f,
+                    "transaction weight {weight} exceeds the standardness limit of {limit}"
+                )
+            }
             Self::MissingKeyOrigin(e) => write!(f, "missing key origin: {e}"),
             Self::Plan(op) => write!(f, "failed to create a plan for txout with outpoint {op}"),
             Self::Psbt(e) => write!(f, "{e}"),
