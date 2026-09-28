@@ -106,7 +106,7 @@ use bitcoin::{key::TapTweak, key::XOnlyPublicKey, secp256k1};
 
 use miniscript::descriptor::{
     Descriptor, DescriptorMultiXKey, DescriptorPublicKey, DescriptorSecretKey, DescriptorXKey,
-    InnerXKey, KeyMap, SinglePriv, SinglePubKey,
+    InnerXKey, KeyMap, SinglePriv, SinglePubKey, Wildcard,
 };
 use miniscript::{SigType, ToPublicKey};
 
@@ -356,7 +356,20 @@ impl InputSigner for SignerWrapper<DescriptorXKey<Xpriv>> {
             .map(|(pk, keysource)| (SinglePubKey::FullKey(PublicKey::new(*pk)), keysource))
             .chain(tap_key_origins)
             .find_map(|(pk, keysource)| {
-                if self.matches(keysource, secp).is_some() {
+                self.matches(keysource, secp)?;
+                // `matches()` ignores the wildcard's final path step, so verify its
+                // hardness against `self.wildcard` separately.
+                let last_step = keysource.1.into_iter().last();
+                let wildcard_step_is_valid = match self.wildcard {
+                    Wildcard::None => true,
+                    Wildcard::Unhardened => {
+                        matches!(last_step, Some(step) if !step.is_hardened())
+                    }
+                    Wildcard::Hardened => {
+                        matches!(last_step, Some(step) if step.is_hardened())
+                    }
+                };
+                if wildcard_step_is_valid {
                     Some((pk, keysource.1.clone()))
                 } else {
                     None
