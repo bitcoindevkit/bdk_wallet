@@ -3813,6 +3813,77 @@ fn test_create_tx_rejects_over_max_standard_tx_weight_foreign_satisfaction() {
 }
 
 #[test]
+fn test_create_tx_legacy_foreign_both_utxo_fields_at_standardness_limit() {
+    // Legacy P2PKH foreign input with both non_witness_utxo and witness_utxo. The spend is
+    // legacy; witness_utxo must not add the BIP 141 marker, flag, and per-input stack length.
+    // That misclassification estimates a 400_000 WU transaction as 400_003 WU and rejects it.
+    let limit = Weight::from_wu(u64::from(bitcoin::policy::MAX_STANDARD_TX_WEIGHT));
+
+    let probe = finish_legacy_foreign_both_utxos(Weight::from_wu(428))
+        .expect("small legacy foreign satisfaction should build");
+    let unsigned = probe.unsigned_tx.weight();
+    let satisfaction = limit
+        .checked_sub(unsigned)
+        .expect("unsigned weight is under the standardness limit");
+    // Signed legacy weight is exactly the standardness limit. Classifying this input as segwit
+    // would add marker + flag + one stack-length byte (3 WU) and reject 400_003 WU.
+    assert_eq!(unsigned.checked_add(satisfaction).unwrap(), limit);
+
+    let psbt = finish_legacy_foreign_both_utxos(satisfaction).expect(
+        "legacy spend whose signed weight is exactly MAX_STANDARD_TX_WEIGHT must be accepted",
+    );
+    assert_eq!(psbt.unsigned_tx.input.len(), 1);
+    assert!(psbt.unsigned_tx.input[0].witness.is_empty());
+    assert!(psbt.inputs[0].witness_utxo.is_some());
+    assert!(psbt.inputs[0].non_witness_utxo.is_some());
+    assert!(
+        psbt.inputs[0]
+            .witness_utxo
+            .as_ref()
+            .unwrap()
+            .script_pubkey
+            .is_p2pkh()
+    );
+    assert_eq!(psbt.unsigned_tx.weight() + satisfaction, limit);
+}
+
+/// Build a one-input drain that spends a legacy P2PKH foreign UTXO carrying both UTXO fields.
+fn finish_legacy_foreign_both_utxos(satisfaction: Weight) -> Result<bitcoin::Psbt, CreateTxError> {
+    let (mut wallet, _) = get_funded_wallet_wpkh();
+    let addr = wallet.next_unused_address(KeychainKind::External);
+
+    let prev_tx = Transaction {
+        version: transaction::Version::TWO,
+        lock_time: absolute::LockTime::ZERO,
+        input: vec![],
+        output: vec![TxOut {
+            value: Amount::from_sat(100_000),
+            script_pubkey: ScriptBuf::new_p2pkh(&bitcoin::PubkeyHash::all_zeros()),
+        }],
+    };
+    let outpoint = OutPoint {
+        txid: prev_tx.compute_txid(),
+        vout: 0,
+    };
+    let psbt_input = psbt::Input {
+        witness_utxo: Some(prev_tx.output[0].clone()),
+        non_witness_utxo: Some(prev_tx),
+        ..Default::default()
+    };
+
+    let mut builder = wallet.build_tx();
+    builder
+        .add_foreign_utxo(outpoint, psbt_input, satisfaction)
+        .unwrap();
+    builder
+        .manually_selected_only()
+        .fee_absolute(Amount::from_sat(1_000))
+        .drain_wallet()
+        .drain_to(addr.script_pubkey());
+    builder.finish()
+}
+
+#[test]
 fn test_create_tx_rejects_astronomical_foreign_satisfaction_without_overflow() {
     // A caller-supplied satisfaction near u64::MAX must not panic (debug) or wrap (release).
     // Either failure mode used to skip TxWeightLimitExceeded.

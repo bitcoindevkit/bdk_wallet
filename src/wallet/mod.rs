@@ -3029,11 +3029,11 @@ struct InputSatisfaction {
     segwit: bool,
 }
 
-/// Whether `script_pubkey` (or the PSBT metadata spending it) puts satisfaction in a witness.
+/// Whether satisfying `script_pubkey` serializes a witness.
 ///
-/// Native segwit and taproot are witness programs. Nested segwit is a P2SH script pubkey, so it
-/// is recognized from the PSBT input: a witness UTXO, witness script, final witness, or a redeem
-/// script that is itself a witness program.
+/// Native segwit and taproot are witness programs on the prevout. Nested segwit is a P2SH
+/// prevout whose redeem script is itself a witness program. A populated [`psbt::Input::witness_utxo`]
+/// is not evidence: a legacy prevout can carry both `non_witness_utxo` and `witness_utxo`.
 fn spends_with_witness(script_pubkey: &bitcoin::Script, psbt_input: Option<&psbt::Input>) -> bool {
     if script_pubkey.witness_version().is_some() {
         return true;
@@ -3041,22 +3041,20 @@ fn spends_with_witness(script_pubkey: &bitcoin::Script, psbt_input: Option<&psbt
     let Some(psbt_input) = psbt_input else {
         return false;
     };
-    if psbt_input.witness_utxo.is_some()
-        || psbt_input.final_script_witness.is_some()
-        || psbt_input.witness_script.is_some()
-    {
-        return true;
-    }
-    psbt_input
-        .redeem_script
-        .as_ref()
-        .is_some_and(|redeem| redeem.witness_version().is_some())
+    // Nested segwit only. `witness_utxo` / `witness_script` / `final_script_witness` can be set on
+    // a legacy spend and must not flip this classification.
+    script_pubkey.is_p2sh()
+        && psbt_input
+            .redeem_script
+            .as_ref()
+            .is_some_and(|redeem| redeem.witness_version().is_some())
 }
 
 /// [`bdk_tx::Input`] satisfaction, using the weight already tracked on the selected input.
 ///
 /// Planned inputs created from a PSBT do not report [`Input::is_segwit`] unless
-/// `final_script_witness` is set, so witness-ness also comes from the prevout and PSBT metadata.
+/// `final_script_witness` is set, so witness-ness comes from the prevout and, for nested segwit,
+/// the P2SH redeem script.
 #[cfg(all(bdk_wallet_unstable, feature = "bdk-tx"))]
 fn selection_input_satisfaction(input: &Input) -> InputSatisfaction {
     let segwit = if input.plan().is_some() {
@@ -4433,6 +4431,71 @@ mod test {
             weight: Weight::from_wu(weight),
             segwit,
         }
+    }
+
+    #[test]
+    fn spends_with_witness_uses_prevout_and_redeem_script() {
+        // Native witness program, with or without PSBT metadata.
+        assert!(spends_with_witness(p2wpkh_script().as_script(), None));
+
+        // Legacy P2PKH that carries both UTXO fields is still a legacy spend. Presence of
+        // witness_utxo used to classify this as segwit.
+        let legacy_spk = p2pkh_script();
+        let prev_tx = Transaction {
+            version: transaction::Version::TWO,
+            lock_time: absolute::LockTime::ZERO,
+            input: vec![],
+            output: vec![TxOut {
+                value: Amount::from_sat(100_000),
+                script_pubkey: legacy_spk.clone(),
+            }],
+        };
+        let mut final_witness = Witness::new();
+        final_witness.push([0u8; 72]);
+        final_witness.push([0u8; 33]);
+        let legacy_input = psbt::Input {
+            witness_utxo: Some(prev_tx.output[0].clone()),
+            non_witness_utxo: Some(prev_tx),
+            witness_script: Some(p2wpkh_script()),
+            final_script_witness: Some(final_witness),
+            ..Default::default()
+        };
+        assert!(!spends_with_witness(
+            legacy_spk.as_script(),
+            Some(&legacy_input)
+        ));
+
+        // Nested segwit: P2SH prevout whose redeem script is a witness program.
+        let redeem = p2wpkh_script();
+        let nested_spk = ScriptBuf::new_p2sh(&redeem.script_hash());
+        let nested_input = psbt::Input {
+            redeem_script: Some(redeem),
+            witness_utxo: Some(TxOut {
+                value: Amount::from_sat(100_000),
+                script_pubkey: nested_spk.clone(),
+            }),
+            ..Default::default()
+        };
+        assert!(spends_with_witness(
+            nested_spk.as_script(),
+            Some(&nested_input)
+        ));
+
+        // P2SH wrapping a legacy redeem script does not serialize a witness.
+        let legacy_redeem = p2pkh_script();
+        let legacy_p2sh = ScriptBuf::new_p2sh(&legacy_redeem.script_hash());
+        let legacy_p2sh_input = psbt::Input {
+            redeem_script: Some(legacy_redeem),
+            witness_utxo: Some(TxOut {
+                value: Amount::from_sat(100_000),
+                script_pubkey: legacy_p2sh.clone(),
+            }),
+            ..Default::default()
+        };
+        assert!(!spends_with_witness(
+            legacy_p2sh.as_script(),
+            Some(&legacy_p2sh_input)
+        ));
     }
 
     #[test]
