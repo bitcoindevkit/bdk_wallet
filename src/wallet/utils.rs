@@ -85,16 +85,25 @@ impl<Pk: MiniscriptKey + ToPublicKey> Satisfier<Pk> for After {
     }
 }
 
+/// Chain position of the transaction that created an input, as seen by [`Older`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ConfirmationHeight {
+    /// The transaction is confirmed at this height.
+    Confirmed(u32),
+    /// The transaction is not confirmed yet.
+    Unconfirmed,
+}
+
 pub struct Older {
     pub current_height: Option<u32>,
-    pub create_height: Option<u32>,
+    pub create_height: Option<ConfirmationHeight>,
     pub assume_height_reached: bool,
 }
 
 impl Older {
     pub(crate) fn new(
         current_height: Option<u32>,
-        create_height: Option<u32>,
+        create_height: Option<ConfirmationHeight>,
         assume_height_reached: bool,
     ) -> Older {
         Older {
@@ -111,16 +120,15 @@ impl<Pk: MiniscriptKey + ToPublicKey> Satisfier<Pk> for Older {
             // TODO: test >= / >
             match self
                 .create_height
-                .unwrap_or(0)
-                .checked_add(n.to_consensus_u32())
+                .unwrap_or(ConfirmationHeight::Confirmed(0))
             {
-                Some(satisfaction_height) => current_height >= satisfaction_height,
-                // The height at which the relative locktime would be satisfied does not fit in
-                // a `u32` and can therefore never be reached, so the branch is not satisfied.
-                // `Wallet::finalize_psbt` maps an unconfirmed previous transaction to a
-                // `create_height` of `u32::MAX`, which makes this reachable for any `older(n)`
-                // with `n` greater than zero.
-                None => false,
+                // A height that does not fit in a `u32` can never be reached.
+                ConfirmationHeight::Confirmed(create_height) => create_height
+                    .checked_add(n.to_consensus_u32())
+                    .is_some_and(|satisfaction_height| current_height >= satisfaction_height),
+                // A relative locktime counts from the block that confirms the previous
+                // transaction, so it cannot be met while that transaction is unconfirmed.
+                ConfirmationHeight::Unconfirmed => false,
             }
         } else {
             self.assume_height_reached
@@ -177,7 +185,7 @@ mod test {
     // otherwise it's time-based
     pub(crate) const SEQUENCE_LOCKTIME_TYPE_FLAG: u32 = 1 << 22;
 
-    use super::{IsDust, Older, check_nsequence_rbf, shuffle_slice};
+    use super::{ConfirmationHeight, IsDust, Older, check_nsequence_rbf, shuffle_slice};
     use crate::bitcoin::{Address, Network, PublicKey, Sequence, relative};
     use alloc::vec::Vec;
     use core::str::FromStr;
@@ -289,13 +297,22 @@ mod test {
 
     #[test]
     fn test_check_older_compares_against_the_satisfaction_height() {
-        let older = Older::new(Some(300), Some(100), false);
+        let older = Older::new(Some(300), Some(ConfirmationHeight::Confirmed(100)), false);
         assert!(<Older as Satisfier<PublicKey>>::check_older(
             &older,
             relative::LockTime::from_height(144)
         ));
 
-        let older = Older::new(Some(200), Some(100), false);
+        let older = Older::new(Some(200), Some(ConfirmationHeight::Confirmed(100)), false);
+        assert!(!<Older as Satisfier<PublicKey>>::check_older(
+            &older,
+            relative::LockTime::from_height(144)
+        ));
+    }
+
+    #[test]
+    fn test_check_older_unconfirmed_is_not_satisfied() {
+        let older = Older::new(Some(u32::MAX), Some(ConfirmationHeight::Unconfirmed), false);
         assert!(!<Older as Satisfier<PublicKey>>::check_older(
             &older,
             relative::LockTime::from_height(144)
@@ -304,9 +321,11 @@ mod test {
 
     #[test]
     fn test_check_older_unreachable_satisfaction_height_is_not_satisfied() {
-        // `Wallet::finalize_psbt` maps an unconfirmed previous transaction to a `create_height`
-        // of `u32::MAX`, so adding a relative locktime to it does not fit in a `u32`.
-        let older = Older::new(Some(100_000), Some(u32::MAX), false);
+        let older = Older::new(
+            Some(u32::MAX),
+            Some(ConfirmationHeight::Confirmed(u32::MAX)),
+            false,
+        );
         assert!(!<Older as Satisfier<PublicKey>>::check_older(
             &older,
             relative::LockTime::from_height(144)

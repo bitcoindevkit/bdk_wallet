@@ -2041,9 +2041,9 @@ fn test_try_finalize_psbt_uses_psbt_timelocks() {
 #[test]
 fn test_finalize_psbt_with_unconfirmed_input_and_unused_csv_branch() {
     // `wsh(or_d(pk(A),and_v(v:pk(B),older(144))))`. Spending through the `pk(A)` branch leaves
-    // the `older(144)` branch for the finalizer to evaluate, and `finalize_psbt` maps an
-    // unconfirmed previous transaction to a confirmation height of `u32::MAX`. Adding the
-    // relative locktime to that height overflows, which used to panic.
+    // the `older(144)` branch for the finalizer to evaluate while the previous transaction is
+    // still unconfirmed. `finalize_psbt` used to stand in `u32::MAX` for the confirmation height
+    // of an unconfirmed transaction, and adding the relative locktime to it panicked.
     let descriptor = get_test_a_or_b_plus_csv();
     let mut wallet = Wallet::create_single(descriptor)
         .network(Network::Regtest)
