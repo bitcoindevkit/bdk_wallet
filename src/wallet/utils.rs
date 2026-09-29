@@ -331,4 +331,19 @@ mod test {
             relative::LockTime::from_height(144)
         ));
     }
+
+    #[test]
+    fn test_check_older_not_found_counts_from_height_zero() {
+        let older = Older::new(Some(144), None, false);
+        assert!(<Older as Satisfier<PublicKey>>::check_older(
+            &older,
+            relative::LockTime::from_height(144)
+        ));
+
+        let older = Older::new(Some(143), None, false);
+        assert!(!<Older as Satisfier<PublicKey>>::check_older(
+            &older,
+            relative::LockTime::from_height(144)
+        ));
+    }
 }
