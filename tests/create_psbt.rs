@@ -1211,3 +1211,33 @@ fn test_add_planned_psbt_input() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn test_create_psbt_lock_utxos() {
+    let (mut wallet, _) = get_funded_wallet_wpkh();
+
+    // Check that we have a spendable UTXO and it's not locked.
+    let utxo = wallet.list_unspent().next().unwrap().outpoint;
+    assert!(!wallet.is_outpoint_locked(utxo));
+
+    // Create a PSBT with lock_utxos(true)
+    let send_to = wallet.reveal_next_address(KeychainKind::External).address;
+    let mut params = PsbtParams::default();
+    params
+        .add_recipients([(send_to.script_pubkey(), Amount::from_sat(20_000))])
+        .lock_utxos(true);
+    let (psbt, _) = wallet.create_psbt(params).unwrap();
+
+    // Verify that the UTXO spent by this PSBT is now locked
+    let input_op = psbt.unsigned_tx.input[0].previous_output;
+    assert!(wallet.is_outpoint_locked(input_op));
+
+    // Creating a second PSBT should fail with InsufficientFunds because the only UTXO is locked
+    let send_to2 = wallet.reveal_next_address(KeychainKind::External).address;
+    let mut params2 = PsbtParams::default();
+    params2
+        .add_recipients([(send_to2.script_pubkey(), Amount::from_sat(20_000))]);
+    let result = wallet.create_psbt(params2);
+    assert!(result.is_err());
+}
+
