@@ -100,7 +100,7 @@ Repository maintainers
 
 Like all open source projects our maintainers are busy. Please take it easy on
 them and only ping them if you get no response for a week or two. Maintainers must ensure
-that there is "rough consenus" that a PR is needed and correctly implemented.
+that there is "rough consensus" that a PR is needed and correctly implemented.
 Maintainers are not required to review and test your PR. A maintainer may ACK and
 merge (or NACK and close) a PR based on the reviews of any competent project contributors.
 Non-trivial changes should have more than one ACK and no un-addressed NACKs from project
