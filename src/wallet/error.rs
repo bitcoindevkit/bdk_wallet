@@ -38,6 +38,13 @@ pub enum LoadError {
     MissingGenesis,
     /// Data loaded from persistence is missing descriptor.
     MissingDescriptor(KeychainKind),
+    /// The network's mainnet genesis hash does not match the loaded genesis hash.
+    GenesisNetworkMismatch {
+        /// The loaded network.
+        network: Network,
+        /// The loaded genesis hash.
+        genesis_hash: BlockHash,
+    },
     /// Data loaded is unexpected.
     Mismatch(LoadMismatch),
 }
@@ -51,6 +58,13 @@ impl fmt::Display for LoadError {
             LoadError::MissingDescriptor(k) => {
                 write!(f, "loaded data is missing descriptor for {k} keychain")
             }
+            LoadError::GenesisNetworkMismatch {
+                network,
+                genesis_hash,
+            } => write!(
+                f,
+                "network {network} is mainnet but loaded genesis hash {genesis_hash} does not match"
+            ),
             LoadError::Mismatch(e) => write!(f, "{e}"),
         }
     }
