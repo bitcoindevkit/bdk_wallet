@@ -118,8 +118,11 @@ fn main() -> Result<(), anyhow::Error> {
     wallet.persist(&mut db)?;
     println!();
 
-    // bump fee rate for tx by at least 1 sat per vbyte
-    let feerate = FeeRate::from_sat_per_vb(tx_feerate.to_sat_per_vb_ceil() + 1).unwrap();
+    // bump fee rate for tx by the incremental relay fee of 1 sat per vbyte, plus 1 sat per kwu so
+    // that rounding doesn't leave the replacement short of it
+    let feerate = FeeRate::from_sat_per_kwu(
+        tx_feerate.to_sat_per_kwu() + FeeRate::BROADCAST_MIN.to_sat_per_kwu() + 1,
+    );
     let mut builder = wallet.build_fee_bump(txid).unwrap();
     builder.fee_rate(feerate);
     let mut new_psbt = builder.finish().unwrap();
