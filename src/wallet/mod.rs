@@ -1295,31 +1295,36 @@ impl Wallet {
                     keychains.get(&KeychainKind::External).expect("must exist");
                 let internal_descriptor = keychains.get(&KeychainKind::Internal);
 
-                let external_policy = external_descriptor
-                    .extract_policy(&self.signers, BuildSatisfaction::None, &self.secp)?
-                    .unwrap();
+                // Policy extraction yields `None` for descriptors that have no policy
+                // representation (e.g. `c:expr_raw_pkh(..)`). There is then no policy path to
+                // select and no timelock to derive, so such a keychain adds no requirements.
+                let external_policy = external_descriptor.extract_policy(
+                    &self.signers,
+                    BuildSatisfaction::None,
+                    &self.secp,
+                )?;
                 let internal_policy = internal_descriptor
                     .map(|desc| {
-                        Ok::<_, CreateTxError>(
-                            desc.extract_policy(
-                                &self.change_signers,
-                                BuildSatisfaction::None,
-                                &self.secp,
-                            )?
-                            .unwrap(),
+                        desc.extract_policy(
+                            &self.change_signers,
+                            BuildSatisfaction::None,
+                            &self.secp,
                         )
                     })
-                    .transpose()?;
+                    .transpose()?
+                    .flatten();
 
                 // The policy allows spending external outputs, but it requires a policy path that
                 // hasn't been provided
-                if params.change_policy != tx_builder::ChangeSpendPolicy::OnlyChange
-                    && external_policy.requires_path()
-                    && params.external_policy_path.is_none()
-                {
-                    return Err(CreateTxError::SpendingPolicyRequired(
-                        KeychainKind::External,
-                    ));
+                if let Some(external_policy) = &external_policy {
+                    if params.change_policy != tx_builder::ChangeSpendPolicy::OnlyChange
+                        && external_policy.requires_path()
+                        && params.external_policy_path.is_none()
+                    {
+                        return Err(CreateTxError::SpendingPolicyRequired(
+                            KeychainKind::External,
+                        ));
+                    }
                 }
                 // Same for the internal_policy path
                 if let Some(internal_policy) = &internal_policy {
@@ -1333,12 +1338,18 @@ impl Wallet {
                     }
                 }
 
-                let external_requirements = external_policy.get_condition(
-                    params
-                        .external_policy_path
-                        .as_ref()
-                        .unwrap_or(&BTreeMap::new()),
-                )?;
+                let external_requirements = external_policy
+                    .map(|policy| {
+                        Ok::<_, CreateTxError>(
+                            policy.get_condition(
+                                params
+                                    .external_policy_path
+                                    .as_ref()
+                                    .unwrap_or(&BTreeMap::new()),
+                            )?,
+                        )
+                    })
+                    .transpose()?;
                 let internal_requirements = internal_policy
                     .map(|policy| {
                         Ok::<_, CreateTxError>(
@@ -1352,7 +1363,9 @@ impl Wallet {
                     })
                     .transpose()?;
 
-                external_requirements.merge(&internal_requirements.unwrap_or_default())?
+                external_requirements
+                    .unwrap_or_default()
+                    .merge(&internal_requirements.unwrap_or_default())?
             }
         };
 
