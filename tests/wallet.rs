@@ -3697,3 +3697,81 @@ fn test_create_and_spend_from_truc_tx() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+/// A PSBT whose `nLockTime` does not enforce `after` must not be finalized, even if the tip is
+/// past the lock height.
+#[test]
+fn test_finalize_psbt_requires_locktime_for_cltv() {
+    let (mut wallet, _) = get_funded_wallet_single(get_test_single_sig_cltv());
+    let signer = KeyMapWrapper::from(keymap_from_descriptor(&wallet, get_test_single_sig_cltv()));
+
+    let block = BlockId {
+        height: 100_000,
+        hash: BlockHash::all_zeros(),
+    };
+    insert_checkpoint(&mut wallet, block);
+
+    let addr = wallet.next_unused_address(KeychainKind::External);
+    let mut builder = wallet.build_tx();
+    builder.add_recipient(addr.script_pubkey(), Amount::from_sat(25_000));
+    let mut psbt = builder.finish().unwrap();
+
+    assert_eq!(psbt.unsigned_tx.lock_time.to_consensus_u32(), 100_000);
+
+    let mut valid_psbt = psbt.clone();
+    valid_psbt.sign(&signer, wallet.secp_ctx()).unwrap();
+    let finalized = wallet
+        .finalize_psbt(&mut valid_psbt, SignOptions::default())
+        .unwrap();
+
+    assert!(finalized);
+
+    psbt.unsigned_tx.lock_time = absolute::LockTime::ZERO;
+
+    psbt.sign(&signer, wallet.secp_ctx()).unwrap();
+    let finalized = wallet
+        .finalize_psbt(&mut psbt, SignOptions::default())
+        .unwrap();
+
+    assert!(!finalized);
+}
+
+/// A PSBT whose `nSequence` does not enforce `older` must not be finalized, even if the input has
+/// enough confirmations.
+#[test]
+fn test_finalize_psbt_requires_sequence_for_csv() {
+    let (mut wallet, _) = get_funded_wallet_single(get_test_single_sig_csv());
+    let signer = KeyMapWrapper::from(keymap_from_descriptor(&wallet, get_test_single_sig_csv()));
+
+    let block = BlockId {
+        height: 2_006,
+        hash: BlockHash::all_zeros(),
+    };
+
+    insert_checkpoint(&mut wallet, block);
+
+    let addr = wallet.next_unused_address(KeychainKind::External);
+
+    let mut builder = wallet.build_tx();
+    builder.add_recipient(addr.script_pubkey(), Amount::from_sat(25_000));
+    let mut psbt = builder.finish().unwrap();
+
+    assert_eq!(psbt.unsigned_tx.input[0].sequence, Sequence(6));
+
+    let mut valid_psbt = psbt.clone();
+    valid_psbt.sign(&signer, wallet.secp_ctx()).unwrap();
+    let finalized = wallet
+        .finalize_psbt(&mut valid_psbt, SignOptions::default())
+        .unwrap();
+
+    assert!(finalized);
+
+    psbt.unsigned_tx.input[0].sequence = Sequence::MAX;
+
+    psbt.sign(&signer, wallet.secp_ctx()).unwrap();
+    let finalized = wallet
+        .finalize_psbt(&mut psbt, SignOptions::default())
+        .unwrap();
+
+    assert!(!finalized);
+}
