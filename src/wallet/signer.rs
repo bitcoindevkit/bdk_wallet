@@ -840,6 +840,7 @@ pub struct SignOptions {
     /// The wallet will only "use" a timelock to satisfy the spending policy of an input if the
     /// timelock height has already been reached. This option allows overriding the "current
     /// height" to let the wallet use timelocks in the future to spend a coin.
+    #[deprecated(note = "timelocks are now checked against the PSBT's nLockTime and nSequence")]
     pub assume_height: Option<u32>,
 
     /// Whether the signer should use the `sighash_type` set in the PSBT when signing, no matter
@@ -887,6 +888,7 @@ pub enum TapLeavesOptions {
 }
 
 impl Default for SignOptions {
+    #[allow(deprecated)]
     fn default() -> Self {
         SignOptions {
             trust_witness_utxo: false,
