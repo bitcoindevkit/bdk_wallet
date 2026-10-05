@@ -76,7 +76,7 @@ use crate::wallet::{
     error::{BuildFeeBumpError, CreateTxError, MiniscriptPsbtError},
     signer::{SignOptions, SignerError, SignerOrdering, SignersContainer, TransactionSigner},
     tx_builder::{FeePolicy, TxBuilder, TxParams},
-    utils::{After, Older, SecpCtx, check_nsequence_rbf},
+    utils::{SecpCtx, check_nsequence_rbf},
 };
 // Unstable bdk-tx imports — only active with --cfg bdk_wallet_unstable and feature = "bdk-tx".
 #[cfg(all(bdk_wallet_unstable, feature = "bdk-tx", feature = "std"))]
@@ -1992,52 +1992,14 @@ impl Wallet {
     ///
     /// Returns `true` if the PSBT could be finalized, and `false` otherwise.
     ///
-    /// The [`SignOptions`] can be used to tweak the behavior of the finalizer.
+    /// Timelocks are checked against the PSBT's `nLockTime` and `nSequence`. The [`SignOptions`]
+    /// are currently unused.
     pub fn finalize_psbt(
         &self,
         psbt: &mut Psbt,
-        sign_options: SignOptions,
+        _sign_options: SignOptions,
     ) -> Result<bool, SignerError> {
-        let tx = &psbt.unsigned_tx;
-        let chain_tip = self.chain.tip().block_id();
-        let prev_txids = tx
-            .input
-            .iter()
-            .map(|txin| txin.previous_output.txid)
-            .collect::<HashSet<Txid>>();
-        let confirmation_heights = self
-            .tx_graph
-            .graph()
-            .list_canonical_txs(&self.chain, chain_tip, CanonicalizationParams::default())
-            .filter(|canon_tx| prev_txids.contains(&canon_tx.tx_node.txid))
-            // This is for a small performance gain. Although `.filter` filters out excess txs, it
-            // will still consume the internal `CanonicalIter` entirely. Having a `.take` here
-            // allows us to stop further unnecessary canonicalization.
-            .take(prev_txids.len())
-            .map(|canon_tx| {
-                let txid = canon_tx.tx_node.txid;
-                match canon_tx.chain_position {
-                    ChainPosition::Confirmed { anchor, .. } => (txid, anchor.block_id.height),
-                    ChainPosition::Unconfirmed { .. } => (txid, u32::MAX),
-                }
-            })
-            .collect::<HashMap<Txid, u32>>();
-        let current_height = sign_options
-            .assume_height
-            .unwrap_or_else(|| self.chain.tip().height());
-
-        Ok(self
-            .try_finalize_psbt_with(
-                psbt,
-                Some(current_height),
-                |_, input| {
-                    confirmation_heights
-                        .get(&input.previous_output.txid)
-                        .copied()
-                },
-                true,
-            )?
-            .is_finalized())
+        Ok(self.try_finalize_psbt_with(psbt, true)?.is_finalized())
     }
 
     /// Attempt to finalize each input of a PSBT and return per-input finalization results.
@@ -2055,19 +2017,14 @@ impl Wallet {
         &self,
         psbt: &mut Psbt,
     ) -> Result<FinalizePsbtOutcome, IndexOutOfBoundsError> {
-        self.try_finalize_psbt_with(psbt, None, |_, _| None, false)
+        self.try_finalize_psbt_with(psbt, false)
     }
 
-    fn try_finalize_psbt_with<F>(
+    fn try_finalize_psbt_with(
         &self,
         psbt: &mut Psbt,
-        current_height: Option<u32>,
-        mut confirmation_height_for_input: F,
         clear_output_derivations: bool,
-    ) -> Result<FinalizePsbtOutcome, IndexOutOfBoundsError>
-    where
-        F: FnMut(usize, &bitcoin::TxIn) -> Option<u32>,
-    {
+    ) -> Result<FinalizePsbtOutcome, IndexOutOfBoundsError> {
         let tx = &psbt.unsigned_tx;
         if psbt.inputs.len() < tx.input.len() {
             return Err(IndexOutOfBoundsError::new(
@@ -2078,7 +2035,7 @@ impl Wallet {
 
         let mut outcomes = BTreeMap::new();
 
-        for (n, input) in tx.input.iter().enumerate() {
+        for (n, _) in tx.input.iter().enumerate() {
             let psbt_input = &psbt
                 .inputs
                 .get(n)
@@ -2106,19 +2063,8 @@ impl Wallet {
             match desc {
                 Some(desc) => {
                     let mut tmp_input = bitcoin::TxIn::default();
-                    let satisfy_result = if let Some(current_height) = current_height {
-                        let confirmation_height = confirmation_height_for_input(n, input);
-                        desc.satisfy(
-                            &mut tmp_input,
-                            (
-                                PsbtInputSatisfier::new(psbt, n),
-                                After::new(Some(current_height), false),
-                                Older::new(Some(current_height), confirmation_height, false),
-                            ),
-                        )
-                    } else {
-                        desc.satisfy(&mut tmp_input, PsbtInputSatisfier::new(psbt, n))
-                    };
+                    let satisfy_result =
+                        desc.satisfy(&mut tmp_input, PsbtInputSatisfier::new(psbt, n));
 
                     match satisfy_result {
                         Ok(_) => {
