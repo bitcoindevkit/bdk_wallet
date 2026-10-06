@@ -44,6 +44,6 @@ On the other hand, users no longer need to implement a persistence trait that BD
 
 #### Core library development
 
-Library development is for the most part similiar to before in the sense that we stage changes as they become relevant and let the user decide when to commit them. It is believed that the increased modularity and separation of concerns should lead to a significant quality of life improvement.
+Library development is for the most part similar to before in the sense that we stage changes as they become relevant and let the user decide when to commit them. It is believed that the increased modularity and separation of concerns should lead to a significant quality of life improvement.
 
 It remains the job of the developers to adequately document and showcase a correct use of the API. It is important that we clearly define the structure of the changeset that we now expect users to be aware of and to be proactive and transparent when communicating upgrades to the data model.
