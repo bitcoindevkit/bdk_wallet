@@ -409,7 +409,7 @@ impl OutputGroup {
             effective_value,
         }
     }
-}dr
+}
 
 /// Branch and bound coin selection
 ///
