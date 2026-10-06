@@ -409,7 +409,7 @@ impl OutputGroup {
             effective_value,
         }
     }
-}dr
+}
 
 /// Branch and bound coin selection
 ///
@@ -1870,10 +1870,7 @@ mod test {
                 ..
             } => {
                 // The stored remaining_amount must be the original value, not zero.
-                assert_eq!(
-                    actual_remaining, remaining_amount,
-                    "remaining_amount should be preserved as-is when change_fee > remaining_amount"
-                );
+                assert_eq!( actual_remaining, remaining_amount, "remaining_amount should be preserved as-is when change_fee > remaining_amount" );
                 // The change_fee must exceed remaining_amount, confirming we hit the
                 // underflow path.
                 assert!(
@@ -1883,6 +1880,45 @@ mod test {
             }
             Excess::Change { .. } => {
                 panic!("expected Excess::NoChange when change_fee exceeds remaining_amount");
+            }
+        }
+    }
+
+    // Verify that when the remaining amount after subtracting the change fee is below
+    // the dust threshold, `decide_change` returns `Excess::NoChange` and does NOT
+    // produce a `Change` variant, since the output would be unspendable dust.
+    #[test]
+    fn test_decide_change_dust_remaining_amount() {
+        // Use a zero fee rate so change_fee is zero — this isolates the dust check
+        // from the underflow path tested above.
+        let fee_rate = FeeRate::ZERO;
+        // P2WPKH drain script. Its dust threshold is 294 sat.
+        let drain_script =
+            ScriptBuf::new_p2wpkh(&bitcoin::WPubkeyHash::from_slice(&[0u8; 20]).unwrap());
+        // Pick a remaining amount that is below the P2WPKH dust threshold (294 sat).
+        let remaining_amount = Amount::from_sat(100);
+
+        let excess = decide_change(remaining_amount, fee_rate, &drain_script);
+
+        match excess {
+            Excess::NoChange {
+                dust_threshold,
+                remaining_amount: actual_remaining,
+                change_fee,
+            } => {
+                // change_fee is zero because fee_rate is zero.
+                assert_eq!(change_fee, Amount::ZERO, "expected zero change_fee");
+                // remaining_amount is preserved as-is.
+                assert_eq!(actual_remaining, remaining_amount);
+                // The dust threshold must be above the remaining amount, confirming
+                // the NoChange result is due to dust, not underflow.
+                assert!(
+                    remaining_amount < dust_threshold,
+                    "expected remaining_amount ({remaining_amount}) < dust_threshold ({dust_threshold})"
+                );
+            }
+            Excess::Change { .. } => {
+                panic!("expected Excess::NoChange for a dust remaining amount");
             }
         }
     }
