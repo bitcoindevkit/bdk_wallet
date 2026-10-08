@@ -302,7 +302,21 @@ pub fn decide_change(remaining_amount: Amount, fee_rate: FeeRate, drain_script: 
     let drain_output_len = serialize(drain_script).len() + 8usize;
     let change_fee =
         fee_rate * Weight::from_vb(drain_output_len as u64).expect("overflow occurred");
-    let drain_val = remaining_amount.checked_sub(change_fee).unwrap_or_default();
+
+    // If the cost of adding a change output exceeds the available excess, there is no
+    // viable change. Avoid a silent underflow: check explicitly rather than clamping to
+    // zero with `unwrap_or_default`, which would pass a misleading `Amount::ZERO` into
+    // the dust check below.
+    let drain_val = match remaining_amount.checked_sub(change_fee) {
+        Some(val) => val,
+        None => {
+            return Excess::NoChange {
+                dust_threshold: drain_script.minimal_non_dust(),
+                change_fee,
+                remaining_amount,
+            };
+        }
+    };
 
     if drain_val.is_dust(drain_script) {
         let dust_threshold = drain_script.minimal_non_dust();
@@ -1828,6 +1842,48 @@ mod test {
                 .map(|utxo| utxo.outpoint().vout)
                 .collect::<Vec<u32>>();
             assert_eq!(vouts, tc.exp_vouts, "wrong selected vouts for {}", tc.name);
+        }
+    }
+
+    // Verify that when the cost of adding a change output (change_fee) exceeds the
+    // remaining amount, `decide_change` returns `Excess::NoChange` directly, without
+    // silently clamping `drain_val` to `Amount::ZERO` via `unwrap_or_default`.
+    // The `remaining_amount` stored in `NoChange` must be the real pre-subtraction
+    // value so callers can inspect it accurately.
+    #[test]
+    fn test_decide_change_fee_exceeds_remaining_amount() {
+        // Use a high fee rate so the change output fee is large.
+        let fee_rate = FeeRate::from_sat_per_vb_u32(1_000);
+        // A P2WPKH drain script (22-byte program) — its serialised output is
+        // 8 (value) + 1 (script_len varint) + 22 (script) = 31 bytes.
+        // At 1_000 sat/vb the change_fee would be ~31_000 sat, which comfortably
+        // exceeds a tiny remaining_amount of 100 sat.
+        let drain_script = ScriptBuf::new_op_return(&[]);
+        let remaining_amount = Amount::from_sat(100);
+
+        let excess = decide_change(remaining_amount, fee_rate, &drain_script);
+
+        match excess {
+            Excess::NoChange {
+                remaining_amount: actual_remaining,
+                change_fee,
+                ..
+            } => {
+                // The stored remaining_amount must be the original value, not zero.
+                assert_eq!(
+                    actual_remaining, remaining_amount,
+                    "remaining_amount should be preserved as-is when change_fee > remaining_amount"
+                );
+                // The change_fee must exceed remaining_amount, confirming we hit the
+                // underflow path.
+                assert!(
+                    change_fee > remaining_amount,
+                    "expected change_fee ({change_fee}) > remaining_amount ({remaining_amount})"
+                );
+            }
+            Excess::Change { .. } => {
+                panic!("expected Excess::NoChange when change_fee exceeds remaining_amount");
+            }
         }
     }
 }
