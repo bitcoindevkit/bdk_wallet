@@ -1858,7 +1858,7 @@ mod test {
         // 8 (value) + 1 (script_len varint) + 22 (script) = 31 bytes.
         // At 1_000 sat/vb the change_fee would be ~31_000 sat, which comfortably
         // exceeds a tiny remaining_amount of 100 sat.
-        let drain_script = ScriptBuf::new_p2wpkh(&bitcoin::WPubkeyHash::from_slice(&[0u8; 20]).unwrap());
+        let drain_script = ScriptBuf::new_op_return(&[]);
         let remaining_amount = Amount::from_sat(100);
 
         let excess = decide_change(remaining_amount, fee_rate, &drain_script);
