@@ -40,13 +40,15 @@ pub trait PsbtUtils {
     fn get_utxo_for(&self, input_index: usize) -> Option<TxOut>;
 
     /// The total transaction fee amount, sum of input amounts minus sum of output amounts, in sats.
-    /// If the PSBT is missing a TxOut for an input returns None.
+    /// Returns `None` if a TxOut is missing for an input, if summing amounts overflows, or if the
+    /// outputs exceed the inputs.
     fn fee_amount(&self) -> Option<Amount>;
 
     /// The transaction's fee rate. This value will only be accurate if calculated AFTER the
     /// `Psbt` is finalized and all witness/signature data is added to the
     /// transaction.
-    /// If the PSBT is missing a TxOut for an input returns None.
+    /// Returns `None` if a TxOut is missing for an input, if summing amounts overflows, if the
+    /// outputs exceed the inputs, or if the transaction cannot be extracted.
     fn fee_rate(&self) -> Option<FeeRate>;
 }
 
@@ -71,12 +73,18 @@ impl PsbtUtils for Psbt {
         let tx = &self.unsigned_tx;
         let utxos: Option<Vec<TxOut>> = (0..tx.input.len()).map(|i| self.get_utxo_for(i)).collect();
 
-        utxos.map(|inputs| {
-            let input_amount: Amount = inputs.iter().map(|i| i.value).sum();
-            let output_amount: Amount = self.unsigned_tx.output.iter().map(|o| o.value).sum();
-            input_amount
-                .checked_sub(output_amount)
-                .expect("input amount must be greater than output amount")
+        utxos.and_then(|inputs| {
+            let input_amount = inputs
+                .iter()
+                .map(|i| i.value)
+                .try_fold(Amount::ZERO, Amount::checked_add)?;
+            let output_amount = self
+                .unsigned_tx
+                .output
+                .iter()
+                .map(|o| o.value)
+                .try_fold(Amount::ZERO, Amount::checked_add)?;
+            input_amount.checked_sub(output_amount)
         })
     }
 
@@ -166,5 +174,103 @@ mod tests {
 
         // Must return None — vout out of bounds, no panic
         assert_eq!(psbt.get_utxo_for(0), None);
+    }
+
+    #[test]
+    fn fee_amount_returns_input_minus_output() {
+        let prev_tx = build_tx(Amount::from_sat(100_000));
+        let mut psbt = build_psbt(&prev_tx, 0);
+        psbt.inputs[0] = Input {
+            non_witness_utxo: Some(prev_tx),
+            ..Default::default()
+        };
+
+        assert_eq!(psbt.fee_amount(), Some(Amount::from_sat(10_000)));
+    }
+
+    #[test]
+    fn fee_amount_returns_none_when_outputs_exceed_inputs() {
+        let prev_tx = build_tx(Amount::from_sat(50_000));
+        // build_psbt creates a 90_000 sat output
+        let mut psbt = build_psbt(&prev_tx, 0);
+        psbt.inputs[0] = Input {
+            non_witness_utxo: Some(prev_tx),
+            ..Default::default()
+        };
+
+        assert_eq!(psbt.fee_amount(), None);
+        assert_eq!(psbt.fee_rate(), None);
+    }
+
+    #[test]
+    fn fee_amount_returns_none_when_input_amounts_overflow() {
+        let unsigned_tx = Transaction {
+            version: transaction::Version::TWO,
+            lock_time: absolute::LockTime::ZERO,
+            input: vec![
+                TxIn {
+                    previous_output: OutPoint::null(),
+                    script_sig: ScriptBuf::default(),
+                    sequence: Sequence::MAX,
+                    witness: Witness::default(),
+                },
+                TxIn {
+                    previous_output: OutPoint::null(),
+                    script_sig: ScriptBuf::default(),
+                    sequence: Sequence::MAX,
+                    witness: Witness::default(),
+                },
+            ],
+            output: vec![TxOut {
+                value: Amount::from_sat(1_000),
+                script_pubkey: ScriptBuf::default(),
+            }],
+        };
+        let mut psbt = Psbt::from_unsigned_tx(unsigned_tx).unwrap();
+        for input in &mut psbt.inputs {
+            input.witness_utxo = Some(TxOut {
+                value: Amount::from_sat(u64::MAX),
+                script_pubkey: ScriptBuf::default(),
+            });
+        }
+
+        assert_eq!(psbt.fee_amount(), None);
+        assert_eq!(psbt.fee_rate(), None);
+    }
+
+    #[test]
+    fn fee_amount_returns_none_when_output_amounts_overflow() {
+        let prev_tx = build_tx(Amount::from_sat(1_000));
+        let unsigned_tx = Transaction {
+            version: transaction::Version::TWO,
+            lock_time: absolute::LockTime::ZERO,
+            input: vec![TxIn {
+                previous_output: OutPoint {
+                    txid: prev_tx.compute_txid(),
+                    vout: 0,
+                },
+                script_sig: ScriptBuf::default(),
+                sequence: Sequence::MAX,
+                witness: Witness::default(),
+            }],
+            output: vec![
+                TxOut {
+                    value: Amount::from_sat(u64::MAX),
+                    script_pubkey: ScriptBuf::default(),
+                },
+                TxOut {
+                    value: Amount::from_sat(u64::MAX),
+                    script_pubkey: ScriptBuf::default(),
+                },
+            ],
+        };
+        let mut psbt = Psbt::from_unsigned_tx(unsigned_tx).unwrap();
+        psbt.inputs[0] = Input {
+            non_witness_utxo: Some(prev_tx),
+            ..Default::default()
+        };
+
+        assert_eq!(psbt.fee_amount(), None);
+        assert_eq!(psbt.fee_rate(), None);
     }
 }
