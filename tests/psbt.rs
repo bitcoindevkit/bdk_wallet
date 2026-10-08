@@ -1,5 +1,7 @@
 use bdk_wallet::bitcoin::bip32::Xpriv;
 use bdk_wallet::bitcoin::psbt::SigningKeys;
+use bdk_wallet::psbt::PsbtUtils;
+use bdk_wallet::signer::SignerError;
 use bdk_wallet::test_utils::*;
 use bdk_wallet::{KeychainKind, SignOptions, psbt};
 use bitcoin::{Amount, FeeRate, Psbt, TxIn, Witness};
@@ -112,6 +114,40 @@ fn test_psbt_sign_with_finalized() {
             SignOptions::default(),
         )
         .unwrap();
+}
+
+/// Rejects mismatched witness_utxo and non_witness_utxo fields.
+#[test]
+fn test_sign_with_signers_rejects_mismatched_utxo() {
+    let descriptor = get_test_wpkh();
+    let (mut wallet, _) = get_funded_wallet_single(descriptor);
+    receive_output_in_latest_block(&mut wallet, Amount::from_sat(50_000));
+    let recipient = wallet.next_unused_address(KeychainKind::External);
+    let mut builder = wallet.build_tx();
+    builder.drain_to(recipient.script_pubkey()).drain_wallet();
+    let psbt = builder.finish().unwrap();
+    assert_eq!(psbt.inputs.len(), 2);
+
+    let signers = signers_from_descriptor(&wallet, descriptor);
+    for index in 0..psbt.inputs.len() {
+        let mut mismatched = psbt.clone();
+        mismatched.inputs[index]
+            .witness_utxo
+            .as_mut()
+            .unwrap()
+            .value -= Amount::from_sat(20_000);
+        assert_eq!(mismatched.fee_amount(), None);
+        let result = wallet.sign_with_signers(&mut mismatched, &[&signers], SignOptions::default());
+        assert!(matches!(result, Err(SignerError::InvalidNonWitnessUtxo)));
+        assert!(
+            mismatched
+                .inputs
+                .iter()
+                .all(|input| input.partial_sigs.is_empty()
+                    && input.final_script_sig.is_none()
+                    && input.final_script_witness.is_none())
+        );
+    }
 }
 
 #[test]
