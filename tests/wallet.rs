@@ -252,6 +252,27 @@ fn test_create_tx_default_locktime_is_last_sync_height() {
 }
 
 #[test]
+fn test_create_tx_does_not_panic_for_invalid_chain_tip_height() {
+    let (mut wallet, _) = get_funded_wallet_wpkh();
+    insert_checkpoint(
+        &mut wallet,
+        BlockId {
+            height: 500_000_000,
+            hash: BlockHash::all_zeros(),
+        },
+    );
+
+    let addr = wallet.next_unused_address(KeychainKind::External);
+    let mut builder = wallet.build_tx();
+    builder.add_recipient(addr.script_pubkey(), Amount::from_sat(25_000));
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| builder.finish()));
+    assert!(result.is_ok(), "creating a transaction must not panic");
+    let psbt = result.unwrap().unwrap();
+    assert_eq!(psbt.unsigned_tx.lock_time, absolute::LockTime::ZERO);
+}
+
+#[test]
 fn test_create_tx_fee_sniping_locktime_last_sync() {
     let (mut wallet, _) = get_funded_wallet_wpkh();
     let addr = wallet.next_unused_address(KeychainKind::External);

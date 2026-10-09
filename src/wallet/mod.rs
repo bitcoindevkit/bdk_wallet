@@ -1365,15 +1365,17 @@ impl Wallet {
             None => transaction::Version::TWO,
         };
 
-        // We use a match here instead of a unwrap_or_else as it's way more readable :)
-        let current_height = match params.current_height {
-            // If they didn't tell us the current height, we assume it's the latest sync height.
-            None => {
-                let tip_height = self.chain.tip().height();
-                absolute::LockTime::from_height(tip_height).expect("invalid height")
-            }
-            Some(h) => h,
-        };
+        // If they didn't tell us the current height, we assume it's the latest sync height.
+        // Keep the raw height for coinbase maturity, since not every valid chain height can be
+        // represented as a block-based nLockTime.
+        let current_height = params
+            .current_height
+            .map(|height| height.to_consensus_u32())
+            .unwrap_or_else(|| self.chain.tip().height());
+        let current_locktime = params
+            .current_height
+            .or_else(|| absolute::LockTime::from_height(current_height).ok())
+            .unwrap_or(absolute::LockTime::ZERO);
 
         let lock_time = match params.locktime {
             // When no `nLockTime` is specified, we try to prevent fee sniping, if possible.
@@ -1381,7 +1383,7 @@ impl Wallet {
                 // Fee sniping can be partially prevented by setting the timelock
                 // to current_height. If we don't know the current_height,
                 // we default to 0.
-                let fee_sniping_height = current_height;
+                let fee_sniping_height = current_locktime;
 
                 // We choose the biggest between the required nlocktime and the fee sniping
                 // height.
@@ -1494,7 +1496,7 @@ impl Wallet {
         let (required_utxos, optional_utxos) = {
             // NOTE: manual selection overrides unspendable
             let mut required: Vec<WeightedUtxo> = params.utxos.clone();
-            let optional = self.filter_utxos(&params, current_height.to_consensus_u32(), version);
+            let optional = self.filter_utxos(&params, current_height, version);
 
             // If `drain_wallet` is true, all UTxOs are required.
             if params.drain_wallet {
