@@ -590,8 +590,8 @@ impl DescriptorMeta for ExtendedDescriptor {
 
         let descriptor = self.at_derivation_index(0).expect("0 is not hardened");
         match descriptor.desc_type() {
-            // TODO: add pk() here
-            DescriptorType::Pkh
+            DescriptorType::Bare
+            | DescriptorType::Pkh
             | DescriptorType::Wpkh
             | DescriptorType::ShWpkh
             | DescriptorType::Tr
@@ -600,7 +600,7 @@ impl DescriptorMeta for ExtendedDescriptor {
             {
                 Some(descriptor)
             }
-            DescriptorType::Bare | DescriptorType::Sh | DescriptorType::ShSortedMulti
+            DescriptorType::Sh | DescriptorType::ShSortedMulti
                 if psbt_input.redeem_script.is_some()
                     && &descriptor.explicit_script().unwrap()
                         == psbt_input.redeem_script.as_ref().unwrap() =>
@@ -1008,6 +1008,45 @@ mod test {
             .unwrap_err();
 
         Ok(())
+    }
+
+    // Verify that a bare pk() descriptor (DescriptorType::Bare) is correctly
+    // matched in derive_from_psbt_input via the script_pubkey comparison arm.
+    // Previously, Bare was in the redeem_script arm, which always failed for
+    // pk() since pk() does not use a redeem_script — causing the function to
+    // return None even when the UTXO's script_pubkey matched the descriptor.
+    #[test]
+    fn test_derive_from_psbt_input_pk() {
+        let secp = Secp256k1::new();
+
+        // A bare pk() descriptor with a static compressed public key.
+        let descriptor = Descriptor::<DescriptorPublicKey>::from_str(
+            "pk(02b4632d08485ff1df2db55b9dafd23347d1c47a457072a1e87be26896549a8737)",
+        )
+        .unwrap();
+
+        // Build the script_pubkey that this descriptor produces.
+        let derived = descriptor.at_derivation_index(0).unwrap();
+        let script_pubkey = derived.script_pubkey();
+
+        // Construct a PSBT input with no bip32_derivation (no key origin data),
+        // forcing the function to fall through to the script_pubkey comparison.
+        let psbt_input = psbt::Input::default();
+
+        // Supply the matching UTXO so the first arm's guard condition can succeed.
+        let utxo = bitcoin::TxOut {
+            value: bitcoin::Amount::from_sat(100_000),
+            script_pubkey,
+        };
+
+        // Before the fix, this returned None because Bare was matched against
+        // redeem_script (which is None here). After the fix it returns Some.
+        assert!(
+            descriptor
+                .derive_from_psbt_input(&psbt_input, Some(utxo), &secp)
+                .is_some(),
+            "pk() descriptor should be derivable from a matching UTXO"
+        );
     }
 
     #[test]
