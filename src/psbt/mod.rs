@@ -63,12 +63,16 @@ impl PsbtUtils for Psbt {
         let tx = &self.unsigned_tx;
         let utxos: Option<Vec<TxOut>> = (0..tx.input.len()).map(|i| self.get_utxo_for(i)).collect();
 
-        utxos.map(|inputs| {
-            let input_amount: Amount = inputs.iter().map(|i| i.value).sum();
-            let output_amount: Amount = self.unsigned_tx.output.iter().map(|o| o.value).sum();
-            input_amount
-                .checked_sub(output_amount)
-                .expect("input amount must be greater than output amount")
+        utxos.and_then(|inputs| {
+            let input_amount = inputs
+                .iter()
+                .try_fold(Amount::ZERO, |acc, i| acc.checked_add(i.value))?;
+            let output_amount = self
+                .unsigned_tx
+                .output
+                .iter()
+                .try_fold(Amount::ZERO, |acc, o| acc.checked_add(o.value))?;
+            input_amount.checked_sub(output_amount)
         })
     }
 
@@ -158,5 +162,47 @@ mod tests {
 
         // Must return None — vout out of bounds, no panic
         assert_eq!(psbt.get_utxo_for(0), None);
+    }
+
+    #[test]
+    fn fee_amount_returns_none_when_outputs_exceed_inputs() {
+        let prev_tx = build_tx(Amount::from_sat(50_000));
+        // PSBT unsigned_tx asks for 90_000 sats output, but input is only 50_000 sats
+        let mut psbt = build_psbt(&prev_tx, 0);
+        psbt.inputs[0] = Input {
+            witness_utxo: Some(TxOut {
+                value: Amount::from_sat(50_000),
+                script_pubkey: ScriptBuf::default(),
+            }),
+            ..Default::default()
+        };
+
+        // Must return None instead of panicking
+        assert_eq!(psbt.fee_amount(), None);
+    }
+
+    #[test]
+    fn fee_amount_returns_none_on_overflow() {
+        let prev_tx = build_tx(Amount::MAX);
+        let mut psbt = build_psbt(&prev_tx, 0);
+        psbt.inputs[0] = Input {
+            witness_utxo: Some(TxOut {
+                value: Amount::MAX,
+                script_pubkey: ScriptBuf::default(),
+            }),
+            ..Default::default()
+        };
+        // Add a second input of value MAX to force addition overflow
+        psbt.unsigned_tx.input.push(TxIn::default());
+        psbt.inputs.push(Input {
+            witness_utxo: Some(TxOut {
+                value: Amount::MAX,
+                script_pubkey: ScriptBuf::default(),
+            }),
+            ..Default::default()
+        });
+
+        // Must return None due to checked_add overflow, no panic
+        assert_eq!(psbt.fee_amount(), None);
     }
 }
