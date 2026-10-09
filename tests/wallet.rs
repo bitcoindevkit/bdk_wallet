@@ -2090,6 +2090,83 @@ fn test_taproot_try_finalize_sign_option() {
     }
 }
 
+fn invalid_ecdsa_sig() -> bitcoin::ecdsa::Signature {
+    use bitcoin::secp256k1::{Message, Secp256k1, SecretKey};
+    let secp = Secp256k1::new();
+    let sk = SecretKey::from_slice(&[1; 32]).unwrap();
+    bitcoin::ecdsa::Signature::sighash_all(secp.sign_ecdsa(&Message::from_digest([0; 32]), &sk))
+}
+
+fn invalid_schnorr_sig() -> bitcoin::taproot::Signature {
+    use bitcoin::secp256k1::{Keypair, Message, Secp256k1, SecretKey};
+    let secp = Secp256k1::new();
+    let keypair = Keypair::from_secret_key(&secp, &SecretKey::from_slice(&[1; 32]).unwrap());
+    bitcoin::taproot::Signature {
+        signature: secp.sign_schnorr_no_aux_rand(&Message::from_digest([0; 32]), &keypair),
+        sighash_type: TapSighashType::Default,
+    }
+}
+
+/// Signs a PSBT once as-is and once after `seed` pre-fills the wallet's signature slots with
+/// invalid signatures, then checks that the wallet replaced them with valid ones.
+fn assert_preseeded_sigs_are_replaced(
+    descriptor: &str,
+    seed: impl Fn(&mut bitcoin::psbt::Input, &bitcoin::psbt::Input),
+) {
+    let (mut wallet, _) = get_funded_wallet_single(descriptor);
+    let signers = signers_from_descriptor(&wallet, descriptor);
+    let addr = wallet.next_unused_address(KeychainKind::External);
+    let mut builder = wallet.build_tx();
+    builder.drain_to(addr.script_pubkey()).drain_wallet();
+    let mut expected = builder.finish().unwrap();
+    let mut psbt = expected.clone();
+
+    let sign_options = SignOptions {
+        try_finalize: false,
+        ..Default::default()
+    };
+    wallet
+        .sign_with_signers(&mut expected, &[&signers], sign_options.clone())
+        .unwrap();
+
+    for (input, signed) in psbt.inputs.iter_mut().zip(&expected.inputs) {
+        seed(input, signed);
+    }
+    wallet
+        .sign_with_signers(&mut psbt, &[&signers], sign_options)
+        .unwrap();
+
+    assert_eq!(psbt.inputs, expected.inputs);
+    assert!(wallet.finalize_psbt(&mut psbt, Default::default()).unwrap());
+}
+
+#[test]
+fn test_sign_replaces_preseeded_ecdsa_sig() {
+    assert_preseeded_sigs_are_replaced(get_test_wpkh(), |input, signed| {
+        for pk in signed.partial_sigs.keys() {
+            input.partial_sigs.insert(*pk, invalid_ecdsa_sig());
+        }
+    });
+}
+
+#[test]
+fn test_sign_replaces_preseeded_tap_key_sig() {
+    assert_preseeded_sigs_are_replaced(get_test_tr_single_sig(), |input, signed| {
+        assert!(signed.tap_key_sig.is_some());
+        input.tap_key_sig = Some(invalid_schnorr_sig());
+    });
+}
+
+#[test]
+fn test_sign_replaces_preseeded_tap_script_sigs() {
+    assert_preseeded_sigs_are_replaced(get_test_tr_with_taptree_both_priv(), |input, signed| {
+        assert!(!signed.tap_script_sigs.is_empty());
+        for key in signed.tap_script_sigs.keys() {
+            input.tap_script_sigs.insert(*key, invalid_schnorr_sig());
+        }
+    });
+}
+
 #[test]
 fn test_sign_nonstandard_sighash() {
     let sighash = EcdsaSighashType::NonePlusAnyoneCanPay;
