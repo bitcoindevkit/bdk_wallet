@@ -134,6 +134,7 @@
 //! If you need to preserve the exact original descriptor format, store it separately
 //! rather than relying on round-trip conversion.
 
+use alloc::collections::BTreeSet;
 use alloc::string::String;
 use alloc::string::ToString;
 use alloc::vec::Vec;
@@ -638,9 +639,20 @@ impl CaravanExport {
     }
 
     /// Import a wallet from Caravan format using proper Descriptor construction
+    ///
+    /// Returns an error if the same extended public key appears more than once.
     pub fn to_descriptors(&self) -> Result<(String, String), &'static str> {
         if self.extended_public_keys.is_empty() {
             return Err("No extended public keys found");
+        }
+
+        // Reject configs that list the same xpub more than once: the resulting
+        // multisig would need fewer distinct keys than its quorum claims.
+        let mut seen = BTreeSet::new();
+        for key in &self.extended_public_keys {
+            if !seen.insert(key.xpub) {
+                return Err("Duplicate extended public keys found");
+            }
         }
 
         // Create DescriptorPublicKey objects for external and internal chains
@@ -840,8 +852,8 @@ mod test {
 
     #[test]
     fn test_caravan_export_p2wsh() {
-        let descriptor = "wsh(sortedmulti(2,[119dbcab/48h/0h/0h/2h]xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhgbmJbZRkrgZw4koxb5JaHWkY4ALHY2grBGRjaDMzQLcgJvLJuZZvRcEL/0/*,[e650dc93/48h/0h/0h/2h]xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhgbmJbZRkrgZw4koxb5JaHWkY4ALHY2grBGRjaDMzQLcgJvLJuZZvRcEL/0/*))";
-        let change_descriptor = "wsh(sortedmulti(2,[119dbcab/48h/0h/0h/2h]xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhgbmJbZRkrgZw4koxb5JaHWkY4ALHY2grBGRjaDMzQLcgJvLJuZZvRcEL/1/*,[e650dc93/48h/0h/0h/2h]xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhgbmJbZRkrgZw4koxb5JaHWkY4ALHY2grBGRjaDMzQLcgJvLJuZZvRcEL/1/*))";
+        let descriptor = "wsh(sortedmulti(2,[119dbcab/48h/0h/0h/2h]xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhgbmJbZRkrgZw4koxb5JaHWkY4ALHY2grBGRjaDMzQLcgJvLJuZZvRcEL/0/*,[e650dc93/48h/0h/0h/2h]xpub6BzhLAQUDcBUfHRQHZxDF2AbcJqp4Kaeq6bzJpXrjrWuK26ymTFwkEFbxPra2bJ7yeZKbDjfDeFwxe93JMqpo5SsPJH6dZdvV9kMzJkAZ69/0/*))";
+        let change_descriptor = "wsh(sortedmulti(2,[119dbcab/48h/0h/0h/2h]xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhgbmJbZRkrgZw4koxb5JaHWkY4ALHY2grBGRjaDMzQLcgJvLJuZZvRcEL/1/*,[e650dc93/48h/0h/0h/2h]xpub6BzhLAQUDcBUfHRQHZxDF2AbcJqp4Kaeq6bzJpXrjrWuK26ymTFwkEFbxPra2bJ7yeZKbDjfDeFwxe93JMqpo5SsPJH6dZdvV9kMzJkAZ69/1/*))";
         let network = Network::Bitcoin;
 
         let wallet = get_test_wallet(descriptor, change_descriptor, network);
@@ -945,7 +957,7 @@ mod test {
         let json = r#"{
             "name": "Test Wallet",
             "addressType": "P2WSH",
-            "network": "mainnet",
+            "network": "testnet",
             "client": {
                 "type": "public"
             },
@@ -957,19 +969,19 @@ mod test {
                 {
                     "name": "key1",
                     "bip32Path": "m/48'/0'/0'/2'",
-                    "xpub": "xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhgbmJbZRkrgZw4koxb5JaHWkY4ALHY2grBGRjaDMzQLcgJvLJuZZvRcEL",
+                    "xpub": "tpubDCKxNyM3bLgbEX13Mcd8mYxbVg9ajDkWXMh29hMWBurKfVmBfWAM96QVP3zaUcN51HvkZ3ar4VwP82kC8JZhhux8vFQoJintSpVBwpFvyU3",
                     "xfp": "119dbcab"
                 },
                 {
                     "name": "key2",
                     "bip32Path": "m/48'/0'/0'/2'",
-                    "xpub": "xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhgbmJbZRkrgZw4koxb5JaHWkY4ALHY2grBGRjaDMzQLcgJvLJuZZvRcEL",
+                    "xpub": "tpubDDp3ZSH1yCwusRppH7zgSxq2t1VEUyXSeEp8E5aFS8m43MknUjiF1bSLo3CGWAxbDyhF1XowA5ukPzyJZjznYk3kYi6oe7QxtX2euvKWsk4",
                     "xfp": "e650dc93"
                 },
                 {
                     "name": "key3",
                     "bip32Path": "m/48'/0'/0'/2'",
-                    "xpub": "xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhgbmJbZRkrgZw4koxb5JaHWkY4ALHY2grBGRjaDMzQLcgJvLJuZZvRcEL",
+                    "xpub": "tpubDCDi5W4sP6zSnzJeowy8rQDVhBdRARaPhK1axABi8V1661wEPeanpEXj4ZLAUEoikVtoWcyK26TKKJSecSfeKxwHCcRrge9k1ybuiL71z4a",
                     "xfp": "bcc3df08"
                 }
             ],
@@ -1118,5 +1130,34 @@ mod test {
         assert_eq!(key.bip32_path, deserialized.bip32_path);
         assert_eq!(key.xpub.to_string(), deserialized.xpub.to_string());
         assert_eq!(key.xfp, deserialized.xfp);
+    }
+
+    #[test]
+    fn test_caravan_import_rejects_duplicate_xpubs() {
+        let json = r#"{
+           "name": "Test Wallet",
+           "addressType": "P2WSH",
+           "network": "testnet",
+           "client": { "type": "public" },
+           "quorum": { "requiredSigners": 2, "totalSigners": 2 },
+           "extendedPublicKeys": [
+               {
+                   "name": "key1",
+                   "bip32Path": "m/48'/1'/0'/2'",
+                   "xpub": "tpubDCKxNyM3bLgbEX13Mcd8mYxbVg9ajDkWXMh29hMWBurKfVmBfWAM96QVP3zaUcN51HvkZ3ar4VwP82kC8JZhhux8vFQoJintSpVBwpFvyU3",
+                   "xfp": "73756c7f"
+               },
+               {
+                   "name": "key2",
+                   "bip32Path": "m/48'/1'/0'/2'",
+                   "xpub": "tpubDCKxNyM3bLgbEX13Mcd8mYxbVg9ajDkWXMh29hMWBurKfVmBfWAM96QVP3zaUcN51HvkZ3ar4VwP82kC8JZhhux8vFQoJintSpVBwpFvyU3",
+                   "xfp": "73756c7f"
+               }
+           ],
+           "startingAddressIndex": 0
+       }"#;
+
+        let import = CaravanExport::from_str(json).unwrap();
+        assert!(import.to_descriptors().is_err());
     }
 }
