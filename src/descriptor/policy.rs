@@ -43,14 +43,14 @@ use core::fmt;
 
 use bitcoin::{
     PublicKey, Sequence, absolute,
-    bip32::Fingerprint,
+    bip32::{Fingerprint, KeySource, Xpub},
     hashes::{hash160, ripemd160, sha256},
     key::XOnlyPublicKey,
     psbt::{self, Psbt},
-    relative,
+    relative, secp256k1,
 };
 use miniscript::descriptor::{
-    DescriptorPublicKey, ShInner, SinglePub, SinglePubKey, SortedMultiVec, WshInner,
+    DescriptorPublicKey, DescriptorXKey, ShInner, SinglePub, SinglePubKey, SortedMultiVec, WshInner,
 };
 use miniscript::miniscript::limits::{MAX_PUBKEYS_IN_CHECKSIGADD, MAX_PUBKEYS_PER_MULTISIG};
 use miniscript::{
@@ -804,33 +804,45 @@ fn generic_sig_in_psbt<
     // C is for "check", it's a closure we use to *check* if a psbt input contains the signature
     // for a specific key
     C: Fn(&psbt::Input, &SinglePubKey) -> bool,
-    // E is for "extract", it extracts a key from the bip32 derivations found in the psbt input
-    E: Fn(&psbt::Input, Fingerprint) -> Option<SinglePubKey>,
+    // E is for "extract", it finds the key derived from an xpub among the bip32 derivations found
+    // in the psbt input
+    E: Fn(&psbt::Input, &DescriptorXKey<Xpub>) -> Option<SinglePubKey>,
 >(
     psbt: &Psbt,
     key: &DescriptorPublicKey,
-    secp: &SecpCtx,
     check: C,
     extract: E,
 ) -> bool {
+    let check_xpub = |input: &psbt::Input, xpub: &DescriptorXKey<Xpub>| {
+        extract(input, xpub).is_some_and(|pubkey| check(input, &pubkey))
+    };
+
     //TODO check signature validity
     psbt.inputs.iter().all(|input| match key {
         DescriptorPublicKey::Single(SinglePub { key, .. }) => check(input, key),
-        DescriptorPublicKey::XPub(xpub) => {
-            //TODO check actual derivation matches
-            match extract(input, xpub.root_fingerprint(secp)) {
-                Some(pubkey) => check(input, &pubkey),
-                None => false,
-            }
-        }
-        DescriptorPublicKey::MultiXPub(xpub) => {
-            //TODO check actual derivation matches
-            match extract(input, xpub.root_fingerprint(secp)) {
-                Some(pubkey) => check(input, &pubkey),
-                None => false,
-            }
+        DescriptorPublicKey::XPub(xpub) => check_xpub(input, xpub),
+        // A multipath key is satisfied by a signature on any of its paths.
+        DescriptorPublicKey::MultiXPub(_) => {
+            key.clone().into_single_keys().iter().any(
+                |key| matches!(key, DescriptorPublicKey::XPub(xpub) if check_xpub(input, xpub)),
+            )
         }
     })
+}
+
+/// Derives the key that `xpub` has at `key_source`, or returns `None` if `key_source` is not one
+/// of its paths or `xpub` cannot derive it.
+fn derive_at_key_source(
+    xpub: &DescriptorXKey<Xpub>,
+    key_source: &KeySource,
+    secp: &SecpCtx,
+) -> Option<secp256k1::PublicKey> {
+    let prefix = xpub.matches(key_source, secp)?;
+    let path = xpub.derivation_path.extend(&key_source.1[prefix.len()..]);
+    xpub.xkey
+        .derive_pub(secp, &path)
+        .ok()
+        .map(|derived| derived.public_key)
 }
 
 trait SigExt: ScriptContext {
@@ -877,7 +889,6 @@ impl<T: ScriptContext + 'static> SigExt for T {
             generic_sig_in_psbt(
                 psbt,
                 key,
-                secp,
                 |input, pk| {
                     let pk = match pk {
                         SinglePubKey::XOnly(pk) => pk,
@@ -890,11 +901,14 @@ impl<T: ScriptContext + 'static> SigExt for T {
                         input.tap_script_sigs.keys().any(|(sk, _)| sk == pk)
                     }
                 },
-                |input, fing| {
+                |input, xpub| {
                     input
                         .tap_key_origins
                         .iter()
-                        .find(|(_, (_, (f, _)))| f == &fing)
+                        .find(|(pk, (_, key_source))| {
+                            derive_at_key_source(xpub, key_source, secp)
+                                .is_some_and(|derived| &XOnlyPublicKey::from(derived) == *pk)
+                        })
                         .map(|(pk, _)| SinglePubKey::XOnly(*pk))
                 },
             )
@@ -902,16 +916,17 @@ impl<T: ScriptContext + 'static> SigExt for T {
             generic_sig_in_psbt(
                 psbt,
                 key,
-                secp,
                 |input, pk| match pk {
                     SinglePubKey::FullKey(pk) => input.partial_sigs.contains_key(pk),
                     _ => false,
                 },
-                |input, fing| {
+                |input, xpub| {
                     input
                         .bip32_derivation
                         .iter()
-                        .find(|(_, (f, _))| f == &fing)
+                        .find(|(pk, key_source)| {
+                            derive_at_key_source(xpub, key_source, secp).as_ref() == Some(*pk)
+                        })
                         .map(|(pk, _)| SinglePubKey::FullKey(PublicKey::new(*pk)))
                 },
             )
@@ -1847,9 +1862,9 @@ mod test {
 
         let secp = Secp256k1::new();
 
-        let (_, pubkey, _) = setup_keys(ALICE_TPRV_STR, ALICE_BOB_PATH, &secp);
+        let (prvkey, _, _) = setup_keys(ALICE_TPRV_STR, ALICE_BOB_PATH, &secp);
 
-        let desc = descriptor!(tr(pubkey)).unwrap();
+        let desc = descriptor!(tr(prvkey)).unwrap();
         let (wallet_desc, _) = desc
             .into_wallet_descriptor(&secp, NetworkKind::Test)
             .unwrap();
@@ -1890,10 +1905,10 @@ mod test {
 
         let secp = Secp256k1::new();
 
-        let (_, alice_pub, _) = setup_keys(ALICE_TPRV_STR, ALICE_BOB_PATH, &secp);
-        let (_, bob_pub, _) = setup_keys(BOB_TPRV_STR, ALICE_BOB_PATH, &secp);
+        let (alice_prv, _, _) = setup_keys(ALICE_TPRV_STR, ALICE_BOB_PATH, &secp);
+        let (bob_prv, _, _) = setup_keys(BOB_TPRV_STR, ALICE_BOB_PATH, &secp);
 
-        let desc = descriptor!(tr(bob_pub, pk(alice_pub))).unwrap();
+        let desc = descriptor!(tr(bob_prv, pk(alice_prv))).unwrap();
         let (wallet_desc, _) = desc
             .into_wallet_descriptor(&secp, NetworkKind::Test)
             .unwrap();
@@ -1952,5 +1967,128 @@ mod test {
             result,
             vec![vec![0, 1, 2], vec![0, 1, 3], vec![0, 2, 3], vec![1, 2, 3]]
         );
+    }
+
+    /// Returns the satisfied keys of a 2-of-2 whose keys derive from the same xpub, written `TPUB`
+    /// in `desc`. The PSBT lists the keys at `paths`, and has a signature for `paths[signed]` only.
+    fn shared_fingerprint_satisfied_keys(
+        desc: &str,
+        paths: [&str; 2],
+        signed: usize,
+    ) -> Vec<usize> {
+        use bitcoin::secp256k1::{Keypair, Message, SecretKey};
+        use bitcoin::{OutPoint, TapLeafHash, TapSighashType, Transaction, TxIn, ecdsa, taproot};
+        use bitcoin::{hashes::Hash, transaction};
+
+        let secp = Secp256k1::new();
+        let tprv = bip32::Xpriv::from_str(TPRV0_STR).unwrap();
+        let tpub = bip32::Xpub::from_priv(&secp, &tprv);
+        let fingerprint = tpub.fingerprint();
+        let taproot = desc.starts_with("tr(");
+        let desc = desc.replace("TPUB", &tpub.to_string());
+        let desc = Descriptor::<DescriptorPublicKey>::from_str(&desc).unwrap();
+
+        let tx = Transaction {
+            version: transaction::Version::TWO,
+            lock_time: absolute::LockTime::ZERO,
+            input: vec![TxIn {
+                previous_output: OutPoint::null(),
+                ..Default::default()
+            }],
+            output: vec![],
+        };
+        let mut psbt = Psbt::from_unsigned_tx(tx).unwrap();
+        let input = &mut psbt.inputs[0];
+
+        // Signatures are not verified, so any well-formed one will do.
+        let sk = SecretKey::from_slice(&[1; 32]).unwrap();
+        let msg = Message::from_digest([1; 32]);
+        for (i, path) in paths.iter().enumerate() {
+            let path = bip32::DerivationPath::from_str(path).unwrap();
+            let pk = tpub.derive_pub(&secp, &path).unwrap().public_key;
+            if taproot {
+                let pk = XOnlyPublicKey::from(pk);
+                input
+                    .tap_key_origins
+                    .insert(pk, (vec![], (fingerprint, path)));
+                if i == signed {
+                    let sig = taproot::Signature {
+                        signature: secp
+                            .sign_schnorr_no_aux_rand(&msg, &Keypair::from_secret_key(&secp, &sk)),
+                        sighash_type: TapSighashType::Default,
+                    };
+                    let leaf_hash = TapLeafHash::from_byte_array([0; 32]);
+                    input.tap_script_sigs.insert((pk, leaf_hash), sig);
+                }
+            } else {
+                input.bip32_derivation.insert(pk, (fingerprint, path));
+                if i == signed {
+                    let sig = ecdsa::Signature::sighash_all(secp.sign_ecdsa(&msg, &sk));
+                    input.partial_sigs.insert(PublicKey::new(pk), sig);
+                }
+            }
+        }
+
+        let policy = desc
+            .extract_policy(
+                &SignersContainer::default(),
+                BuildSatisfaction::Psbt(&psbt),
+                &secp,
+            )
+            .unwrap()
+            .unwrap();
+        let multi = match policy.item {
+            SatisfiableItem::Thresh { items, .. } if taproot => items[1].clone(),
+            _ => policy,
+        };
+        match multi.satisfaction {
+            Satisfaction::Partial { items, .. } | Satisfaction::PartialComplete { items, .. } => {
+                items
+            }
+            other => panic!("unexpected satisfaction {other:?}"),
+        }
+    }
+
+    // Signing for each key in turn covers both the lower and the higher pubkey.
+    #[test]
+    fn test_extract_satisfaction_shared_fingerprint() {
+        let satisfied: Vec<_> = (0..2)
+            .map(|signed| {
+                shared_fingerprint_satisfied_keys(
+                    "wsh(multi(2,TPUB/0/*,TPUB/1/*))",
+                    ["m/0/0", "m/1/0"],
+                    signed,
+                )
+            })
+            .collect();
+        assert_eq!(satisfied, vec![vec![0], vec![1]]);
+    }
+
+    #[test]
+    fn test_extract_tr_satisfaction_shared_fingerprint() {
+        let satisfied: Vec<_> = (0..2)
+            .map(|signed| {
+                shared_fingerprint_satisfied_keys(
+                    "tr(TPUB/2/*,multi_a(2,TPUB/0/*,TPUB/1/*))",
+                    ["m/0/0", "m/1/0"],
+                    signed,
+                )
+            })
+            .collect();
+        assert_eq!(satisfied, vec![vec![0], vec![1]]);
+    }
+
+    #[test]
+    fn test_extract_satisfaction_shared_fingerprint_multipath() {
+        let satisfied: Vec<_> = (0..2)
+            .map(|signed| {
+                shared_fingerprint_satisfied_keys(
+                    "wsh(multi(2,TPUB/<0;1>/*,TPUB/2/*))",
+                    ["m/1/0", "m/2/0"],
+                    signed,
+                )
+            })
+            .collect();
+        assert_eq!(satisfied, vec![vec![0], vec![1]]);
     }
 }
