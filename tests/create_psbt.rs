@@ -1235,9 +1235,7 @@ fn test_create_psbt_lock_utxos() {
     // Creating a second PSBT should fail with InsufficientFunds because the only UTXO is locked
     let send_to2 = wallet.reveal_next_address(KeychainKind::External).address;
     let mut params2 = PsbtParams::default();
-    params2
-        .add_recipients([(send_to2.script_pubkey(), Amount::from_sat(20_000))]);
+    params2.add_recipients([(send_to2.script_pubkey(), Amount::from_sat(20_000))]);
     let result = wallet.create_psbt(params2);
     assert!(result.is_err());
 }
-

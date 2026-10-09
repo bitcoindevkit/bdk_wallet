@@ -669,7 +669,8 @@ impl<'a, Cs> TxBuilder<'a, Cs> {
         self
     }
 
-    /// Set whether to automatically lock the selected UTXOs (inputs) of the created transaction in the wallet.
+    /// Set whether to automatically lock the selected UTXOs (inputs) of the created transaction in
+    /// the wallet.
     pub fn lock_utxos(&mut self, lock: bool) -> &mut Self {
         self.params.lock_utxos = lock;
         self

@@ -3527,9 +3527,7 @@ fn test_tx_builder_lock_utxos() {
     // Subsequent build should fail with InsufficientFunds
     let send_to2 = wallet.reveal_next_address(KeychainKind::External).address;
     let mut builder2 = wallet.build_tx();
-    builder2
-        .add_recipient(send_to2.script_pubkey(), Amount::from_sat(20_000));
+    builder2.add_recipient(send_to2.script_pubkey(), Amount::from_sat(20_000));
     let result = builder2.finish();
     assert!(result.is_err());
 }
-
