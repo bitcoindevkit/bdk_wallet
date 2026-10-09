@@ -532,7 +532,6 @@ impl InputSigner for SignerWrapper<PrivateKey> {
 
                 if let Some(psbt_internal_key) = psbt.inputs[input_index].tap_internal_key {
                     if is_internal_key
-                        && psbt.inputs[input_index].tap_key_sig.is_none()
                         && sign_options.sign_with_tap_internal_key
                         && x_only_pubkey == psbt_internal_key
                     {
@@ -554,19 +553,11 @@ impl InputSigner for SignerWrapper<PrivateKey> {
                 {
                     let leaf_hashes = leaf_hashes
                         .iter()
-                        .filter(|lh| {
-                            // Removing the leaves we shouldn't sign for
-                            let should_sign = match &sign_options.tap_leaves_options {
-                                TapLeavesOptions::All => true,
-                                TapLeavesOptions::Include(v) => v.contains(lh),
-                                TapLeavesOptions::Exclude(v) => !v.contains(lh),
-                                TapLeavesOptions::None => false,
-                            };
-                            // Filtering out the leaves without our key
-                            should_sign
-                                && !psbt.inputs[input_index]
-                                    .tap_script_sigs
-                                    .contains_key(&(x_only_pubkey, **lh))
+                        .filter(|lh| match &sign_options.tap_leaves_options {
+                            TapLeavesOptions::All => true,
+                            TapLeavesOptions::Include(v) => v.contains(lh),
+                            TapLeavesOptions::Exclude(v) => !v.contains(lh),
+                            TapLeavesOptions::None => false,
                         })
                         .cloned()
                         .collect::<Vec<_>>();
@@ -586,10 +577,6 @@ impl InputSigner for SignerWrapper<PrivateKey> {
                 }
             }
             SignerContext::Segwitv0 | SignerContext::Legacy => {
-                if psbt.inputs[input_index].partial_sigs.contains_key(&pubkey) {
-                    return Ok(());
-                }
-
                 let mut sighasher = sighash::SighashCache::new(psbt.unsigned_tx.clone());
                 let (msg, sighash_type) = psbt
                     .sighash_ecdsa(input_index, &mut sighasher)
