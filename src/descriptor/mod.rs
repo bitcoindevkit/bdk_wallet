@@ -590,8 +590,8 @@ impl DescriptorMeta for ExtendedDescriptor {
 
         let descriptor = self.at_derivation_index(0).expect("0 is not hardened");
         match descriptor.desc_type() {
-            // TODO: add pk() here
-            DescriptorType::Pkh
+            DescriptorType::Bare
+            | DescriptorType::Pkh
             | DescriptorType::Wpkh
             | DescriptorType::ShWpkh
             | DescriptorType::Tr
@@ -600,7 +600,7 @@ impl DescriptorMeta for ExtendedDescriptor {
             {
                 Some(descriptor)
             }
-            DescriptorType::Bare | DescriptorType::Sh | DescriptorType::ShSortedMulti
+            DescriptorType::Sh | DescriptorType::ShSortedMulti
                 if psbt_input.redeem_script.is_some()
                     && &descriptor.explicit_script().unwrap()
                         == psbt_input.redeem_script.as_ref().unwrap() =>
