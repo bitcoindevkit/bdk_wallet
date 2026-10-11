@@ -253,13 +253,15 @@ mod tests {
                 sequence: Sequence::MAX,
                 witness: Witness::default(),
             }],
+            // Wrap to 99 sats (`MAX-100 + 200`). That is still <= the 1_000 sat
+            // input, so `checked_sub` would not catch this without `checked_add`.
             output: vec![
                 TxOut {
-                    value: Amount::from_sat(u64::MAX),
+                    value: Amount::from_sat(u64::MAX - 100),
                     script_pubkey: ScriptBuf::default(),
                 },
                 TxOut {
-                    value: Amount::from_sat(u64::MAX),
+                    value: Amount::from_sat(200),
                     script_pubkey: ScriptBuf::default(),
                 },
             ],
