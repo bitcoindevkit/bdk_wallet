@@ -1511,22 +1511,17 @@ impl Wallet {
             Some(ref drain_recipient) => drain_recipient.clone(),
             None => {
                 let change_keychain = self.map_keychain(KeychainKind::Internal);
-                let (index, spk) = self
+                // Always take the next derivation index. `mark_used` is only an in-memory
+                // reservation and is not part of the persisted `ChangeSet`, so recycling an
+                // unused revealed change address can cause the same change SPK to be reissued
+                // after reload. Advancing via `next_index` ensures `reveal_to_target` stages a
+                // monotonic `last_revealed` update that survives persist (#577).
+                let (index, _) = self
                     .tx_graph
                     .index
-                    .unused_keychain_spks(change_keychain)
-                    .next()
-                    .unwrap_or_else(|| {
-                        let (next_index, _) = self
-                            .tx_graph
-                            .index
-                            .next_index(change_keychain)
-                            .expect("keychain must exist");
-                        let spk = self
-                            .peek_address(change_keychain, next_index)
-                            .script_pubkey();
-                        (next_index, spk)
-                    });
+                    .next_index(change_keychain)
+                    .expect("keychain must exist");
+                let spk = self.peek_address(change_keychain, index).script_pubkey();
                 drain_index = Some((change_keychain, index));
                 spk
             }
