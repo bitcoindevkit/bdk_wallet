@@ -640,10 +640,15 @@ impl CaravanExport {
 
     /// Import a wallet from Caravan format using proper Descriptor construction
     ///
-    /// Returns an error if the same extended public key appears more than once.
+    /// Returns an error if the same extended public key appears more than once, or if
+    /// `quorum.totalSigners` does not match the number of extended public keys.
     pub fn to_descriptors(&self) -> Result<(String, String), &'static str> {
         if self.extended_public_keys.is_empty() {
             return Err("No extended public keys found");
+        }
+
+        if self.quorum.total_signers as usize != self.extended_public_keys.len() {
+            return Err("quorum.totalSigners does not match the number of extended public keys");
         }
 
         // Reject configs that list the same xpub more than once: the resulting
@@ -1159,5 +1164,48 @@ mod test {
 
         let import = CaravanExport::from_str(json).unwrap();
         assert!(import.to_descriptors().is_err());
+    }
+
+    #[test]
+    fn test_caravan_import_rejects_total_signers_mismatch() {
+        let json = r#"{
+            "name": "Test Wallet",
+            "addressType": "P2WSH",
+            "network": "testnet",
+            "client": { "type": "public" },
+            "quorum": { "requiredSigners": 2, "totalSigners": 2 },
+            "extendedPublicKeys": [
+                {
+                    "name": "key1",
+                    "bip32Path": "m/48'/1'/0'/2'",
+                    "xpub": "tpubDCKxNyM3bLgbEX13Mcd8mYxbVg9ajDkWXMh29hMWBurKfVmBfWAM96QVP3zaUcN51HvkZ3ar4VwP82kC8JZhhux8vFQoJintSpVBwpFvyU3",
+                    "xfp": "73756c7f"
+                },
+                {
+                    "name": "key2",
+                    "bip32Path": "m/48'/1'/0'/2'",
+                    "xpub": "tpubDDp3ZSH1yCwusRppH7zgSxq2t1VEUyXSeEp8E5aFS8m43MknUjiF1bSLo3CGWAxbDyhF1XowA5ukPzyJZjznYk3kYi6oe7QxtX2euvKWsk4",
+                    "xfp": "f9f62194"
+                }
+            ],
+            "startingAddressIndex": 0
+        }"#;
+
+        let mut import = CaravanExport::from_str(json).unwrap();
+        assert!(import.to_descriptors().is_ok());
+
+        // Declares more signers than keys provided.
+        import.quorum.total_signers = 3;
+        assert_eq!(
+            import.to_descriptors(),
+            Err("quorum.totalSigners does not match the number of extended public keys")
+        );
+
+        // Declares fewer signers than keys provided.
+        import.quorum.total_signers = 1;
+        assert_eq!(
+            import.to_descriptors(),
+            Err("quorum.totalSigners does not match the number of extended public keys")
+        );
     }
 }
