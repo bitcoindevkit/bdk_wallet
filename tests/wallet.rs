@@ -266,10 +266,10 @@ fn test_create_tx_does_not_panic_for_invalid_chain_tip_height() {
     let mut builder = wallet.build_tx();
     builder.add_recipient(addr.script_pubkey(), Amount::from_sat(25_000));
 
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| builder.finish()));
-    assert!(result.is_ok(), "creating a transaction must not panic");
-    let psbt = result.unwrap().unwrap();
-    assert_eq!(psbt.unsigned_tx.lock_time, absolute::LockTime::ZERO);
+    assert_matches!(
+        builder.finish(),
+        Err(CreateTxError::InvalidChainTipHeight(500_000_000))
+    );
 }
 
 #[test]

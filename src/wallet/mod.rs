@@ -1368,14 +1368,15 @@ impl Wallet {
         // If they didn't tell us the current height, we assume it's the latest sync height.
         // Keep the raw height for coinbase maturity, since not every valid chain height can be
         // represented as a block-based nLockTime.
-        let current_height = params
-            .current_height
-            .map(|height| height.to_consensus_u32())
-            .unwrap_or_else(|| self.chain.tip().height());
-        let current_locktime = params
-            .current_height
-            .or_else(|| absolute::LockTime::from_height(current_height).ok())
-            .unwrap_or(absolute::LockTime::ZERO);
+        let (current_height, current_locktime) = match params.current_height {
+            Some(locktime) => (locktime.to_consensus_u32(), locktime),
+            None => {
+                let height = self.chain.tip().height();
+                let locktime = absolute::LockTime::from_height(height)
+                    .map_err(|_| CreateTxError::InvalidChainTipHeight(height))?;
+                (height, locktime)
+            }
+        };
 
         let lock_time = match params.locktime {
             // When no `nLockTime` is specified, we try to prevent fee sniping, if possible.
