@@ -16,6 +16,22 @@ rust-version = "1.85.0"
 all-features = true
 rustdoc-args = ["--cfg", "docsrs", "--cfg", "bdk_wallet_unstable"]
 
+[package.metadata.rbmt.toolchains]
+nightly = "nightly-2026-04-01"
+stable = "1.96.0"
+
+[package.metadata.rbmt.test]
+# Exclude the all-keys alias and implicit dependency features from automatic discovery.
+# Their functionality is covered by keys-bip39 and file_store.
+exclude_features = ["all-keys", "bip39", "bdk_file_store"]
+# Explicitly test downstream configurations in addition to RBMT's automatic matrix.
+exact_features = [
+    ["std", "keys-bip39"],
+    ["rusqlite", "keys-bip39"],
+    ["rusqlite", "keys-bip39", "compiler"],
+    ["std", "bdk-tx"],
+]
+
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage_nightly)', 'cfg(bdk_wallet_unstable)'] }
 
