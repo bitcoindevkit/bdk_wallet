@@ -59,7 +59,13 @@ use miniscript::{
 };
 use serde::{Serialize, Serializer, ser::SerializeMap};
 
-use crate::collections::{BTreeMap, HashSet, VecDeque};
+// Conditions are partially ordered, so policy sets must remain hash-based without std.
+#[cfg(not(feature = "std"))]
+use hashbrown::HashSet;
+
+#[cfg(feature = "std")]
+use crate::collections::HashSet;
+use crate::collections::{BTreeMap, VecDeque};
 use crate::descriptor::ExtractPolicy;
 use crate::keys::ExtScriptContext;
 use crate::types::IndexOutOfBoundsError;
@@ -1938,6 +1944,85 @@ mod test {
                 condition: Default::default()
             }
         );
+    }
+
+    #[test]
+    fn test_satisfaction_add_unions_conditions() {
+        let [first, second, third] = [100, 200, 500_000_100].map(|value| Condition {
+            timelock: Some(absolute::LockTime::from_consensus(value)),
+            ..Default::default()
+        });
+        let inner = Satisfaction::PartialComplete {
+            n: 2,
+            m: 1,
+            items: vec![0, 1],
+            sorted: None,
+            conditions: BTreeMap::from([
+                (vec![0], [first, second].into_iter().collect()),
+                (vec![1], [first, third].into_iter().collect()),
+            ]),
+        };
+        let mut outer = Satisfaction::Partial {
+            n: 1,
+            m: 1,
+            items: vec![],
+            sorted: None,
+            conditions: BTreeMap::new(),
+        };
+
+        outer.add(&inner, 0).unwrap();
+
+        let Satisfaction::Partial {
+            items, conditions, ..
+        } = outer
+        else {
+            panic!("expected partial satisfaction");
+        };
+        assert_eq!(items, vec![0]);
+        assert_eq!(conditions.len(), 1);
+        assert_eq!(conditions[&0], [first, second, third].into_iter().collect());
+        assert_eq!(first.partial_cmp(&third), None);
+        #[cfg(feature = "std")]
+        let _: &crate::collections::HashSet<Condition> = &conditions[&0];
+    }
+
+    #[test]
+    fn test_satisfaction_finalize_deduplicates_compatible_conditions() {
+        let absolute_conditions = [100, 200, 500_000_100].map(|value| Condition {
+            timelock: Some(absolute::LockTime::from_consensus(value)),
+            ..Default::default()
+        });
+        let relative_conditions = [
+            Sequence::from_height(100),
+            Sequence::from_height(200),
+            Sequence::from_512_second_intervals(100),
+        ]
+        .map(|csv| Condition {
+            csv: Some(csv),
+            ..Default::default()
+        });
+
+        for alternatives in [absolute_conditions, relative_conditions] {
+            let required = alternatives[1];
+            let mut satisfaction = Satisfaction::Partial {
+                n: 2,
+                m: 2,
+                items: vec![0, 1],
+                sorted: None,
+                conditions: BTreeMap::from([
+                    (0, alternatives.into_iter().collect()),
+                    (1, [required].into_iter().collect()),
+                ]),
+            };
+
+            satisfaction.finalize();
+
+            let Satisfaction::PartialComplete { conditions, .. } = satisfaction else {
+                panic!("expected completed partial satisfaction");
+            };
+            assert_eq!(conditions.len(), 1);
+            assert_eq!(conditions[&vec![0, 1]], [required].into_iter().collect());
+        }
     }
 
     #[test]

@@ -48,6 +48,18 @@ hesitate to split it into multiple small, focused PRs.
 
 The Minimum Supported Rust Version is **1.85.0** (enforced by our CI).
 
+Updating MSRV Lockfiles
+-----------------------
+If you add, remove, or bump a dependency in `Cargo.toml`, regenerate the committed lockfiles using `cargo-rbmt`:
+
+```bash
+./ci/install-rbmt.sh
+cargo rbmt toolchains --force
+RUSTFLAGS="--cfg bdk_wallet_unstable" cargo rbmt lock
+```
+
+The cfg is required for the unstable `bdk-tx` API checked during lockfile generation.
+
 Commits should cover both the issue fixed and the solution's rationale.
 These [guidelines](https://chris.beams.io/posts/git-commit/) should be kept in mind. Commit messages follow the ["Conventional Commits 1.0.0"](https://www.conventionalcommits.org/en/v1.0.0/) to make commit histories easier to read by humans and automated tools. All commits must be [GPG signed](https://docs.github.com/en/authentication/managing-commit-signature-verification/signing-commits).
 
@@ -56,6 +68,19 @@ of GitHub's "assignee" field. First check that no one is assigned and then
 comment suggesting that you're working on it. If someone is already assigned,
 don't hesitate to ask if the assigned party or previous commenter are still
 working on it if it has been awhile.
+
+Feature Matrix Testing
+----------------------
+Run `just test` for the stable API tests and the RBMT matrices on stable/recent and MSRV/minimal dependencies. To run only the stable/recent RBMT matrix:
+
+```bash
+CC_thumbv7m_none_eabi=clang \
+RUSTFLAGS="--cfg bdk_wallet_unstable" \
+RUSTDOCFLAGS="--cfg bdk_wallet_unstable" \
+cargo rbmt test --toolchain stable --lockfile recent
+```
+
+RBMT builds and tests all features, no features, individual non-excluded features, and sampled combinations, then checks the embedded `no_std` target. `just test` defaults the embedded target's C compiler to Clang. In `Cargo.toml`, `exact_features` adds guaranteed profiles; `exclude_features` skips automatic discovery without changing the all-features check. The unstable flags are required when testing `bdk-tx`.
 
 Pull Request Checklist
 ----------------------
@@ -118,7 +143,7 @@ Coding Conventions
 ------------------
 
 This codebase uses spaces, not tabs.
-Use `cargo +nightly fmt` to format code before committing.
+Use `cargo rbmt fmt` to format code before committing.
 This is also enforced by the CI.
 All public items must be documented. We adhere to the [Rust API Guidelines](https://rust-lang.github.io/api-guidelines/about.html) with respect to documentation.
 
