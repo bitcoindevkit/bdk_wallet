@@ -22,11 +22,12 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage_nightly)', 'cfg(b
 [dependencies]
 bdk_chain = { version = "0.23.3", features = ["miniscript", "serde"], default-features = false }
 bdk_tx = { version = "0.2.0", default-features = false, optional = true }
-bitcoin = { version = "0.32.8", features = ["serde", "base64"], default-features = false }
-miniscript = { version = "12.3.5", features = ["serde"], default-features = false }
+bitcoin = { version = "0.32.8", features = ["serde"], default-features = false }
+hashbrown = { version = "0.14.5", default-features = false, features = ["ahash", "serde"] }
+miniscript = { version = "12.3.7", features = ["serde", "no-std"], default-features = false } # blame: bdk_tx@0.2.0 requires miniscript >=12.3.7
 rand_core = { version = "0.6.4" }
-serde_json = { version = "1" }
-serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1.0.80", default-features = false, features = ["alloc"] }
+serde = { version = "1.0.219", default-features = false, features = ["derive", "alloc"] }
 
 # Optional dependencies
 bdk_file_store = { version = "0.22.0", optional = true }
@@ -35,17 +36,17 @@ bip39 = { version = "2.2.2", optional = true }
 
 [features]
 default = ["std"]
-std = ["bitcoin/std", "bitcoin/rand-std", "miniscript/std", "bdk_chain/std", "bdk_tx?/std"]
+std = ["bitcoin/std", "bitcoin/rand-std", "bitcoin/base64", "serde/std", "serde_json/std", "miniscript/std", "bdk_chain/std", "bdk_tx?/std"]
 compiler = ["miniscript/compiler"]
 all-keys = ["keys-bip39"]
 keys-bip39 = ["bip39"]
-rusqlite = ["bdk_chain/rusqlite"]
-file_store = ["bdk_file_store"]
+rusqlite = ["std", "bdk_chain/rusqlite"]
+file_store = ["std", "bdk_file_store"]
 bdk-tx = ["dep:bdk_tx"]
 test-utils = ["std"]
 
 [dev-dependencies]
-anyhow = "1"
+anyhow = "1.0.66"
 assert_matches = "1.5.0"
 bdk_bitcoind_rpc = { version = "0.22.0" }
 bdk_electrum = { version = "0.23.2" }
@@ -55,8 +56,14 @@ bdk_wallet = { path = ".", features = ["rusqlite", "file_store", "test-utils"] }
 clap = { version = "4.5.60", features = ["derive", "env"] }
 ctrlc = "3.5.2"
 rand = "0.8"
-tempfile = "3"
+tempfile = "3.26.0"
 tokio = { version = "1.38.1", features = ["rt", "rt-multi-thread", "macros"] }
+
+# Transitive dependency lower bounds for minimal-version testing:
+bincode = { version = "1.3.0" } # blame: bdk_file_store@0.22.0 -> bincode (Options::with_varint_encoding)
+bitcoin-units = { version = "0.1.3" } # blame: bitcoin@0.32.8 -> bitcoin-units
+thiserror = { version = "1.0.56" } # blame: bdk_esplora@0.22.1 -> esplora-client -> reqwest -> tokio-socks (#[from] derives)
+native-tls = { version = "0.2.13" } # blame: bdk_esplora@0.22.1 -> esplora-client -> reqwest -> native-tls
 
 [[example]]
 name = "mnemonic_to_descriptors"
