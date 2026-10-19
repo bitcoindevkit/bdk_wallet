@@ -326,6 +326,24 @@ impl<T: InputSigner> TransactionSigner for T {
         sign_options: &SignOptions,
         secp: &SecpCtx,
     ) -> Result<(), SignerError> {
+        if !sign_options.trust_witness_utxo {
+            let all_inputs_p2tr = psbt
+                .inputs
+                .iter()
+                .zip(psbt.unsigned_tx.input.iter())
+                .all(|(inp, txin)| {
+                    validated_non_witness_prevout(inp, txin.previous_output)
+                        .or(inp.witness_utxo.as_ref())
+                        .is_some_and(|txout| txout.script_pubkey.is_p2tr())
+                });
+            if !all_inputs_p2tr {
+                for (_input_index, input) in psbt.inputs.iter().enumerate() {
+                    if input.non_witness_utxo.is_none() && input.witness_utxo.is_some() {
+                        return Err(SignerError::MissingNonWitnessUtxo);
+                    }
+                }
+            }
+        }
         for input_index in 0..psbt.inputs.len() {
             self.sign_input(psbt, input_index, sign_options, secp)?;
         }

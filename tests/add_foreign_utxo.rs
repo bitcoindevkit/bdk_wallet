@@ -330,3 +330,43 @@ fn test_add_foreign_utxo_rejects_wrong_non_witness_utxo_even_with_witness_utxo()
         "should reject non_witness_utxo with wrong txid even when witness_utxo is present"
     );
 }
+
+#[test]
+fn test_direct_signer_enforces_trust_witness_utxo() {
+    use bitcoin::TxIn;
+
+    // wallet1 is the spending wallet; built WITHOUT only_witness_utxo so its own input keeps
+    // non_witness_utxo. wallet2 only supplies a foreign utxo.
+    let (desc, change_desc) = get_test_wpkh_and_change_desc();
+    let (mut wallet1, _) = get_funded_wallet(desc, change_desc);
+    let (wallet2, _) = get_funded_wallet_single("wpkh(cVbZ8ovhye9AoAHFsqobCf7LxbXDAECy9Kb8TZdfsDYMZGBUyCnm)");
+
+    let foreign = wallet2.list_unspent().next().expect("wallet2 utxo");
+    let addr = Address::from_str("2N1Ffz3WaNzbeLFBb51xyFMHYSEUXcbiSoX").unwrap().assume_checked();
+
+    let mut builder = wallet1.build_tx();
+    builder.add_recipient(addr.script_pubkey(), Amount::from_sat(10_000));
+    let mut psbt = builder.finish().unwrap();
+
+    // Append a second input with ONLY witness_utxo that wallet1 does not own.
+    // sign_with_signers whole-PSBT guard would reject this; the direct path doesn't
+    psbt.unsigned_tx.input.push(TxIn {
+        previous_output: foreign.outpoint,
+        ..Default::default()
+    });
+    psbt.inputs.push(psbt::Input {
+        witness_utxo: Some(foreign.txout.clone()),
+        ..Default::default()
+    });
+
+    // DIRECT signer path (NOT Wallet::sign) under default options (trust_witness_utxo = false).
+    let signers = signers_from_descriptor(&wallet1, desc);
+    let signer = signers.signers()[0];
+    let result = signer.sign_transaction(&mut psbt, &SignOptions::default(),
+        wallet1.secp_ctx());
+
+    assert!(
+        matches!(result, Err(bdk_wallet::signer::SignerError::MissingNonWitnessUtxo)),
+        "direct signer should enforce the whole-PSBT trust_witness_utxo check; got {result:?}"
+    );
+}
