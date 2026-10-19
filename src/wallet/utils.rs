@@ -11,11 +11,8 @@
 
 use alloc::sync::Arc;
 use bitcoin::secp256k1::{All, Secp256k1};
-use bitcoin::{
-    Amount, FeeRate, Script, Sequence, SignedAmount, Transaction, Txid, absolute, relative,
-};
+use bitcoin::{Amount, FeeRate, Script, Sequence, SignedAmount, Transaction, Txid};
 use chain::{ChainPosition, ConfirmationBlockTime};
-use miniscript::{MiniscriptKey, Satisfier, ToPublicKey};
 
 use rand_core::RngCore;
 
@@ -41,20 +38,6 @@ impl IsDust for u64 {
     }
 }
 
-pub struct After {
-    pub current_height: Option<u32>,
-    pub assume_height_reached: bool,
-}
-
-impl After {
-    pub(crate) fn new(current_height: Option<u32>, assume_height_reached: bool) -> After {
-        After {
-            current_height,
-            assume_height_reached,
-        }
-    }
-}
-
 pub(crate) fn check_nsequence_rbf(sequence: Sequence, csv: Sequence) -> bool {
     // The nSequence value must enable relative timelocks
     if !sequence.is_relative_lock_time() {
@@ -73,52 +56,6 @@ pub(crate) fn check_nsequence_rbf(sequence: Sequence, csv: Sequence) -> bool {
     }
 
     true
-}
-
-impl<Pk: MiniscriptKey + ToPublicKey> Satisfier<Pk> for After {
-    fn check_after(&self, n: absolute::LockTime) -> bool {
-        if let Some(current_height) = self.current_height {
-            current_height >= n.to_consensus_u32()
-        } else {
-            self.assume_height_reached
-        }
-    }
-}
-
-pub struct Older {
-    pub current_height: Option<u32>,
-    pub create_height: Option<u32>,
-    pub assume_height_reached: bool,
-}
-
-impl Older {
-    pub(crate) fn new(
-        current_height: Option<u32>,
-        create_height: Option<u32>,
-        assume_height_reached: bool,
-    ) -> Older {
-        Older {
-            current_height,
-            create_height,
-            assume_height_reached,
-        }
-    }
-}
-
-impl<Pk: MiniscriptKey + ToPublicKey> Satisfier<Pk> for Older {
-    fn check_older(&self, n: relative::LockTime) -> bool {
-        if let Some(current_height) = self.current_height {
-            // TODO: test >= / >
-            current_height
-                >= self
-                    .create_height
-                    .unwrap_or(0)
-                    .checked_add(n.to_consensus_u32())
-                    .expect("Overflowing addition")
-        } else {
-            self.assume_height_reached
-        }
-    }
 }
 
 // The Knuth shuffling algorithm based on the original [Fisher-Yates method](https://en.wikipedia.org/wiki/Fisher%E2%80%93Yates_shuffle)
