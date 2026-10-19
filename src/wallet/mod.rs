@@ -1649,7 +1649,7 @@ impl Wallet {
     /// let tx = psbt.clone().extract_tx().expect("tx");
     /// // broadcast tx but it's taking too long to confirm so we want to bump the fee
     /// let mut psbt =  {
-    ///     let mut builder = wallet.build_fee_bump(tx.compute_txid())?;
+    ///     let mut builder = wallet.build_fee_bump([tx.compute_txid()])?;
     ///     builder
     ///         .fee_rate(FeeRate::from_sat_per_vb(5).expect("valid feerate"));
     ///     builder.finish()?
@@ -1661,11 +1661,16 @@ impl Wallet {
     /// // broadcast fee_bumped_tx to replace original
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    // TODO: support for merging multiple transactions while bumping the fees
     pub fn build_fee_bump(
         &mut self,
-        txid: Txid,
+        txids: impl IntoIterator<Item = Txid>,
     ) -> Result<TxBuilder<'_, DefaultCoinSelectionAlgorithm>, BuildFeeBumpError> {
+        let txids: Vec<Txid> = txids.into_iter().collect();
+        
+        if txids.is_empty() {
+            return Err(BuildFeeBumpError::NoTransactionsProvided)
+        }
+
         let tx_graph = self.tx_graph.graph();
         let txout_index = &self.tx_graph.index;
         let chain_tip = self.chain.tip().block_id();
@@ -1674,6 +1679,13 @@ impl Wallet {
             .map(|canon_tx| (canon_tx.tx_node.txid, canon_tx.chain_position))
             .collect();
 
+        let mut all_utxos: Vec<WeightedUtxo> = Vec::new();
+    let mut all_recipients: Vec<(ScriptBuf, Amount)> = Vec::new();
+    let mut total_fee = Amount::ZERO;
+    let mut highest_fee_rate = FeeRate::ZERO;
+    let mut tx_version = None;
+
+    for txid in txids {
         let mut tx = tx_graph
             .get_tx(txid)
             .ok_or(BuildFeeBumpError::TransactionNotFound(txid))?
@@ -1703,7 +1715,15 @@ impl Wallet {
             .map_err(|_| BuildFeeBumpError::FeeRateUnavailable)?;
         let fee_rate = fee / tx.weight();
 
-        // Remove the inputs from the tx and process them.
+        total_fee += fee;
+        if fee_rate > highest_fee_rate {
+            highest_fee_rate = fee_rate;
+        }
+
+        if tx_version.is_none() {
+            tx_version = Some(tx.version);
+        }
+
         let utxos: Vec<WeightedUtxo> = tx
             .input
             .drain(..)
@@ -1737,7 +1757,8 @@ impl Wallet {
                     }
                     None => Ok(WeightedUtxo {
                         satisfaction_weight: Weight::from_wu_usize(
-                            serialize(&txin.script_sig).len() * 4 + serialize(&txin.witness).len(),
+                            serialize(&txin.script_sig).len() * 4
+                                + serialize(&txin.witness).len(),
                         ),
                         utxo: Utxo::Foreign {
                             outpoint,
@@ -1758,6 +1779,8 @@ impl Wallet {
             })
             .collect::<Result<_, _>>()?;
 
+        all_utxos.extend(utxos);
+
         if tx.output.len() > 1 {
             let mut change_index = None;
             for (index, txout) in tx.output.iter().enumerate() {
@@ -1769,32 +1792,34 @@ impl Wallet {
                     _ => {}
                 }
             }
-
             if let Some(change_index) = change_index {
                 tx.output.remove(change_index);
             }
         }
 
-        let params = TxParams {
-            version: Some(tx.version),
-            recipients: tx
-                .output
+        all_recipients.extend(
+            tx.output
                 .into_iter()
-                .map(|txout| (txout.script_pubkey, txout.value))
-                .collect(),
-            utxos,
-            bumping_fee: Some(tx_builder::PreviousFee {
-                absolute: fee,
-                rate: fee_rate,
-            }),
-            ..Default::default()
-        };
+                .map(|txout| (txout.script_pubkey, txout.value)),
+        );
+    }
 
-        Ok(TxBuilder {
-            wallet: self,
-            params,
-            coin_selection: DefaultCoinSelectionAlgorithm::default(),
-        })
+    let params = TxParams {
+        version: tx_version,
+        recipients: all_recipients,
+        utxos: all_utxos,
+        bumping_fee: Some(tx_builder::PreviousFee {
+            absolute: total_fee,
+            rate: highest_fee_rate,
+        }),
+        ..Default::default()
+    };
+
+    Ok(TxBuilder {
+        wallet: self,
+        params,
+        coin_selection: DefaultCoinSelectionAlgorithm::default(),
+    })
     }
 
     /// Sign a transaction with all the wallet's signers, in the order specified by every signer's
