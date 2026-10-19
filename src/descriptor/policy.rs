@@ -64,7 +64,7 @@ use crate::descriptor::ExtractPolicy;
 use crate::keys::ExtScriptContext;
 use crate::types::IndexOutOfBoundsError;
 use crate::wallet::signer::{SignerId, SignersContainer};
-use crate::wallet::utils::{After, Older, SecpCtx};
+use crate::wallet::utils::SecpCtx;
 
 use super::XKeyUtils;
 use super::checksum::calc_checksum;
@@ -950,9 +950,8 @@ impl<Ctx: ScriptContext + 'static> ExtractPolicy for Miniscript<DescriptorPublic
                     ..
                 } = build_sat
                 {
-                    let after = After::new(Some(current_height), false);
-                    let after_sat =
-                        Satisfier::<bitcoin::PublicKey>::check_after(&after, (*value).into());
+                    let after_sat = absolute::LockTime::from_height(current_height)
+                        .is_ok_and(|tip| absolute::LockTime::from(*value).is_implied_by(tip));
                     let inputs_sat = psbt_inputs_sat(psbt).all(|sat| {
                         Satisfier::<bitcoin::PublicKey>::check_after(&sat, (*value).into())
                     });
@@ -980,9 +979,11 @@ impl<Ctx: ScriptContext + 'static> ExtractPolicy for Miniscript<DescriptorPublic
                     psbt,
                 } = build_sat
                 {
-                    let older = Older::new(Some(current_height), Some(input_max_height), false);
-                    let older_sat =
-                        Satisfier::<bitcoin::PublicKey>::check_older(&older, (*value).into());
+                    let elapsed = current_height.saturating_sub(input_max_height);
+                    let older_sat = match relative::LockTime::from(*value) {
+                        relative::LockTime::Blocks(n) => elapsed >= u32::from(n.value()),
+                        relative::LockTime::Time(_) => false,
+                    };
                     let inputs_sat = psbt_inputs_sat(psbt).all(|sat| {
                         Satisfier::<bitcoin::PublicKey>::check_older(&sat, (*value).into())
                     });
@@ -1732,6 +1733,21 @@ mod test {
              && items == &vec![0]
         );
         //println!("{}", serde_json::to_string(&policy_expired).unwrap());
+
+        // An input height at or above the current height leaves `older` unsatisfied, without
+        // overflowing at the `u32` limit
+        for (current_height, input_max_height) in [(10, 12), (u32::MAX, u32::MAX)] {
+            let build_sat = BuildSatisfaction::PsbtTimelocks {
+                psbt: &psbt,
+                current_height,
+                input_max_height,
+            };
+            let policy = wallet_desc
+                .extract_policy(&signers_container, build_sat, &secp)
+                .unwrap()
+                .unwrap();
+            assert_matches!(&policy.satisfaction, Satisfaction::Partial { items, .. } if items.is_empty());
+        }
 
         let psbt_signed = Psbt::from_str(PSBT_POLICY_CONSIDER_TIMELOCK_EXPIRED_SIGNED).unwrap();
 
