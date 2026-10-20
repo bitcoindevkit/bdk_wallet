@@ -3697,3 +3697,162 @@ fn test_create_and_spend_from_truc_tx() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+/// A PSBT whose `nLockTime` does not satisfy the descriptor's `after` condition must not be
+/// finalized, even if the tip is past the lock height.
+#[test]
+fn test_finalize_psbt_requires_locktime_for_cltv() {
+    let (mut wallet, _) = get_funded_wallet_single(get_test_single_sig_cltv());
+    let signer = KeyMapWrapper::from(keymap_from_descriptor(&wallet, get_test_single_sig_cltv()));
+
+    let block = BlockId {
+        height: 100_000,
+        hash: BlockHash::all_zeros(),
+    };
+    insert_checkpoint(&mut wallet, block);
+
+    let addr = wallet.next_unused_address(KeychainKind::External);
+    let mut builder = wallet.build_tx();
+    builder.add_recipient(addr.script_pubkey(), Amount::from_sat(25_000));
+    let mut psbt = builder.finish().unwrap();
+
+    assert_eq!(psbt.unsigned_tx.lock_time.to_consensus_u32(), 100_000);
+
+    let mut valid_psbt = psbt.clone();
+    valid_psbt.sign(&signer, wallet.secp_ctx()).unwrap();
+    let finalized = wallet
+        .finalize_psbt(&mut valid_psbt, SignOptions::default())
+        .unwrap();
+
+    assert!(finalized);
+
+    psbt.unsigned_tx.lock_time = absolute::LockTime::ZERO;
+
+    psbt.sign(&signer, wallet.secp_ctx()).unwrap();
+    let finalized = wallet
+        .finalize_psbt(&mut psbt, SignOptions::default())
+        .unwrap();
+
+    assert!(!finalized);
+}
+
+/// A PSBT whose `nSequence` does not satisfy the descriptor's `older` condition must not be
+/// finalized, even if the input has enough confirmations.
+#[test]
+fn test_finalize_psbt_requires_sequence_for_csv() {
+    let (mut wallet, _) = get_funded_wallet_single(get_test_single_sig_csv());
+    let signer = KeyMapWrapper::from(keymap_from_descriptor(&wallet, get_test_single_sig_csv()));
+
+    let block = BlockId {
+        height: 2_006,
+        hash: BlockHash::all_zeros(),
+    };
+    insert_checkpoint(&mut wallet, block);
+
+    let addr = wallet.next_unused_address(KeychainKind::External);
+    let mut builder = wallet.build_tx();
+    builder.add_recipient(addr.script_pubkey(), Amount::from_sat(25_000));
+    let mut psbt = builder.finish().unwrap();
+
+    assert_eq!(psbt.unsigned_tx.input[0].sequence, Sequence(6));
+
+    let mut valid_psbt = psbt.clone();
+    valid_psbt.sign(&signer, wallet.secp_ctx()).unwrap();
+    let finalized = wallet
+        .finalize_psbt(&mut valid_psbt, SignOptions::default())
+        .unwrap();
+
+    assert!(finalized);
+
+    psbt.unsigned_tx.input[0].sequence = Sequence::MAX;
+
+    psbt.sign(&signer, wallet.secp_ctx()).unwrap();
+    let finalized = wallet
+        .finalize_psbt(&mut psbt, SignOptions::default())
+        .unwrap();
+
+    assert!(!finalized);
+}
+
+/// Finalizing a spend of an unconfirmed UTXO must not panic when the descriptor has an unused
+/// `older` branch.
+#[test]
+fn test_finalize_psbt_unconfirmed_tx_with_older_branch() {
+    // `wsh(or_d(pk(A),and_v(v:pk(B),older(144))))`, spent through the `pk(A)` branch.
+    let mut wallet = Wallet::create_single(get_test_a_or_b_plus_csv())
+        .network(Network::Regtest)
+        .create_wallet_no_persist()
+        .unwrap();
+    let addr = wallet.next_unused_address(KeychainKind::External);
+
+    let funding_tx = Transaction {
+        output: vec![TxOut {
+            value: Amount::from_sat(50_000),
+            script_pubkey: addr.script_pubkey(),
+        }],
+        ..new_tx(0)
+    };
+    insert_tx(&mut wallet, funding_tx);
+
+    let policy = wallet
+        .public_descriptor(KeychainKind::External)
+        .extract_policy(
+            &SignersContainer::default(),
+            BuildSatisfaction::None,
+            wallet.secp_ctx(),
+        )
+        .unwrap()
+        .unwrap();
+    let path = [(policy.id.clone(), vec![0])].into_iter().collect();
+    let condition = policy.get_condition(&path).unwrap();
+
+    let mut builder = wallet.build_tx();
+    builder
+        .add_recipient(addr.script_pubkey(), Amount::from_sat(10_000))
+        .set_condition(condition);
+    let mut psbt = builder.finish().unwrap();
+
+    let finalized = wallet
+        .finalize_psbt(&mut psbt, SignOptions::default())
+        .unwrap();
+
+    assert!(!finalized, "an unsigned PSBT cannot be finalized");
+}
+
+/// `extract_policy` with `PsbtTimelocks` treats `after` and `older` as satisfied from their lock
+/// height on.
+#[test]
+fn test_extract_policy_timelock_boundaries() {
+    use bdk_wallet::descriptor::policy::Satisfaction;
+
+    // Satisfied items of `and_v(v:pk(..),<timelock>)`, where the timelock is item 1.
+    let satisfied_items = |descriptor: &str, current_height: u32| {
+        let (mut wallet, _) = get_funded_wallet_single(descriptor);
+        let addr = wallet.next_unused_address(KeychainKind::External);
+        let mut builder = wallet.build_tx();
+        builder.add_recipient(addr.script_pubkey(), Amount::from_sat(25_000));
+        let psbt = builder.finish().unwrap();
+        let build_sat = BuildSatisfaction::PsbtTimelocks {
+            psbt: &psbt,
+            current_height,
+            input_max_height: 2_000,
+        };
+        let policy = wallet
+            .public_descriptor(KeychainKind::External)
+            .extract_policy(&SignersContainer::default(), build_sat, wallet.secp_ctx())
+            .unwrap()
+            .unwrap();
+        match policy.satisfaction {
+            Satisfaction::Partial { items, .. } => items,
+            other => panic!("unexpected satisfaction {other:?}"),
+        }
+    };
+
+    assert!(satisfied_items(get_test_single_sig_csv(), 2_005).is_empty());
+    assert_eq!(satisfied_items(get_test_single_sig_csv(), 2_006), vec![1]);
+    assert!(satisfied_items(get_test_single_sig_cltv(), 99_999).is_empty());
+    assert_eq!(
+        satisfied_items(get_test_single_sig_cltv(), 100_000),
+        vec![1]
+    );
+}
