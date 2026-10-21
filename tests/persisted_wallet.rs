@@ -578,3 +578,117 @@ fn test_lock_outpoint_persist() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+/// Wraps the SQLite persister to force two [`PersistedWallet::create`] calls on the same database
+/// to interleave: both `initialize`s complete (and observe an empty store) before either writes its
+/// initial changeset.
+///
+/// [`PersistedWallet::create`]: bdk_wallet::PersistedWallet::create
+struct RacingConnection {
+    conn: bdk_chain::rusqlite::Connection,
+    initialized: std::sync::Arc<std::sync::Barrier>,
+}
+
+impl WalletPersister for RacingConnection {
+    type Error = bdk_chain::rusqlite::Error;
+
+    fn initialize(persister: &mut Self) -> Result<ChangeSet, Self::Error> {
+        let changeset =
+            <bdk_chain::rusqlite::Connection as WalletPersister>::initialize(&mut persister.conn)?;
+        persister.initialized.wait();
+        Ok(changeset)
+    }
+
+    fn persist(persister: &mut Self, changeset: &ChangeSet) -> Result<(), Self::Error> {
+        <bdk_chain::rusqlite::Connection as WalletPersister>::persist(
+            &mut persister.conn,
+            changeset,
+        )
+    }
+
+    fn persist_if_empty(
+        persister: &mut Self,
+        changeset: &ChangeSet,
+    ) -> Result<Option<ChangeSet>, Self::Error> {
+        <bdk_chain::rusqlite::Connection as WalletPersister>::persist_if_empty(
+            &mut persister.conn,
+            changeset,
+        )
+    }
+}
+
+/// Runs two concurrent `create` calls with the given descriptors and networks on the same SQLite
+/// database and checks that exactly one succeeds and that the database matches the winner.
+fn check_concurrent_create(
+    (first_desc, first_network): (&'static str, Network),
+    (second_desc, second_network): (&'static str, Network),
+) {
+    use bdk_wallet::CreateWithPersistError;
+    use std::sync::{Arc, Barrier};
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let db_path = temp_dir.path().join("wallet.db");
+
+    let initialized = Arc::new(Barrier::new(2));
+    let spawn_create = |desc: &'static str, network: Network| {
+        let mut persister = RacingConnection {
+            conn: bdk_chain::rusqlite::Connection::open(&db_path).unwrap(),
+            initialized: initialized.clone(),
+        };
+        std::thread::spawn(move || {
+            Wallet::create_single(desc)
+                .network(network)
+                .create_wallet(&mut persister)
+                .map(|wallet| {
+                    (
+                        wallet.public_descriptor(KeychainKind::External).clone(),
+                        wallet.network(),
+                        wallet.local_chain().genesis_hash(),
+                    )
+                })
+        })
+    };
+    let first = spawn_create(first_desc, first_network);
+    let second = spawn_create(second_desc, second_network);
+    let results = [first.join().unwrap(), second.join().unwrap()];
+
+    let winner = match results {
+        [Ok(winner), Err(err)] | [Err(err), Ok(winner)] => {
+            assert_matches!(err, CreateWithPersistError::DataAlreadyExists(_));
+            winner
+        }
+        [Ok(_), Ok(_)] => panic!("both concurrent `create` calls succeeded"),
+        [Err(a), Err(b)] => panic!("both concurrent `create` calls failed: {a}, {b}"),
+    };
+
+    let mut conn = bdk_chain::rusqlite::Connection::open(&db_path).unwrap();
+    let loaded = Wallet::load()
+        .load_wallet(&mut conn)
+        .unwrap()
+        .expect("wallet must exist");
+    assert_eq!(
+        (
+            loaded.public_descriptor(KeychainKind::External).clone(),
+            loaded.network(),
+            loaded.local_chain().genesis_hash(),
+        ),
+        winner,
+        "persisted wallet must match the wallet returned by the successful `create`"
+    );
+}
+
+#[test]
+fn concurrent_create_on_same_store_only_one_succeeds() {
+    check_concurrent_create(
+        (get_test_tr_single_sig_xprv(), Network::Testnet),
+        (get_test_wpkh(), Network::Testnet),
+    );
+}
+
+#[test]
+fn concurrent_create_with_different_networks_does_not_corrupt_store() {
+    check_concurrent_create(
+        (get_test_tr_single_sig_xprv(), Network::Testnet),
+        (get_test_wpkh(), Network::Signet),
+    );
+}
