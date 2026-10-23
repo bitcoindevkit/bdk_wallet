@@ -651,11 +651,12 @@ impl CaravanExport {
             return Err("quorum.totalSigners does not match the number of extended public keys");
         }
 
-        // Reject configs that list the same xpub more than once: the resulting
-        // multisig would need fewer distinct keys than its quorum claims.
+        // Reject configs that list the same key material more than once. Only the
+        // public key and chain code affect derivation, so xpubs that differ only in
+        // metadata (depth, parent fingerprint, child number, network) are the same key.
         let mut seen = BTreeSet::new();
         for key in &self.extended_public_keys {
-            if !seen.insert(key.xpub) {
+            if !seen.insert((key.xpub.public_key, key.xpub.chain_code)) {
                 return Err("Duplicate extended public keys found");
             }
         }
@@ -1163,7 +1164,10 @@ mod test {
        }"#;
 
         let import = CaravanExport::from_str(json).unwrap();
-        assert!(import.to_descriptors().is_err());
+        assert_eq!(
+            import.to_descriptors(),
+            Err("Duplicate extended public keys found")
+        );
     }
 
     #[test]
@@ -1206,6 +1210,92 @@ mod test {
         assert_eq!(
             import.to_descriptors(),
             Err("quorum.totalSigners does not match the number of extended public keys")
+        );
+    }
+
+    /// A valid 2-of-2 import with two distinct keys.
+    fn two_signer_import() -> CaravanExport {
+        let json = r#"{
+            "name": "Test Wallet",
+            "addressType": "P2WSH",
+            "network": "testnet",
+            "client": { "type": "public" },
+            "quorum": { "requiredSigners": 2, "totalSigners": 2 },
+            "extendedPublicKeys": [
+                {
+                    "name": "key1",
+                    "bip32Path": "m/48'/1'/0'/2'",
+                    "xpub": "tpubDCKxNyM3bLgbEX13Mcd8mYxbVg9ajDkWXMh29hMWBurKfVmBfWAM96QVP3zaUcN51HvkZ3ar4VwP82kC8JZhhux8vFQoJintSpVBwpFvyU3",
+                    "xfp": "73756c7f"
+                },
+                {
+                    "name": "key2",
+                    "bip32Path": "m/48'/1'/0'/2'",
+                    "xpub": "tpubDDp3ZSH1yCwusRppH7zgSxq2t1VEUyXSeEp8E5aFS8m43MknUjiF1bSLo3CGWAxbDyhF1XowA5ukPzyJZjznYk3kYi6oe7QxtX2euvKWsk4",
+                    "xfp": "f9f62194"
+                }
+            ],
+            "startingAddressIndex": 0
+        }"#;
+        CaravanExport::from_str(json).unwrap()
+    }
+
+    #[test]
+    fn test_caravan_import_rejects_same_key_material_with_different_metadata() {
+        let original = two_signer_import().extended_public_keys[0].xpub;
+
+        let mut different_depth = original;
+        different_depth.depth = original.depth.wrapping_add(1);
+
+        let mut different_child_number = original;
+        different_child_number.child_number =
+            bitcoin::bip32::ChildNumber::from_normal_idx(7).unwrap();
+
+        let mut different_parent = original;
+        different_parent.parent_fingerprint = Fingerprint::from([1, 2, 3, 4]);
+
+        let mut different_network = original;
+        different_network.network = NetworkKind::Main;
+
+        for variant in [
+            different_depth,
+            different_child_number,
+            different_parent,
+            different_network,
+        ] {
+            let mut import = two_signer_import();
+            import.extended_public_keys[1].xpub = variant;
+            // Different origin information too.
+            import.extended_public_keys[1].xfp = Fingerprint::from([0xde, 0xad, 0xbe, 0xef]);
+            import.extended_public_keys[1].bip32_path =
+                DerivationPath::from_str("m/48'/1'/1'/2'").unwrap();
+
+            assert_eq!(
+                import.to_descriptors(),
+                Err("Duplicate extended public keys found")
+            );
+        }
+    }
+
+    #[test]
+    fn test_caravan_import_allows_keys_sharing_only_pubkey_or_chain_code() {
+        let base = two_signer_import();
+        let first = base.extended_public_keys[0].xpub;
+
+        // Same public key, different chain code: derives different children.
+        let mut import = two_signer_import();
+        import.extended_public_keys[1].xpub.public_key = first.public_key;
+        assert_ne!(
+            import.to_descriptors(),
+            Err("Duplicate extended public keys found")
+        );
+
+        // Same chain code, different public key: derives different children.
+        let mut import = two_signer_import();
+        import.extended_public_keys[1].xpub.chain_code = first.chain_code;
+        assert_ne!(
+            import.to_descriptors(),
+            Err("Duplicate extended public keys found")
         );
     }
 }
