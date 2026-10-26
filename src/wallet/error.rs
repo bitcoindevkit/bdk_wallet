@@ -335,8 +335,12 @@ pub enum BuildFeeBumpError {
     TransactionConfirmed(Txid),
     /// Trying to replace a tx that has a sequence >= `0xFFFFFFFE`
     IrreplaceableTransaction(Txid),
-    // No transaction IDs were provided to `build_fee_bump`
+    /// No transaction IDs were provided to `build_fee_bump`
     NoTransactionsProvided,
+    /// One of the provided transactions spends an output of another provided transaction.
+    /// Bumping a parent and its descendant together is not supported because the replacement
+    /// would spend an output that no longer exists once the parent is evicted.
+    TransactionIsDescendant(Txid),
     /// Node doesn't have data to estimate a fee rate
     FeeRateUnavailable,
     /// Input references an invalid output index in the previous transaction
@@ -365,6 +369,13 @@ impl fmt::Display for BuildFeeBumpError {
             },
             Self::NoTransactionsProvided => {
                 write!(f, "No transaction IDs were provided")
+            },
+            Self::TransactionIsDescendant(txid) => {
+                write!(
+                    f,
+                    "Transaction {txid} spends an output of another provided transaction; \
+                     bumping a parent and its descendant together is not supported"
+                )
             },
             Self::FeeRateUnavailable => write!(f, "Fee rate unavailable"),
             Self::InvalidOutputIndex(op) => {

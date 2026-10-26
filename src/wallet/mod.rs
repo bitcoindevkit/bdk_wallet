@@ -1432,7 +1432,12 @@ impl Wallet {
             (Some(sequence), _) => sequence,
         };
 
-        let (fee_rate, mut fee_amount) = match params.fee_policy.unwrap_or_default() {
+        let fee_policy = params.fee_policy.unwrap_or_default();
+        // The absolute-fee floor check after coin selection only applies to the
+        // `FeeRate` path — the `FeeAmount` path already validates against
+        // `previous_fee.absolute` before coin selection runs.
+        let is_fee_rate_policy = matches!(fee_policy, FeePolicy::FeeRate(_));
+        let (fee_rate, mut fee_amount) = match fee_policy {
             //FIXME: see https://github.com/bitcoindevkit/bdk/issues/256
             FeePolicy::FeeAmount(fee) => {
                 if let Some(previous_fee) = params.bumping_fee {
@@ -1542,6 +1547,23 @@ impl Wallet {
                 rng,
             )
             .map_err(CreateTxError::CoinSelection)?;
+
+        // BIP125 Rule 3: the replacement must pay a strictly higher absolute fee than
+        // the sum of the fees of all transactions it replaces. The fee-rate check above
+        // only enforces the rate floor; when bumping multiple transactions the replacement
+        // is usually smaller (in vbytes) than the originals combined, so the absolute fee
+        // can fall below the combined floor even at a higher rate.
+        // This check only applies to the `FeeRate` path — the `FeeAmount` path already
+        // validates the absolute fee before coin selection.
+        if is_fee_rate_policy {
+            if let Some(previous_fee) = params.bumping_fee {
+                if coin_selection.fee_amount <= previous_fee.absolute {
+                    return Err(CreateTxError::FeeTooLow {
+                        required: previous_fee.absolute + Amount::from_sat(1),
+                    });
+                }
+            }
+        }
 
         let excess = &coin_selection.excess;
         tx.input = coin_selection
@@ -1672,6 +1694,23 @@ impl Wallet {
         }
 
         let tx_graph = self.tx_graph.graph();
+
+        // Reject if any provided txid is a descendant of another provided txid.
+        // A replacement cannot spend an output from a transaction it is simultaneously evicting.
+        {
+            let txid_set: HashSet<Txid> = txids.iter().copied().collect();
+            for txid in &txids {
+                let tx = tx_graph
+                    .get_tx(*txid)
+                    .ok_or(BuildFeeBumpError::TransactionNotFound(*txid))?;
+                for txin in &tx.input {
+                    if txid_set.contains(&txin.previous_output.txid) {
+                        return Err(BuildFeeBumpError::TransactionIsDescendant(*txid));
+                    }
+                }
+            }
+        }
+
         let txout_index = &self.tx_graph.index;
         let chain_tip = self.chain.tip().block_id();
         let chain_positions: HashMap<Txid, ChainPosition<_>> = tx_graph
