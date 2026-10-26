@@ -1081,3 +1081,107 @@ fn test_build_fee_bump_multiple_txids_combines_inputs_and_recipients() {
         .collect();
     assert_eq!(recipient_outputs.len(), 2);
 }
+
+
+#[test]
+fn test_build_fee_bump_parent_child_returns_descendant_error() {
+    let (mut wallet, _) = get_funded_wallet_wpkh();
+
+    // Build parent tx spending the wallet's UTXO.
+    let parent_utxo = wallet.list_unspent().next().unwrap().outpoint;
+    let addr = wallet.next_unused_address(KeychainKind::External).address;
+    let mut builder = wallet.build_tx();
+    builder
+        .add_recipient(addr.script_pubkey(), Amount::from_sat(25_000))
+        .fee_rate(FeeRate::from_sat_per_vb_u32(1))
+        .manually_selected_only();
+    builder.add_utxo(parent_utxo).unwrap();
+    let psbt = builder.finish().unwrap();
+    let parent_tx = psbt.extract_tx().unwrap();
+    let parent_txid = parent_tx.compute_txid();
+    insert_tx(&mut wallet, parent_tx);
+
+    // Find an output from the parent tx owned by the wallet.
+    let parent_output = wallet
+        .list_unspent()
+        .find(|u| u.outpoint.txid == parent_txid)
+        .expect("parent tx should have an output owned by the wallet")
+        .outpoint;
+
+    // Build child tx spending the parent's output.
+    let mut builder = wallet.build_tx();
+    builder
+        .add_recipient(addr.script_pubkey(), Amount::from_sat(10_000))
+        .fee_rate(FeeRate::from_sat_per_vb_u32(1))
+        .manually_selected_only();
+    builder.add_utxo(parent_output).unwrap();
+    let psbt = builder.finish().unwrap();
+    let child_tx = psbt.extract_tx().unwrap();
+    let child_txid = child_tx.compute_txid();
+    insert_tx(&mut wallet, child_tx);
+
+    // Bumping parent + child together should return TransactionIsDescendant.
+    let result = wallet.build_fee_bump([parent_txid, child_txid]);
+    assert_matches!(
+        result,
+        Err(bdk_wallet::error::BuildFeeBumpError::TransactionIsDescendant(_))
+    );
+}
+
+#[test]
+fn test_build_fee_bump_multiple_txids_fee_rate_absolute_too_low() {
+    let (mut wallet, _) = get_funded_wallet_wpkh();
+
+    // Get a second UTXO so we can build two independent transactions.
+    receive_output_in_latest_block(&mut wallet, Amount::from_sat(1_000_000));
+
+    let addr = wallet.next_unused_address(KeychainKind::External).address;
+
+    // Build first tx spending one UTXO at a high fee rate.
+    let utxo1 = wallet.list_unspent().next().unwrap().outpoint;
+    let mut builder = wallet.build_tx();
+    builder
+        .add_recipient(addr.script_pubkey(), Amount::from_sat(25_000))
+        .fee_rate(FeeRate::from_sat_per_vb_u32(50))
+        .manually_selected_only();
+    builder.add_utxo(utxo1).unwrap();
+    let psbt1 = builder.finish().unwrap();
+    let tx1 = psbt1.extract_tx().unwrap();
+    let txid1 = tx1.compute_txid();
+    insert_tx(&mut wallet, tx1);
+
+    // Build second tx spending a different UTXO at the same fee rate.
+    let utxo2 = wallet
+        .list_unspent()
+        .filter(|u| u.outpoint != utxo1)
+        .max_by_key(|u| u.txout.value)
+        .unwrap()
+        .outpoint;
+    let mut builder = wallet.build_tx();
+    builder
+        .add_recipient(addr.script_pubkey(), Amount::from_sat(25_000))
+        .fee_rate(FeeRate::from_sat_per_vb_u32(50))
+        .manually_selected_only();
+    builder.add_utxo(utxo2).unwrap();
+    let psbt2 = builder.finish().unwrap();
+    let tx2 = psbt2.extract_tx().unwrap();
+    let txid2 = tx2.compute_txid();
+    insert_tx(&mut wallet, tx2);
+
+    // Bump both at a rate just above the required rate floor.
+    // The originals' actual fee rate (fee / weight) is higher than the requested
+    // 50 sat/vB because the unsigned tx has less weight than the builder estimated.
+    // We use 65 sat/vB to clear the rate floor while keeping the absolute fee below
+    // the combined originals' fees — the replacement is smaller (one tx instead of
+    // two, change outputs removed), so even at a higher rate the absolute fee can
+    // be less than the sum, violating BIP125 Rule 3.
+    let mut bump_builder = wallet.build_fee_bump([txid1, txid2]).unwrap();
+    bump_builder.fee_rate(FeeRate::from_sat_per_vb_u32(65));
+    let result = bump_builder.finish();
+    assert_matches!(
+        result,
+        Err(CreateTxError::FeeTooLow { .. }),
+        "expected FeeTooLow because the replacement's absolute fee is less \
+         than the combined fees of the originals"
+    );
+}
