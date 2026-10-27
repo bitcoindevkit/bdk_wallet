@@ -1555,9 +1555,22 @@ impl Wallet {
         // can fall below the combined floor even at a higher rate.
         // This check only applies to the `FeeRate` path — the `FeeAmount` path already
         // validates the absolute fee before coin selection.
+        //
+        // We compare the replacement's *total* fee (all inputs minus all outputs)
+        // against the combined fee floor, not `coin_selection.fee_amount`, which only
+        // accounts for the selected inputs' share of the fee.
         if is_fee_rate_policy {
             if let Some(previous_fee) = params.bumping_fee {
-                if coin_selection.fee_amount <= previous_fee.absolute {
+                let change_value = match &coin_selection.excess {
+                    Excess::Change { amount, .. } => *amount,
+                    Excess::NoChange { .. } => Amount::ZERO,
+                };
+                let total_fee = coin_selection
+                    .selected_amount()
+                    .checked_sub(outgoing)
+                    .and_then(|v| v.checked_sub(change_value))
+                    .unwrap_or_default();
+                if total_fee <= previous_fee.absolute {
                     return Err(CreateTxError::FeeTooLow {
                         required: previous_fee.absolute + Amount::from_sat(1),
                     });

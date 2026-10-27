@@ -1146,7 +1146,14 @@ fn test_build_fee_bump_multiple_txids_fee_rate_absolute_too_low() {
         .manually_selected_only();
     builder.add_utxo(utxo1).unwrap();
     let psbt1 = builder.finish().unwrap();
-    let tx1 = psbt1.extract_tx().unwrap();
+    let mut tx1 = psbt1.extract_tx().unwrap();
+    // Add fake witness data so tx.weight() matches the builder's estimate.
+    // Without this, the unsigned tx weight is much smaller, inflating the
+    // actual fee rate well above the requested 50 sat/vB.
+    for txin in &mut tx1.input {
+        txin.witness.push([0x00; common::P2WPKH_FAKE_SIG_SIZE]);
+        txin.witness.push([0x00; common::P2WPKH_FAKE_PK_SIZE]);
+    }
     let txid1 = tx1.compute_txid();
     insert_tx(&mut wallet, tx1);
 
@@ -1164,19 +1171,21 @@ fn test_build_fee_bump_multiple_txids_fee_rate_absolute_too_low() {
         .manually_selected_only();
     builder.add_utxo(utxo2).unwrap();
     let psbt2 = builder.finish().unwrap();
-    let tx2 = psbt2.extract_tx().unwrap();
+    let mut tx2 = psbt2.extract_tx().unwrap();
+    for txin in &mut tx2.input {
+        txin.witness.push([0x00; common::P2WPKH_FAKE_SIG_SIZE]);
+        txin.witness.push([0x00; common::P2WPKH_FAKE_PK_SIZE]);
+    }
     let txid2 = tx2.compute_txid();
     insert_tx(&mut wallet, tx2);
 
-    // Bump both at a rate just above the required rate floor.
-    // The originals' actual fee rate (fee / weight) is higher than the requested
-    // 50 sat/vB because the unsigned tx has less weight than the builder estimated.
-    // We use 65 sat/vB to clear the rate floor while keeping the absolute fee below
-    // the combined originals' fees — the replacement is smaller (one tx instead of
-    // two, change outputs removed), so even at a higher rate the absolute fee can
-    // be less than the sum, violating BIP125 Rule 3.
+    // Bump both at a rate just above the required rate floor (50 + 1 = 51 sat/vB).
+    // The replacement combines two transactions into one, so its weight is smaller
+    // than the two originals combined. At a fee rate only 1 sat/vB above the floor,
+    // the replacement's absolute fee falls below the sum of the originals' fees,
+    // violating BIP125 Rule 3.
     let mut bump_builder = wallet.build_fee_bump([txid1, txid2]).unwrap();
-    bump_builder.fee_rate(FeeRate::from_sat_per_vb_u32(65));
+    bump_builder.fee_rate(FeeRate::from_sat_per_vb_u32(51));
     let result = bump_builder.finish();
     assert_matches!(
         result,
