@@ -1128,6 +1128,40 @@ fn test_build_fee_bump_parent_child_returns_descendant_error() {
 }
 
 #[test]
+fn test_build_fee_bump_grandparent_grandchild_returns_descendant_error() {
+    let (mut wallet, _) = get_funded_wallet_wpkh();
+    let addr = wallet.next_unused_address(KeychainKind::External).address;
+
+    // Build a chain of three txs, each spending an output of the one before.
+    let mut utxo = wallet.list_unspent().next().unwrap().outpoint;
+    let mut txids = vec![];
+    for amount in [25_000, 10_000, 5_000] {
+        let mut builder = wallet.build_tx();
+        builder
+            .add_recipient(addr.script_pubkey(), Amount::from_sat(amount))
+            .fee_rate(FeeRate::from_sat_per_vb_u32(1))
+            .manually_selected_only();
+        builder.add_utxo(utxo).unwrap();
+        let tx = builder.finish().unwrap().extract_tx().unwrap();
+        let txid = tx.compute_txid();
+        insert_tx(&mut wallet, tx);
+        txids.push(txid);
+        utxo = wallet
+            .list_unspent()
+            .find(|u| u.outpoint.txid == txid)
+            .expect("tx should have an output owned by the wallet")
+            .outpoint;
+    }
+
+    // The grandchild descends from the grandparent through the middle tx, which is not listed.
+    let result = wallet.build_fee_bump([txids[0], txids[2]]);
+    assert_matches!(
+        result,
+        Err(bdk_wallet::error::BuildFeeBumpError::TransactionIsDescendant(txid)) if txid == txids[2]
+    );
+}
+
+#[test]
 fn test_build_fee_bump_multiple_txids_fee_rate_absolute_too_low() {
     let (mut wallet, _) = get_funded_wallet_wpkh();
 

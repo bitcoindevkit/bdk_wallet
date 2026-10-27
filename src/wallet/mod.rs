@@ -1708,18 +1708,20 @@ impl Wallet {
 
         let tx_graph = self.tx_graph.graph();
 
-        // Reject if any provided txid is a descendant of another provided txid.
-        // A replacement cannot spend an output from a transaction it is simultaneously evicting.
+        // Reject if any provided txid is a descendant of another provided txid, directly or
+        // through transactions not provided. A replacement cannot spend an output from a
+        // transaction it is simultaneously evicting.
         {
             let txid_set: HashSet<Txid> = txids.iter().copied().collect();
             for txid in &txids {
-                let tx = tx_graph
+                tx_graph
                     .get_tx(*txid)
                     .ok_or(BuildFeeBumpError::TransactionNotFound(*txid))?;
-                for txin in &tx.input {
-                    if txid_set.contains(&txin.previous_output.txid) {
-                        return Err(BuildFeeBumpError::TransactionIsDescendant(*txid));
-                    }
+                if let Some(descendant) = tx_graph
+                    .walk_descendants(*txid, |_, descendant| Some(descendant))
+                    .find(|descendant| txid_set.contains(descendant))
+                {
+                    return Err(BuildFeeBumpError::TransactionIsDescendant(descendant));
                 }
             }
         }
