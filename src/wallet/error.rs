@@ -22,7 +22,7 @@ use alloc::{
 #[cfg(all(bdk_wallet_unstable, feature = "bdk-tx"))]
 use bdk_tx::bdk_coin_select;
 use bitcoin::{Amount, BlockHash, Network, OutPoint, Sequence, Txid, absolute, psbt};
-use core::fmt::{self, write};
+use core::fmt::{self};
 
 /// The error type when loading a [`Wallet`] from a [`ChangeSet`].
 ///
@@ -366,17 +366,17 @@ impl fmt::Display for BuildFeeBumpError {
             }
             Self::IrreplaceableTransaction(txid) => {
                 write!(f, "Transaction can't be replaced with txid: {txid}")
-            },
+            }
             Self::NoTransactionsProvided => {
                 write!(f, "No transaction IDs were provided")
-            },
+            }
             Self::TransactionIsDescendant(txid) => {
                 write!(
                     f,
                     "Transaction {txid} spends an output of another provided transaction; \
                      bumping a parent and its descendant together is not supported"
                 )
-            },
+            }
             Self::FeeRateUnavailable => write!(f, "Fee rate unavailable"),
             Self::InvalidOutputIndex(op) => {
                 write!(f, "A txin referenced an invalid output: {op}")

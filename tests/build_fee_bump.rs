@@ -1082,7 +1082,6 @@ fn test_build_fee_bump_multiple_txids_combines_inputs_and_recipients() {
     assert_eq!(recipient_outputs.len(), 2);
 }
 
-
 #[test]
 fn test_build_fee_bump_parent_child_returns_descendant_error() {
     let (mut wallet, _) = get_funded_wallet_wpkh();
