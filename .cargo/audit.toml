@@ -1,0 +1,13 @@
+# cargo-audit configuration, used by `cargo audit` locally and by the `Audit` GitHub workflow.
+#
+# The ignored advisories affect rustls 0.21.x, rustls-webpki 0.101.x and webpki-roots 0.25.x,
+# all pulled in by minreq 2.x.x. minreq 2.x.x is not a library dependency, it only comes from
+# the examples' dev-dependencies: bdk_esplora through esplora-client 0.12.x, and
+# bdk_bitcoind_rpc through bitcoincore-rpc 0.19.x and jsonrpc 0.18.x.
+# Verify with `cargo tree -i <crate> -e no-dev --all-features`.
+#
+# TODO: remove once bdk_esplora moves to esplora-client >= 0.13 and bdk_bitcoind_rpc to a
+# bitcoincore-rpc release that no longer uses jsonrpc 0.18.x.
+
+[advisories]
+ignore = ["RUSTSEC-2026-0346", "RUSTSEC-2026-0349", "RUSTSEC-2026-0098", "RUSTSEC-2026-0099", "RUSTSEC-2026-0104", "RUSTSEC-2026-0382", "RUSTSEC-2026-0381"]
