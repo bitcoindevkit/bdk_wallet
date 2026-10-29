@@ -10,6 +10,9 @@ alias d := doc
 # All features not including the unstable ones
 FEATURES := "std,compiler,all-keys,rusqlite,file_store,test-utils"
 
+# Pinned nightly toolchain used for formatting; keep in sync with the fmt job in .github/workflows/cont_integration.yml
+NIGHTLY := "nightly-2026-10-27"
+
 _default:
    @just --list
 
@@ -19,14 +22,14 @@ build:
 
 # Check formatting, compilation, linting
 _check:
-   cargo +nightly fmt --all -- --check
+   cargo +{{NIGHTLY}} fmt --all -- --check
    RUSTFLAGS="" cargo check --all-targets --no-default-features --features miniscript/no-std,bdk_chain/hashbrown
    RUSTFLAGS="" cargo check --all-targets --features {{FEATURES}}
    RUSTFLAGS="-D warnings" cargo clippy --all-targets --features {{FEATURES}}
 
 # Check formatting, compilation, linting of the unstable API surface
 _check-unstable:
-   cargo +nightly fmt --all -- --check
+   cargo +{{NIGHTLY}} fmt --all -- --check
    RUSTFLAGS="--cfg bdk_wallet_unstable" cargo check --all-targets --no-default-features --features miniscript/no-std,bdk_chain/hashbrown
    RUSTFLAGS="--cfg bdk_wallet_unstable" cargo check --all-targets --all-features
    RUSTFLAGS="--cfg bdk_wallet_unstable -D warnings" cargo clippy --all-targets --all-features
@@ -39,7 +42,7 @@ check: _check _check-unstable
 
 # Format all code
 fmt:
-   cargo +nightly fmt
+   cargo +{{NIGHTLY}} fmt
 
 # Run tests on the stable API surface
 _test:
