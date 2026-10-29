@@ -3630,7 +3630,7 @@ impl Wallet {
             let err = bdk_coin_select::InsufficientFunds {
                 missing: target_amount.to_sat(),
             };
-            return Err(CreatePsbtError::InsufficientFunds(err))?;
+            Err(CreatePsbtError::InsufficientFunds(err))?;
         }
 
         let original_txs: Vec<OriginalTxStats> = direct_conflicts

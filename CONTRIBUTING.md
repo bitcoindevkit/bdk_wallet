@@ -118,7 +118,7 @@ Coding Conventions
 ------------------
 
 This codebase uses spaces, not tabs.
-Use `cargo +nightly fmt` to format code before committing.
+Use `just fmt` (which runs `cargo fmt` with the nightly toolchain pinned in the `justfile`) to format code before committing.
 This is also enforced by the CI.
 All public items must be documented. We adhere to the [Rust API Guidelines](https://rust-lang.github.io/api-guidelines/about.html) with respect to documentation.
 
