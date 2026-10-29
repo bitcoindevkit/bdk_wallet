@@ -5,6 +5,7 @@ use bdk_wallet::{KeychainKind, SignOptions, psbt};
 use bitcoin::{Amount, FeeRate, Psbt, TxIn, Witness};
 use core::str::FromStr;
 use miniscript::descriptor::KeyMapWrapper;
+use miniscript::psbt::PsbtExt;
 
 mod common;
 use common::{keymap_from_descriptor, signers_from_descriptor};
@@ -351,4 +352,20 @@ fn test_psbt_sign_with_descriptor_keymap() {
         !signing_keys.is_empty(),
         "expected at least one input to be signed using descriptor keymap"
     );
+}
+
+// Signing with an account-level xprv must derive `xprv/0/0`, not `xprv/86h/1h/0h/0/0`.
+#[test]
+fn test_psbt_sign_with_descriptor_keymap_key_origin() {
+    let descriptor = "tr([5159c173/86h/1h/0h]tprv8gfBCLYgHZLJLhg1DUSY6NN6eNAee3aqt3SE3M1hywpAiFWYGsm6U6B17VDKh8W1SQnatRpZujU5xseJ84nYZmkxPGCngNhmBMVRY2sAZhY/0/*)";
+    let (mut wallet, _) = get_funded_wallet_single(descriptor);
+    let addr = wallet.peek_address(KeychainKind::External, 0);
+    let mut builder = wallet.build_tx();
+    builder.drain_to(addr.script_pubkey()).drain_wallet();
+    let mut psbt = builder.finish().unwrap();
+
+    let signer = KeyMapWrapper::from(keymap_from_descriptor(&wallet, descriptor));
+    psbt.sign(&signer, wallet.secp_ctx()).unwrap();
+    psbt.finalize_mut(wallet.secp_ctx())
+        .expect("signature must be valid");
 }
