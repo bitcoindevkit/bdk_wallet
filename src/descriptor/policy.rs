@@ -704,7 +704,7 @@ impl Policy {
                 // make sure all the indexes in the `selected` list are within range
                 for index in &selected {
                     if *index >= items.len() {
-                        return Err(IndexOutOfBoundsError::new(*index, items.len()))?;
+                        Err(IndexOutOfBoundsError::new(*index, items.len()))?;
                     }
                 }
 
@@ -727,7 +727,7 @@ impl Policy {
                     return Err(PolicyError::NotEnoughItemsSelected(self.id.clone()));
                 }
                 if let Some(item) = selected.into_iter().find(|&i| i >= keys.len()) {
-                    return Err(IndexOutOfBoundsError::new(item, keys.len()))?;
+                    Err(IndexOutOfBoundsError::new(item, keys.len()))?;
                 }
 
                 Ok(Condition::default())
