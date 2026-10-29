@@ -578,3 +578,50 @@ fn test_lock_outpoint_persist() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn change_address_should_not_be_reissued_after_reload() -> anyhow::Result<()> {
+    use bdk_chain::rusqlite;
+    let mut conn = rusqlite::Connection::open_in_memory()?;
+
+    let (desc, change_desc) = get_test_tr_single_sig_xprv_and_change_desc();
+    let mut wallet = Wallet::create(desc, change_desc)
+        .network(Network::Signet)
+        .create_wallet(&mut conn)?;
+
+    receive_output(&mut wallet, Amount::from_sat(50_000), ReceiveTo::Mempool(0));
+
+    // Build a change-producing tx and return the change output's script.
+    fn create_change_tx(wallet: &mut Wallet) -> anyhow::Result<ScriptBuf> {
+        let change_index = wallet.next_derivation_index(KeychainKind::Internal);
+        let change_spk = wallet
+            .peek_address(KeychainKind::Internal, change_index)
+            .script_pubkey();
+        let recipient = wallet.next_unused_address(KeychainKind::External).address;
+        let mut builder = wallet.build_tx();
+        builder.add_recipient(recipient, Amount::from_sat(10_000));
+        let psbt = builder.finish()?;
+        assert!(
+            psbt.unsigned_tx
+                .output
+                .iter()
+                .any(|o| o.script_pubkey == change_spk)
+        );
+        Ok(change_spk)
+    }
+
+    let change1 = create_change_tx(&mut wallet)?;
+    wallet.persist(&mut conn)?;
+
+    // Reload the wallet (as after a restart) before the first tx is seen on chain.
+    let mut wallet = Wallet::load()
+        .load_wallet(&mut conn)?
+        .expect("wallet is persisted");
+    let change2 = create_change_tx(&mut wallet)?;
+
+    assert_ne!(
+        change1, change2,
+        "the same change address must not be handed out twice"
+    );
+    Ok(())
+}
