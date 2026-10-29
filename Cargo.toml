@@ -23,7 +23,7 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage_nightly)', 'cfg(b
 bdk_chain = { version = "0.23.3", features = ["miniscript", "serde"], default-features = false }
 bdk_tx = { version = "0.2.0", default-features = false, optional = true }
 bitcoin = { version = "0.32.8", features = ["serde", "base64"], default-features = false }
-miniscript = { version = "12.3.5", features = ["serde"], default-features = false }
+miniscript = { version = "12.3.8", features = ["serde"], default-features = false }
 rand_core = { version = "0.6.4" }
 serde_json = { version = "1" }
 serde = { version = "1", features = ["derive"] }
