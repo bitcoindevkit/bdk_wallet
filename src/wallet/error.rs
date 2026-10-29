@@ -22,7 +22,7 @@ use alloc::{
 #[cfg(all(bdk_wallet_unstable, feature = "bdk-tx"))]
 use bdk_tx::bdk_coin_select;
 use bitcoin::{Amount, BlockHash, Network, OutPoint, Sequence, Txid, absolute, psbt};
-use core::fmt;
+use core::fmt::{self};
 
 /// The error type when loading a [`Wallet`] from a [`ChangeSet`].
 ///
@@ -335,6 +335,13 @@ pub enum BuildFeeBumpError {
     TransactionConfirmed(Txid),
     /// Trying to replace a tx that has a sequence >= `0xFFFFFFFE`
     IrreplaceableTransaction(Txid),
+    /// No transaction IDs were provided to `build_fee_bump`
+    NoTransactionsProvided,
+    /// One of the provided transactions descends from another provided transaction, directly
+    /// or through transactions not provided. Bumping an ancestor and its descendant together is
+    /// not supported because the replacement would spend an output that no longer exists once
+    /// the ancestor is evicted.
+    TransactionIsDescendant(Txid),
     /// Node doesn't have data to estimate a fee rate
     FeeRateUnavailable,
     /// Input references an invalid output index in the previous transaction
@@ -360,6 +367,16 @@ impl fmt::Display for BuildFeeBumpError {
             }
             Self::IrreplaceableTransaction(txid) => {
                 write!(f, "Transaction can't be replaced with txid: {txid}")
+            }
+            Self::NoTransactionsProvided => {
+                write!(f, "No transaction IDs were provided")
+            }
+            Self::TransactionIsDescendant(txid) => {
+                write!(
+                    f,
+                    "Transaction {txid} descends from another provided transaction; \
+                     bumping an ancestor and its descendant together is not supported"
+                )
             }
             Self::FeeRateUnavailable => write!(f, "Fee rate unavailable"),
             Self::InvalidOutputIndex(op) => {

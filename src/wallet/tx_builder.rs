@@ -1375,7 +1375,7 @@ mod test {
         insert_tx(&mut wallet, tx);
 
         // build fee bump
-        let mut builder = wallet.build_fee_bump(txid).unwrap();
+        let mut builder = wallet.build_fee_bump([txid]).unwrap();
         assert_eq!(
             builder.params.recipients,
             vec![(recip, Amount::from_sat(15_000))]

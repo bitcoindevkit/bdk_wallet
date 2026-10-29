@@ -1432,7 +1432,12 @@ impl Wallet {
             (Some(sequence), _) => sequence,
         };
 
-        let (fee_rate, mut fee_amount) = match params.fee_policy.unwrap_or_default() {
+        let fee_policy = params.fee_policy.unwrap_or_default();
+        // The absolute-fee floor check after coin selection only applies to the
+        // `FeeRate` path — the `FeeAmount` path already validates against
+        // `previous_fee.absolute` before coin selection runs.
+        let is_fee_rate_policy = matches!(fee_policy, FeePolicy::FeeRate(_));
+        let (fee_rate, mut fee_amount) = match fee_policy {
             //FIXME: see https://github.com/bitcoindevkit/bdk/issues/256
             FeePolicy::FeeAmount(fee) => {
                 if let Some(previous_fee) = params.bumping_fee {
@@ -1543,6 +1548,36 @@ impl Wallet {
             )
             .map_err(CreateTxError::CoinSelection)?;
 
+        // BIP125 Rule 3: the replacement must pay a strictly higher absolute fee than
+        // the sum of the fees of all transactions it replaces. The fee-rate check above
+        // only enforces the rate floor; when bumping multiple transactions the replacement
+        // is usually smaller (in vbytes) than the originals combined, so the absolute fee
+        // can fall below the combined floor even at a higher rate.
+        // This check only applies to the `FeeRate` path — the `FeeAmount` path already
+        // validates the absolute fee before coin selection.
+        //
+        // We compare the replacement's *total* fee (all inputs minus all outputs)
+        // against the combined fee floor, not `coin_selection.fee_amount`, which only
+        // accounts for the selected inputs' share of the fee.
+        if is_fee_rate_policy {
+            if let Some(previous_fee) = params.bumping_fee {
+                let change_value = match &coin_selection.excess {
+                    Excess::Change { amount, .. } => *amount,
+                    Excess::NoChange { .. } => Amount::ZERO,
+                };
+                let total_fee = coin_selection
+                    .selected_amount()
+                    .checked_sub(outgoing)
+                    .and_then(|v| v.checked_sub(change_value))
+                    .unwrap_or_default();
+                if total_fee <= previous_fee.absolute {
+                    return Err(CreateTxError::FeeTooLow {
+                        required: previous_fee.absolute + Amount::from_sat(1),
+                    });
+                }
+            }
+        }
+
         let excess = &coin_selection.excess;
         tx.input = coin_selection
             .selected
@@ -1649,7 +1684,7 @@ impl Wallet {
     /// # bdk_wallet::test_utils::insert_tx(&mut wallet, tx.clone());
     /// // broadcast tx but it's taking too long to confirm so we want to bump the fee
     /// let mut psbt =  {
-    ///     let mut builder = wallet.build_fee_bump(tx.compute_txid())?;
+    ///     let mut builder = wallet.build_fee_bump([tx.compute_txid()])?;
     ///     builder
     ///         .fee_rate(FeeRate::from_sat_per_vb(5).expect("valid feerate"));
     ///     builder.finish()?
@@ -1661,12 +1696,36 @@ impl Wallet {
     /// // broadcast fee_bumped_tx to replace original
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    // TODO: support for merging multiple transactions while bumping the fees
     pub fn build_fee_bump(
         &mut self,
-        txid: Txid,
+        txids: impl IntoIterator<Item = Txid>,
     ) -> Result<TxBuilder<'_, DefaultCoinSelectionAlgorithm>, BuildFeeBumpError> {
+        let txids: Vec<Txid> = txids.into_iter().collect();
+
+        if txids.is_empty() {
+            return Err(BuildFeeBumpError::NoTransactionsProvided);
+        }
+
         let tx_graph = self.tx_graph.graph();
+
+        // Reject if any provided txid is a descendant of another provided txid, directly or
+        // through transactions not provided. A replacement cannot spend an output from a
+        // transaction it is simultaneously evicting.
+        {
+            let txid_set: HashSet<Txid> = txids.iter().copied().collect();
+            for txid in &txids {
+                tx_graph
+                    .get_tx(*txid)
+                    .ok_or(BuildFeeBumpError::TransactionNotFound(*txid))?;
+                if let Some(descendant) = tx_graph
+                    .walk_descendants(*txid, |_, descendant| Some(descendant))
+                    .find(|descendant| txid_set.contains(descendant))
+                {
+                    return Err(BuildFeeBumpError::TransactionIsDescendant(descendant));
+                }
+            }
+        }
+
         let txout_index = &self.tx_graph.index;
         let chain_tip = self.chain.tip().block_id();
         let chain_positions: HashMap<Txid, ChainPosition<_>> = tx_graph
@@ -1674,118 +1733,138 @@ impl Wallet {
             .map(|canon_tx| (canon_tx.tx_node.txid, canon_tx.chain_position))
             .collect();
 
-        let mut tx = tx_graph
-            .get_tx(txid)
-            .ok_or(BuildFeeBumpError::TransactionNotFound(txid))?
-            .as_ref()
-            .clone();
+        let mut all_utxos: Vec<WeightedUtxo> = Vec::new();
+        let mut all_recipients: Vec<(ScriptBuf, Amount)> = Vec::new();
+        let mut total_fee = Amount::ZERO;
+        let mut highest_fee_rate = FeeRate::ZERO;
+        let mut tx_version = None;
 
-        if chain_positions
-            .get(&txid)
-            .ok_or(BuildFeeBumpError::TransactionNotFound(txid))?
-            .is_confirmed()
-        {
-            return Err(BuildFeeBumpError::TransactionConfirmed(txid));
-        }
+        for txid in txids {
+            let mut tx = tx_graph
+                .get_tx(txid)
+                .ok_or(BuildFeeBumpError::TransactionNotFound(txid))?
+                .as_ref()
+                .clone();
 
-        if !tx
-            .input
-            .iter()
-            .any(|txin| txin.sequence.to_consensus_u32() <= 0xFFFFFFFD)
-        {
-            return Err(BuildFeeBumpError::IrreplaceableTransaction(
-                tx.compute_txid(),
-            ));
-        }
+            if chain_positions
+                .get(&txid)
+                .ok_or(BuildFeeBumpError::TransactionNotFound(txid))?
+                .is_confirmed()
+            {
+                return Err(BuildFeeBumpError::TransactionConfirmed(txid));
+            }
 
-        let fee = self
-            .calculate_fee(&tx)
-            .map_err(|_| BuildFeeBumpError::FeeRateUnavailable)?;
-        let fee_rate = fee / tx.weight();
+            if !tx
+                .input
+                .iter()
+                .any(|txin| txin.sequence.to_consensus_u32() <= 0xFFFFFFFD)
+            {
+                return Err(BuildFeeBumpError::IrreplaceableTransaction(
+                    tx.compute_txid(),
+                ));
+            }
 
-        // Remove the inputs from the tx and process them.
-        let utxos: Vec<WeightedUtxo> = tx
-            .input
-            .drain(..)
-            .map(|txin| -> Result<_, BuildFeeBumpError> {
-                let outpoint = txin.previous_output;
-                let prev_txout = tx_graph
-                    .get_txout(outpoint)
-                    .cloned()
-                    .ok_or(BuildFeeBumpError::UnknownUtxo(outpoint))?;
-                match txout_index.index_of_spk(prev_txout.script_pubkey.clone()) {
-                    Some(&(keychain, derivation_index)) => {
-                        let txout = prev_txout;
-                        let chain_position = chain_positions
-                            .get(&outpoint.txid)
-                            .cloned()
-                            .ok_or(BuildFeeBumpError::TransactionNotFound(outpoint.txid))?;
-                        Ok(WeightedUtxo {
-                            satisfaction_weight: self
-                                .public_descriptor(keychain)
-                                .max_weight_to_satisfy()
-                                .expect("descriptor should be satisfiable"),
-                            utxo: Utxo::Local(LocalOutput {
+            let fee = self
+                .calculate_fee(&tx)
+                .map_err(|_| BuildFeeBumpError::FeeRateUnavailable)?;
+            let fee_rate = fee / tx.weight();
+
+            total_fee += fee;
+            if fee_rate > highest_fee_rate {
+                highest_fee_rate = fee_rate;
+            }
+
+            if tx_version.is_none() {
+                tx_version = Some(tx.version);
+            }
+
+            let utxos: Vec<WeightedUtxo> = tx
+                .input
+                .drain(..)
+                .map(|txin| -> Result<_, BuildFeeBumpError> {
+                    let outpoint = txin.previous_output;
+                    let prev_txout = tx_graph
+                        .get_txout(outpoint)
+                        .cloned()
+                        .ok_or(BuildFeeBumpError::UnknownUtxo(outpoint))?;
+                    match txout_index.index_of_spk(prev_txout.script_pubkey.clone()) {
+                        Some(&(keychain, derivation_index)) => {
+                            let txout = prev_txout;
+                            let chain_position = chain_positions
+                                .get(&outpoint.txid)
+                                .cloned()
+                                .ok_or(BuildFeeBumpError::TransactionNotFound(outpoint.txid))?;
+                            Ok(WeightedUtxo {
+                                satisfaction_weight: self
+                                    .public_descriptor(keychain)
+                                    .max_weight_to_satisfy()
+                                    .expect("descriptor should be satisfiable"),
+                                utxo: Utxo::Local(LocalOutput {
+                                    outpoint,
+                                    txout,
+                                    keychain,
+                                    is_spent: true,
+                                    derivation_index,
+                                    chain_position,
+                                }),
+                            })
+                        }
+                        None => Ok(WeightedUtxo {
+                            satisfaction_weight: Weight::from_wu_usize(
+                                serialize(&txin.script_sig).len() * 4
+                                    + serialize(&txin.witness).len(),
+                            ),
+                            utxo: Utxo::Foreign {
                                 outpoint,
-                                txout,
-                                keychain,
-                                is_spent: true,
-                                derivation_index,
-                                chain_position,
-                            }),
-                        })
+                                sequence: txin.sequence,
+                                psbt_input: Box::new(psbt::Input {
+                                    witness_utxo: prev_txout
+                                        .script_pubkey
+                                        .witness_version()
+                                        .map(|_| prev_txout),
+                                    non_witness_utxo: tx_graph
+                                        .get_tx(outpoint.txid)
+                                        .map(|tx| tx.as_ref().clone()),
+                                    ..Default::default()
+                                }),
+                            },
+                        }),
                     }
-                    None => Ok(WeightedUtxo {
-                        satisfaction_weight: Weight::from_wu_usize(
-                            serialize(&txin.script_sig).len() * 4 + serialize(&txin.witness).len(),
-                        ),
-                        utxo: Utxo::Foreign {
-                            outpoint,
-                            sequence: txin.sequence,
-                            psbt_input: Box::new(psbt::Input {
-                                witness_utxo: prev_txout
-                                    .script_pubkey
-                                    .witness_version()
-                                    .map(|_| prev_txout),
-                                non_witness_utxo: tx_graph
-                                    .get_tx(outpoint.txid)
-                                    .map(|tx| tx.as_ref().clone()),
-                                ..Default::default()
-                            }),
-                        },
-                    }),
-                }
-            })
-            .collect::<Result<_, _>>()?;
+                })
+                .collect::<Result<_, _>>()?;
 
-        if tx.output.len() > 1 {
-            let mut change_index = None;
-            for (index, txout) in tx.output.iter().enumerate() {
-                let change_keychain = self.map_keychain(KeychainKind::Internal);
-                match txout_index.index_of_spk(txout.script_pubkey.clone()) {
-                    Some((keychain, _)) if *keychain == change_keychain => {
-                        change_index = Some(index)
+            all_utxos.extend(utxos);
+
+            if tx.output.len() > 1 {
+                let mut change_index = None;
+                for (index, txout) in tx.output.iter().enumerate() {
+                    let change_keychain = self.map_keychain(KeychainKind::Internal);
+                    match txout_index.index_of_spk(txout.script_pubkey.clone()) {
+                        Some((keychain, _)) if *keychain == change_keychain => {
+                            change_index = Some(index)
+                        }
+                        _ => {}
                     }
-                    _ => {}
+                }
+                if let Some(change_index) = change_index {
+                    tx.output.remove(change_index);
                 }
             }
 
-            if let Some(change_index) = change_index {
-                tx.output.remove(change_index);
-            }
+            all_recipients.extend(
+                tx.output
+                    .into_iter()
+                    .map(|txout| (txout.script_pubkey, txout.value)),
+            );
         }
 
         let params = TxParams {
-            version: Some(tx.version),
-            recipients: tx
-                .output
-                .into_iter()
-                .map(|txout| (txout.script_pubkey, txout.value))
-                .collect(),
-            utxos,
+            version: tx_version,
+            recipients: all_recipients,
+            utxos: all_utxos,
             bumping_fee: Some(tx_builder::PreviousFee {
-                absolute: fee,
-                rate: fee_rate,
+                absolute: total_fee,
+                rate: highest_fee_rate,
             }),
             ..Default::default()
         };
