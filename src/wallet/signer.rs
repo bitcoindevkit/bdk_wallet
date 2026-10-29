@@ -834,12 +834,9 @@ pub struct SignOptions {
     /// For more details see: <https://blog.trezor.io/details-of-firmware-updates-for-trezor-one-version-1-9-1-and-trezor-model-t-version-2-3-1-1eba8f60f2dd>
     pub trust_witness_utxo: bool,
 
-    /// Whether the wallet should assume a specific height has been reached when trying to finalize
-    /// a transaction
-    ///
-    /// The wallet will only "use" a timelock to satisfy the spending policy of an input if the
-    /// timelock height has already been reached. This option allows overriding the "current
-    /// height" to let the wallet use timelocks in the future to spend a coin.
+    /// Unused: timelocks are checked against the PSBT's `nLockTime` and `nSequence`, so this has
+    /// no effect.
+    #[deprecated(note = "timelocks are now checked against the PSBT's nLockTime and nSequence")]
     pub assume_height: Option<u32>,
 
     /// Whether the signer should use the `sighash_type` set in the PSBT when signing, no matter
@@ -887,6 +884,7 @@ pub enum TapLeavesOptions {
 }
 
 impl Default for SignOptions {
+    #[allow(deprecated)]
     fn default() -> Self {
         SignOptions {
             trust_witness_utxo: false,
