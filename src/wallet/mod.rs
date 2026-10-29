@@ -1962,8 +1962,8 @@ impl Wallet {
     /// Check this input's amount against its parent transaction.
     ///
     /// Validate `non_witness_utxo` if supplied. Otherwise, Taproot inputs may use the full parent
-    /// transaction stored in the wallet. Any supplied `witness_utxo` must match the parent's output.
-    /// Non-Taproot inputs require `non_witness_utxo`.
+    /// transaction stored in the wallet. Any supplied `witness_utxo` must match the parent's
+    /// output. Non-Taproot inputs require `non_witness_utxo`.
     fn check_input_amount(
         &self,
         input: &psbt::Input,
