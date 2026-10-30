@@ -36,7 +36,7 @@ use bdk_chain::{
 use bitcoin::{
     Address, Amount, Block, FeeRate, Network, NetworkKind, OutPoint, Psbt, ScriptBuf, Sequence,
     SignedAmount, Transaction, TxOut, Txid, Weight, Witness, absolute,
-    consensus::encode::serialize,
+    consensus::encode::{VarInt, serialize},
     constants::genesis_block,
     psbt,
     secp256k1::Secp256k1,
@@ -1583,17 +1583,25 @@ impl Wallet {
         }
 
         // If there's change, create and add a change output.
+        let mut has_change = false;
         if let Excess::Change { amount, .. } = excess {
-            // Create drain output.
-            let drain_output = TxOut {
-                value: *amount,
-                script_pubkey: drain_script,
-            };
+            // Adding the change output can grow the CompactSize encoding of the output count
+            // (e.g. from 252 to 253 outputs), which coin selection does not account for, so the
+            // change pays for those extra bytes. If that leaves it below the dust limit, no
+            // change output is created and the remainder goes to the fee.
+            let output_count_growth =
+                VarInt::from(tx.output.len() + 1).size() - VarInt::from(tx.output.len()).size();
+            let output_count_fee =
+                fee_rate * Weight::from_non_witness_data_size(output_count_growth as u64);
+            let value = amount.checked_sub(output_count_fee).unwrap_or_default();
 
-            // TODO: We should pay attention when adding a new output: this might increase
-            // the length of the "number of vouts" parameter by 2 bytes, potentially making
-            // our feerate too low.
-            tx.output.push(drain_output);
+            if !value.is_dust(&drain_script) {
+                tx.output.push(TxOut {
+                    value,
+                    script_pubkey: drain_script,
+                });
+                has_change = true;
+            }
         }
 
         // Sort inputs/outputs according to the chosen algorithm.
@@ -1602,7 +1610,7 @@ impl Wallet {
         let psbt = self.complete_transaction(tx, coin_selection.selected, params)?;
 
         // Recording changes to the change keychain.
-        if let (Excess::Change { .. }, Some((keychain, index))) = (excess, drain_index) {
+        if let (true, Some((keychain, index))) = (has_change, drain_index) {
             if let Some((_, index_changeset)) =
                 self.tx_graph.index.reveal_to_target(keychain, index)
             {
