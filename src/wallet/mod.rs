@@ -142,6 +142,7 @@ pub struct Wallet {
     network: Network,
     secp: SecpCtx,
     locked_outpoints: HashSet<OutPoint>,
+    min_output_value: Option<Amount>,
 }
 
 /// An update to [`Wallet`].
@@ -399,6 +400,7 @@ impl Wallet {
             stage,
             secp,
             locked_outpoints,
+            min_output_value: params.min_output_value,
         })
     }
 
@@ -601,12 +603,23 @@ impl Wallet {
             network,
             secp,
             locked_outpoints,
+            min_output_value: params.min_output_value,
         }))
     }
 
     /// Get the [`Network`] the wallet is using.
     pub fn network(&self) -> Network {
         self.network
+    }
+
+    /// Get the minimum output value, if set.
+    pub fn min_output_value(&self) -> Option<Amount> {
+        self.min_output_value
+    }
+
+    /// Set or clear the minimum output value.
+    pub fn set_min_output_value(&mut self, min_output_value: Option<Amount>) {
+        self.min_output_value = min_output_value;
     }
 
     /// Iterator over all keychains in this wallet
@@ -797,7 +810,11 @@ impl Wallet {
     }
 
     /// Return the list of unspent outputs of this wallet
+    ///
+    /// If [`min_output_value`](Wallet::min_output_value) is set, outputs with a value below
+    /// that threshold are excluded.
     pub fn list_unspent(&self) -> impl Iterator<Item = LocalOutput> + '_ {
+        let min_value = self.min_output_value;
         self.tx_graph
             .graph()
             .filter_chain_unspents(
@@ -807,6 +824,7 @@ impl Wallet {
                 self.tx_graph.index.outpoints().iter().cloned(),
             )
             .map(|((k, i), full_txo)| new_local_utxo(k, i, full_txo))
+            .filter(move |utxo| min_value.is_none_or(|threshold| utxo.txout.value >= threshold))
     }
 
     /// List indexed [`FullTxOut`]s.
@@ -1148,12 +1166,32 @@ impl Wallet {
 
     /// Return the balance, separated into available, trusted-pending, untrusted-pending, and
     /// immature values.
+    ///
+    /// If [`min_output_value`](Wallet::min_output_value) is set, outputs with a value below
+    /// that threshold are excluded from the balance.
     pub fn balance(&self) -> Balance {
-        self.tx_graph.graph().balance(
+        let graph = self.tx_graph.graph();
+        let chain_tip = self.chain.tip().block_id();
+        let min_value = self.min_output_value;
+
+        let outpoints = self
+            .tx_graph
+            .index
+            .outpoints()
+            .iter()
+            .filter(|(_, op)| match min_value {
+                None => true,
+                Some(threshold) => graph
+                    .get_txout(*op)
+                    .is_none_or(|txout| txout.value >= threshold),
+            })
+            .cloned();
+
+        graph.balance(
             &self.chain,
-            self.chain.tip().block_id(),
+            chain_tip,
             CanonicalizationParams::default(),
-            self.tx_graph.index.outpoints().iter().cloned(),
+            outpoints,
             |&(k, _), _| k == KeychainKind::Internal,
         )
     }
@@ -2229,6 +2267,11 @@ impl Wallet {
                 )
                 // Filter out locked outpoints.
                 .filter(|(_, txo)| !self.is_outpoint_locked(txo.outpoint))
+                // Filter out outputs below `min_output_value`, if set.
+                .filter(|(_, txo)| {
+                    self.min_output_value
+                        .is_none_or(|threshold| txo.txout.value >= threshold)
+                })
                 // Only create LocalOutput if UTxO is mature.
                 .filter_map(move |((k, i), full_txo)| {
                     full_txo
