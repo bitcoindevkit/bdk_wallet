@@ -177,6 +177,102 @@ impl SatisfiableItem {
     }
 }
 
+/// Maximum number of threshold combinations or Cartesian condition expansions permitted
+/// during policy extraction.
+///
+/// Materializing all $m$-of-$n$ combinations is $O(\binom{n}{m})$ in time and memory.
+/// This budget allows all conventional 20-key multisig thresholds (such as 10-of-20,
+/// which requires $\binom{20}{10} = 184,756$ combinations) while guarding against
+/// exponential blowup and out-of-memory errors on large threshold descriptors (e.g. `multi_a`).
+pub const MAX_POLICY_COMBINATIONS: usize = 200_000;
+
+/// Computes the binomial coefficient $\binom{n}{m}$ with overflow protection and early termination.
+///
+/// Returns `Some(combinations)` if the value is at or below `budget`, or `None` if the value
+/// exceeds `budget` or overflows `usize`.
+pub(crate) fn checked_combination_count(n: usize, m: usize, budget: usize) -> Option<usize> {
+    if m > n {
+        return Some(0);
+    }
+    let k = m.min(n - m);
+    if k == 0 {
+        return if budget >= 1 { Some(1) } else { None };
+    }
+    let mut acc: u128 = 1;
+    for i in 0..k {
+        let num = (n - i) as u128;
+        let den = (i + 1) as u128;
+        acc = acc.checked_mul(num)? / den;
+        if acc > budget as u128 {
+            return None;
+        }
+    }
+    usize::try_from(acc).ok().filter(|&val| val <= budget)
+}
+
+/// Computes the exact number of condition combinations resulting from choosing `m` items
+/// out of `items`, taking into account Cartesian expansion of condition alternatives via `mix()`.
+///
+/// The total count across all combinations is the $m$-th elementary symmetric polynomial
+/// of the item condition counts.
+///
+/// Returns `Some(total)` if the value is at or below `budget`, or `None` if the value
+/// exceeds `budget` or overflows `usize`.
+pub(crate) fn checked_expanded_combinations_count(
+    items: &[usize],
+    m: usize,
+    conditions: &ConditionMap,
+    budget: usize,
+) -> Option<usize> {
+    if m > items.len() {
+        return Some(0);
+    }
+    if m == 0 {
+        return if budget >= 1 { Some(1) } else { None };
+    }
+
+    // First check the raw combination count. If raw combinations alone exceed budget, reject early.
+    checked_combination_count(items.len(), m, budget)?;
+
+    if m == items.len() {
+        let mut prod: u128 = 1;
+        for &item in items {
+            let c = conditions.get(&item).map_or(0, |set| set.len()) as u128;
+            if c == 0 {
+                return Some(0);
+            }
+            prod = prod.saturating_mul(c);
+            if prod > budget as u128 {
+                return None;
+            }
+        }
+        return usize::try_from(prod).ok().filter(|&val| val <= budget);
+    }
+
+    let cap = (budget as u128).saturating_add(1);
+    let mut dp = vec![0u128; m + 1];
+    dp[0] = 1;
+
+    for &item in items {
+        let c = conditions.get(&item).map_or(0, |set| set.len()) as u128;
+        if c == 0 {
+            continue;
+        }
+        for j in (1..=m).rev() {
+            let prod = dp[j - 1].saturating_mul(c);
+            let sum = dp[j].saturating_add(prod);
+            dp[j] = sum.min(cap);
+        }
+    }
+
+    let total = dp[m];
+    if total > budget as u128 {
+        None
+    } else {
+        usize::try_from(total).ok()
+    }
+}
+
 fn combinations(vec: &[usize], size: usize) -> Vec<Vec<usize>> {
     assert!(vec.len() >= size);
 
@@ -351,7 +447,7 @@ impl Satisfaction {
         }
     }
 
-    fn finalize(&mut self) {
+    fn finalize(&mut self) -> Result<(), PolicyError> {
         // if partial try to bump it to a partialcomplete
         if let Satisfaction::Partial {
             n,
@@ -362,6 +458,9 @@ impl Satisfaction {
         } = self
         {
             if items.len() >= *m {
+                checked_expanded_combinations_count(items, *m, conditions, MAX_POLICY_COMBINATIONS)
+                    .ok_or(PolicyError::ThresholdCombinationsExceeded)?;
+
                 let mut map = BTreeMap::new();
                 let indexes = combinations(items, *m);
                 // `indexes` at this point is a Vec<Vec<usize>>, with the "n choose k" of items (m
@@ -420,6 +519,7 @@ impl Satisfaction {
                 };
             }
         }
+        Ok(())
     }
 }
 
@@ -528,6 +628,8 @@ pub enum PolicyError {
     MixedTimelockUnits,
     /// Incompatible conditions (not currently used)
     IncompatibleConditions,
+    /// Threshold combinations or condition alternatives exceeded the maximum allocation budget
+    ThresholdCombinationsExceeded,
 }
 
 impl fmt::Display for PolicyError {
@@ -539,6 +641,7 @@ impl fmt::Display for PolicyError {
             Self::AddOnPartialComplete => write!(f, "Add on partial complete"),
             Self::MixedTimelockUnits => write!(f, "Mixed timelock units"),
             Self::IncompatibleConditions => write!(f, "Incompatible conditions"),
+            Self::ThresholdCombinationsExceeded => write!(f, "Threshold combinations exceeded"),
         }
     }
 }
@@ -595,8 +698,8 @@ impl Policy {
             satisfaction.add(&item.satisfaction, index)?;
         }
 
-        contribution.finalize();
-        satisfaction.finalize();
+        contribution.finalize()?;
+        satisfaction.finalize()?;
 
         let mut policy: Policy = SatisfiableItem::Thresh { items, threshold }.into();
         policy.contribution = contribution;
@@ -643,8 +746,8 @@ impl Policy {
                 }
             }
         }
-        satisfaction.finalize();
-        contribution.finalize();
+        satisfaction.finalize()?;
+        contribution.finalize()?;
 
         let mut policy: Policy = SatisfiableItem::Multisig {
             keys: parsed_keys,
@@ -1190,7 +1293,7 @@ mod test {
     use crate::{
         descriptor,
         descriptor::{
-            ExtractPolicy, IntoWalletDescriptor,
+            ExtendedDescriptor, ExtractPolicy, IntoWalletDescriptor,
             policy::SatisfiableItem::{EcdsaSignature, Multisig, Thresh},
         },
     };
@@ -1474,10 +1577,9 @@ mod test {
         let locktime_threshold = 500000000; // if less than this means block number, else block time in seconds
         let locktime_blocks = 100;
         let locktime_seconds = locktime_blocks + locktime_threshold;
-        let desc = descriptor!(sh(and_v(
-            v: pk(prvkey0),
-            and_v(v: after(locktime_seconds), after(locktime_blocks))
-        )))
+        let desc = descriptor!(
+            sh(and_v(v: pk(prvkey0), and_v(v: after(locktime_seconds), after(locktime_blocks))))
+        )
         .unwrap();
         let (wallet_desc, keymap) = desc
             .into_wallet_descriptor(&secp, NetworkKind::Test)
@@ -1501,6 +1603,7 @@ mod test {
         let (prvkey0, _pubkey0, _fingerprint0) = setup_keys(TPRV0_STR, PATH, &secp);
         let locktime_blocks_100 = 100;
         let locktime_blocks_200 = 200;
+        #[rustfmt::skip]
         let desc = descriptor!(sh(and_v(
             v: pk(prvkey0),
             and_v(v: after(locktime_blocks_100), after(locktime_blocks_200))
@@ -1527,6 +1630,7 @@ mod test {
         let locktime_seconds_offset = 500000000;
         let locktime_seconds_100 = locktime_seconds_offset + 100;
         let locktime_seconds_200 = locktime_seconds_offset + 200;
+        #[rustfmt::skip]
         let desc = descriptor!(sh(and_v(
             v: pk(prvkey1),
             and_v(v: after(locktime_seconds_100), after(locktime_seconds_200))
@@ -1760,12 +1864,9 @@ mod test {
         let (prvkey_bob, _, _) = setup_keys(BOB_TPRV_STR, ALICE_BOB_PATH, &secp);
         let (prvkey_carol, _, _) = setup_keys(CAROL_TPRV_STR, ALICE_BOB_PATH, &secp);
 
-        let desc = descriptor!(wsh(c: andor(
-            pk(prvkey_alice),
-            pk_k(prvkey_bob),
-            pk_h(prvkey_carol),
-        )))
-        .unwrap();
+        let desc =
+            descriptor!(wsh(c: andor(pk(prvkey_alice), pk_k(prvkey_bob), pk_h(prvkey_carol))))
+                .unwrap();
 
         let (wallet_desc, keymap) = desc
             .into_wallet_descriptor(&secp, NetworkKind::Test)
@@ -1952,5 +2053,787 @@ mod test {
             result,
             vec![vec![0, 1, 2], vec![0, 1, 3], vec![0, 2, 3], vec![1, 2, 3]]
         );
+    }
+    #[test]
+    fn test_checked_combination_count() {
+        // Small cases:
+        // 1-of-1
+        assert_eq!(
+            checked_combination_count(1, 1, MAX_POLICY_COMBINATIONS),
+            Some(1)
+        );
+        // 1-of-2
+        assert_eq!(
+            checked_combination_count(2, 1, MAX_POLICY_COMBINATIONS),
+            Some(2)
+        );
+        // 2-of-3
+        assert_eq!(
+            checked_combination_count(3, 2, MAX_POLICY_COMBINATIONS),
+            Some(3)
+        );
+        // 3-of-5
+        assert_eq!(
+            checked_combination_count(5, 3, MAX_POLICY_COMBINATIONS),
+            Some(10)
+        );
+
+        // Conventional larger multisigs:
+        // 8-of-16
+        assert_eq!(
+            checked_combination_count(16, 8, MAX_POLICY_COMBINATIONS),
+            Some(12_870)
+        );
+        // 10-of-20 (184,756 combinations, within default budget of 200,000)
+        assert_eq!(
+            checked_combination_count(20, 10, MAX_POLICY_COMBINATIONS),
+            Some(184_756)
+        );
+
+        // Thresholds exceeding the budget:
+        // 8-of-21 (203,490 combinations)
+        assert_eq!(
+            checked_combination_count(21, 8, MAX_POLICY_COMBINATIONS),
+            None
+        );
+        // 12-of-24 (2,704,156 combinations)
+        assert_eq!(
+            checked_combination_count(24, 12, MAX_POLICY_COMBINATIONS),
+            None
+        );
+        // If budget is large enough, 12-of-24 succeeds
+        assert_eq!(
+            checked_combination_count(24, 12, 3_000_000),
+            Some(2_704_156)
+        );
+
+        // Threshold just below, equal to, and just above custom budgets:
+        // Exact 10-of-20 count is 184,756
+        assert_eq!(checked_combination_count(20, 10, 184_756), Some(184_756));
+        assert_eq!(checked_combination_count(20, 10, 184_755), None);
+        // Small budget test
+        assert_eq!(checked_combination_count(5, 3, 10), Some(10));
+        assert_eq!(checked_combination_count(5, 3, 9), None);
+
+        // Extremely large inputs:
+        assert_eq!(
+            checked_combination_count(usize::MAX, 1, MAX_POLICY_COMBINATIONS),
+            None
+        );
+        assert_eq!(
+            checked_combination_count(usize::MAX, usize::MAX - 1, MAX_POLICY_COMBINATIONS),
+            None
+        );
+        assert_eq!(
+            checked_combination_count(usize::MAX, 0, MAX_POLICY_COMBINATIONS),
+            Some(1)
+        );
+        assert_eq!(
+            checked_combination_count(usize::MAX, usize::MAX, MAX_POLICY_COMBINATIONS),
+            Some(1)
+        );
+        assert_eq!(
+            checked_combination_count(usize::MAX, 2, MAX_POLICY_COMBINATIONS),
+            None
+        );
+        assert_eq!(
+            checked_combination_count(1_000_000, 2, MAX_POLICY_COMBINATIONS),
+            None
+        );
+        assert_eq!(
+            checked_combination_count(10, 11, MAX_POLICY_COMBINATIONS),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn test_checked_expanded_combinations_count() {
+        // High threshold tests demonstrating bounded arithmetic prevention of intermediate
+        // overflow: 68 items with 1 condition each:
+        let items_68: Vec<usize> = (0..68).collect();
+        let mut conditions_68: ConditionMap = BTreeMap::new();
+        for &i in &items_68 {
+            conditions_68.insert(i, [Condition::default()].into_iter().collect());
+        }
+
+        // 67-of-68: C(68, 67) = 68 <= MAX_POLICY_COMBINATIONS.
+        // Intermediate DP state C(68, 37) overflows u64::MAX on 64-bit systems without bounded
+        // arithmetic.
+        assert_eq!(
+            checked_expanded_combinations_count(
+                &items_68,
+                67,
+                &conditions_68,
+                MAX_POLICY_COMBINATIONS
+            ),
+            Some(68)
+        );
+        // 68-of-68: C(68, 68) = 1
+        assert_eq!(
+            checked_expanded_combinations_count(
+                &items_68,
+                68,
+                &conditions_68,
+                MAX_POLICY_COMBINATIONS
+            ),
+            Some(1)
+        );
+        // 1-of-68: C(68, 1) = 68
+        assert_eq!(
+            checked_expanded_combinations_count(
+                &items_68,
+                1,
+                &conditions_68,
+                MAX_POLICY_COMBINATIONS
+            ),
+            Some(68)
+        );
+
+        // 35-of-36 with 1 condition each: C(36, 35) = 36 <= MAX_POLICY_COMBINATIONS.
+        // On 32-bit systems, intermediate state C(36, 18) = 9,075,135,300 overflows u32::MAX
+        // without bounded arithmetic.
+        let items_36: Vec<usize> = (0..36).collect();
+        let mut conditions_36: ConditionMap = BTreeMap::new();
+        for &i in &items_36 {
+            conditions_36.insert(i, [Condition::default()].into_iter().collect());
+        }
+        assert_eq!(
+            checked_expanded_combinations_count(
+                &items_36,
+                35,
+                &conditions_36,
+                MAX_POLICY_COMBINATIONS
+            ),
+            Some(36)
+        );
+
+        // 10-of-20 with 1 condition each: C(20, 10) = 184,756 <= 200,000
+        let items_20: Vec<usize> = (0..20).collect();
+        let mut conditions_20: ConditionMap = BTreeMap::new();
+        for &i in &items_20 {
+            conditions_20.insert(i, [Condition::default()].into_iter().collect());
+        }
+        assert_eq!(
+            checked_expanded_combinations_count(&items_20, 10, &conditions_20, 200_000),
+            Some(184_756)
+        );
+
+        // Thresholds exceeding the budget:
+        // 8-of-21: C(21, 8) = 203,490 > 200,000
+        let items_21: Vec<usize> = (0..21).collect();
+        let mut conditions_21: ConditionMap = BTreeMap::new();
+        for &i in &items_21 {
+            conditions_21.insert(i, [Condition::default()].into_iter().collect());
+        }
+        assert_eq!(
+            checked_expanded_combinations_count(&items_21, 8, &conditions_21, 200_000),
+            None
+        );
+
+        // 12-of-24: C(24, 12) = 2,704,156 > 200,000
+        let items_24: Vec<usize> = (0..24).collect();
+        let mut conditions_24: ConditionMap = BTreeMap::new();
+        for &i in &items_24 {
+            conditions_24.insert(i, [Condition::default()].into_iter().collect());
+        }
+        assert_eq!(
+            checked_expanded_combinations_count(&items_24, 12, &conditions_24, 200_000),
+            None
+        );
+
+        // Condition alternatives within budget:
+        // Item 0: 2 conditions, Item 1: 3 conditions, Item 2: 4 conditions
+        // 2-of-3 combinations: 2*3 + 2*4 + 3*4 = 6 + 8 + 12 = 26
+        let items = vec![0, 1, 2];
+        let mut multi_conditions: ConditionMap = BTreeMap::new();
+        let cond_a = Condition {
+            csv: Some(Sequence::from_height(1)),
+            timelock: None,
+        };
+        let cond_b = Condition {
+            csv: Some(Sequence::from_height(2)),
+            timelock: None,
+        };
+        let cond_c = Condition {
+            csv: Some(Sequence::from_height(3)),
+            timelock: None,
+        };
+        let cond_d = Condition {
+            csv: Some(Sequence::from_height(4)),
+            timelock: None,
+        };
+
+        multi_conditions.insert(0, [cond_a, cond_b].into_iter().collect());
+        multi_conditions.insert(1, [cond_a, cond_b, cond_c].into_iter().collect());
+        multi_conditions.insert(2, [cond_a, cond_b, cond_c, cond_d].into_iter().collect());
+
+        assert_eq!(
+            checked_expanded_combinations_count(&items, 2, &multi_conditions, 30),
+            Some(26)
+        );
+        // Condition alternatives legitimately exceeding budget:
+        assert_eq!(
+            checked_expanded_combinations_count(&items, 2, &multi_conditions, 25),
+            None
+        );
+
+        // 3-of-3 with [2, 2, 2] alternative conditions each: 2 * 2 * 2 = 8 <= 10
+        let mut conditions_3_of_3: ConditionMap = BTreeMap::new();
+        conditions_3_of_3.insert(0, [cond_a, cond_b].into_iter().collect());
+        conditions_3_of_3.insert(1, [cond_a, cond_b].into_iter().collect());
+        conditions_3_of_3.insert(2, [cond_a, cond_b].into_iter().collect());
+        assert_eq!(
+            checked_expanded_combinations_count(&items, 3, &conditions_3_of_3, 10),
+            Some(8)
+        );
+        assert_eq!(
+            checked_expanded_combinations_count(&items, 3, &conditions_3_of_3, 7),
+            None
+        );
+
+        // Cartesian expansion exceeding budget with small number of items:
+        // 5 items, 5-of-5 (raw combinations = 1), but each item has 12 alternative conditions:
+        // 12^5 = 248,832 > MAX_POLICY_COMBINATIONS (200,000)
+        let five_items = vec![0, 1, 2, 3, 4];
+        let mut explosive_conditions: ConditionMap = BTreeMap::new();
+        for i in 0..5 {
+            let set: HashSet<Condition> = (0..12)
+                .map(|h| Condition {
+                    csv: Some(Sequence::from_height(h)),
+                    timelock: None,
+                })
+                .collect();
+            explosive_conditions.insert(i, set);
+        }
+        assert_eq!(
+            checked_expanded_combinations_count(
+                &five_items,
+                5,
+                &explosive_conditions,
+                MAX_POLICY_COMBINATIONS
+            ),
+            None
+        );
+
+        // Zero / missing condition entries:
+        let mut zero_conditions: ConditionMap = BTreeMap::new();
+        // Item 0: 2 conditions, Item 1: 3 conditions, Item 2: missing (0 conditions)
+        zero_conditions.insert(0, [cond_a, cond_b].into_iter().collect());
+        zero_conditions.insert(1, [cond_a, cond_b, cond_c].into_iter().collect());
+        // For m = 2: {0, 1} contributes 2*3 = 6; combinations involving item 2 contribute 0. Total
+        // = 6.
+        assert_eq!(
+            checked_expanded_combinations_count(&items, 2, &zero_conditions, 10),
+            Some(6)
+        );
+        // For m = 3: every 3-element combination must include item 2 (with 0 conditions), total =
+        // 0.
+        assert_eq!(
+            checked_expanded_combinations_count(&items, 3, &zero_conditions, 10),
+            Some(0)
+        );
+        // All items missing / 0 conditions:
+        let empty_conditions: ConditionMap = BTreeMap::new();
+        assert_eq!(
+            checked_expanded_combinations_count(&items, 2, &empty_conditions, 10),
+            Some(0)
+        );
+        // m = 0 always yields 1 combination (empty choice), provided budget >= 1:
+        assert_eq!(
+            checked_expanded_combinations_count(&items, 0, &empty_conditions, 10),
+            Some(1)
+        );
+        assert_eq!(
+            checked_expanded_combinations_count(&items, 0, &empty_conditions, 0),
+            None
+        );
+
+        // Very large n and m values for arithmetic safety:
+        assert_eq!(
+            checked_expanded_combinations_count(
+                &items_68,
+                usize::MAX,
+                &conditions_68,
+                MAX_POLICY_COMBINATIONS
+            ),
+            Some(0)
+        );
+        assert_eq!(
+            checked_expanded_combinations_count(
+                &items_68,
+                0,
+                &conditions_68,
+                MAX_POLICY_COMBINATIONS
+            ),
+            Some(1)
+        );
+        assert_eq!(
+            checked_expanded_combinations_count(&items_68, 0, &conditions_68, 0),
+            None
+        );
+    }
+
+    #[test]
+    fn test_finalize_guards_budget_and_preserves_folded_conditions() {
+        // Test within budget: exact FoldedConditionMap preservation
+        let mut sat = Satisfaction::Partial {
+            n: 3,
+            m: 2,
+            items: vec![0, 1, 2],
+            conditions: Default::default(),
+            sorted: None,
+        };
+        // Add conditions with distinct timelocks
+        if let Satisfaction::Partial {
+            ref mut conditions, ..
+        } = sat
+        {
+            conditions.insert(
+                0,
+                [Condition {
+                    csv: None,
+                    timelock: Some(absolute::LockTime::from_height(100).unwrap()),
+                }]
+                .into_iter()
+                .collect(),
+            );
+            conditions.insert(
+                1,
+                [Condition {
+                    csv: None,
+                    timelock: Some(absolute::LockTime::from_height(200).unwrap()),
+                }]
+                .into_iter()
+                .collect(),
+            );
+            conditions.insert(
+                2,
+                [Condition {
+                    csv: None,
+                    timelock: Some(absolute::LockTime::from_height(300).unwrap()),
+                }]
+                .into_iter()
+                .collect(),
+            );
+        }
+
+        assert_matches!(sat.finalize(), Ok(()));
+
+        if let Satisfaction::PartialComplete {
+            n,
+            m,
+            items,
+            conditions,
+            sorted,
+        } = sat
+        {
+            assert_eq!(n, 3);
+            assert_eq!(m, 2);
+            assert_eq!(items, vec![0, 1, 2]);
+            assert_eq!(sorted, None);
+            assert_eq!(conditions.len(), 3);
+            // Check exact merged conditions for each combination:
+            // {0, 1} should have merged timelock = max(100, 200) = 200
+            let cond_01 = conditions.get(&vec![0, 1]).unwrap();
+            assert_eq!(cond_01.len(), 1);
+            assert_eq!(
+                cond_01.iter().next().unwrap().timelock,
+                Some(absolute::LockTime::from_height(200).unwrap())
+            );
+
+            // {0, 2} should have merged timelock = max(100, 300) = 300
+            let cond_02 = conditions.get(&vec![0, 2]).unwrap();
+            assert_eq!(cond_02.len(), 1);
+            assert_eq!(
+                cond_02.iter().next().unwrap().timelock,
+                Some(absolute::LockTime::from_height(300).unwrap())
+            );
+
+            // {1, 2} should have merged timelock = max(200, 300) = 300
+            let cond_12 = conditions.get(&vec![1, 2]).unwrap();
+            assert_eq!(cond_12.len(), 1);
+            assert_eq!(
+                cond_12.iter().next().unwrap().timelock,
+                Some(absolute::LockTime::from_height(300).unwrap())
+            );
+        } else {
+            panic!("Expected PartialComplete");
+        }
+
+        // Multi-condition combination test: verify every expected combination key and folded
+        // condition exists
+        let mut sat_multi = Satisfaction::Partial {
+            n: 3,
+            m: 2,
+            items: vec![0, 1, 2],
+            conditions: Default::default(),
+            sorted: None,
+        };
+        if let Satisfaction::Partial {
+            ref mut conditions, ..
+        } = sat_multi
+        {
+            // Item 0: {h=10, h=20}
+            conditions.insert(
+                0,
+                [
+                    Condition {
+                        csv: Some(Sequence::from_height(10)),
+                        timelock: None,
+                    },
+                    Condition {
+                        csv: Some(Sequence::from_height(20)),
+                        timelock: None,
+                    },
+                ]
+                .into_iter()
+                .collect(),
+            );
+            // Item 1: {h=15}
+            conditions.insert(
+                1,
+                [Condition {
+                    csv: Some(Sequence::from_height(15)),
+                    timelock: None,
+                }]
+                .into_iter()
+                .collect(),
+            );
+            // Item 2: {h=25}
+            conditions.insert(
+                2,
+                [Condition {
+                    csv: Some(Sequence::from_height(25)),
+                    timelock: None,
+                }]
+                .into_iter()
+                .collect(),
+            );
+        }
+        assert_matches!(sat_multi.finalize(), Ok(()));
+        if let Satisfaction::PartialComplete { conditions, .. } = sat_multi {
+            // Expected pairs: {0, 1}, {0, 2}, {1, 2}
+            assert_eq!(conditions.len(), 3);
+            // {0, 1}: max(10, 15) = 15, max(20, 15) = 20 -> 2 folded conditions
+            let c01 = conditions.get(&vec![0, 1]).unwrap();
+            assert_eq!(c01.len(), 2);
+            assert!(c01.contains(&Condition {
+                csv: Some(Sequence::from_height(15)),
+                timelock: None,
+            }));
+            assert!(c01.contains(&Condition {
+                csv: Some(Sequence::from_height(20)),
+                timelock: None,
+            }));
+
+            // {0, 2}: max(10, 25) = 25, max(20, 25) = 25 -> 1 folded condition (deduplicated in
+            // HashSet)
+            let c02 = conditions.get(&vec![0, 2]).unwrap();
+            assert_eq!(c02.len(), 1);
+            assert!(c02.contains(&Condition {
+                csv: Some(Sequence::from_height(25)),
+                timelock: None,
+            }));
+
+            // {1, 2}: max(15, 25) = 25 -> 1 folded condition
+            let c12 = conditions.get(&vec![1, 2]).unwrap();
+            assert_eq!(c12.len(), 1);
+            assert!(c12.contains(&Condition {
+                csv: Some(Sequence::from_height(25)),
+                timelock: None,
+            }));
+        } else {
+            panic!("Expected PartialComplete");
+        }
+
+        // Test exceeding budget: 12-of-24
+        let mut large_sat = Satisfaction::Partial {
+            n: 24,
+            m: 12,
+            items: (0..24).collect(),
+            conditions: Default::default(),
+            sorted: None,
+        };
+        for i in 0..24 {
+            if let Satisfaction::Partial {
+                ref mut conditions, ..
+            } = large_sat
+            {
+                conditions.insert(i, [Condition::default()].into_iter().collect());
+            }
+        }
+        assert_eq!(
+            large_sat.finalize(),
+            Err(PolicyError::ThresholdCombinationsExceeded)
+        );
+        // Verify it was NOT mutated into PartialComplete with incomplete data
+        assert_matches!(large_sat, Satisfaction::Partial { .. });
+    }
+
+    #[test]
+    fn test_finalize_conflicting_cltv_and_csv_conditions() {
+        // Conflicting CLTV: Item 0 has height-based locktime, Item 1 has time-based locktime.
+        // Item 2 has height-based locktime compatible with Item 0.
+        let mut sat_cltv = Satisfaction::Partial {
+            n: 3,
+            m: 2,
+            items: vec![0, 1, 2],
+            conditions: Default::default(),
+            sorted: None,
+        };
+        if let Satisfaction::Partial {
+            ref mut conditions, ..
+        } = sat_cltv
+        {
+            conditions.insert(
+                0,
+                [Condition {
+                    csv: None,
+                    timelock: Some(absolute::LockTime::from_height(100).unwrap()),
+                }]
+                .into_iter()
+                .collect(),
+            );
+            conditions.insert(
+                1,
+                [Condition {
+                    csv: None,
+                    timelock: Some(absolute::LockTime::from_time(1_600_000_000).unwrap()),
+                }]
+                .into_iter()
+                .collect(),
+            );
+            conditions.insert(
+                2,
+                [Condition {
+                    csv: None,
+                    timelock: Some(absolute::LockTime::from_height(200).unwrap()),
+                }]
+                .into_iter()
+                .collect(),
+            );
+        }
+        assert_matches!(sat_cltv.finalize(), Ok(()));
+        if let Satisfaction::PartialComplete { conditions, .. } = sat_cltv {
+            // {0, 1} and {1, 2} conflict on mixed units and should be filtered out
+            assert!(!conditions.contains_key(&vec![0, 1]));
+            assert!(!conditions.contains_key(&vec![1, 2]));
+            // {0, 2} is compatible and must be present
+            assert!(conditions.contains_key(&vec![0, 2]));
+        } else {
+            panic!("Expected PartialComplete");
+        }
+
+        // Conflicting CSV: Item 0 has height-based CSV, Item 1 has time-based CSV.
+        // Item 2 has height-based CSV compatible with Item 0.
+        let mut sat_csv = Satisfaction::Partial {
+            n: 3,
+            m: 2,
+            items: vec![0, 1, 2],
+            conditions: Default::default(),
+            sorted: None,
+        };
+        if let Satisfaction::Partial {
+            ref mut conditions, ..
+        } = sat_csv
+        {
+            conditions.insert(
+                0,
+                [Condition {
+                    csv: Some(Sequence::from_height(10)),
+                    timelock: None,
+                }]
+                .into_iter()
+                .collect(),
+            );
+            conditions.insert(
+                1,
+                [Condition {
+                    csv: Some(Sequence::from_512_second_intervals(10)),
+                    timelock: None,
+                }]
+                .into_iter()
+                .collect(),
+            );
+            conditions.insert(
+                2,
+                [Condition {
+                    csv: Some(Sequence::from_height(20)),
+                    timelock: None,
+                }]
+                .into_iter()
+                .collect(),
+            );
+        }
+        assert_matches!(sat_csv.finalize(), Ok(()));
+        if let Satisfaction::PartialComplete { conditions, .. } = sat_csv {
+            // {0, 1} and {1, 2} conflict on mixed CSV units and should be filtered out
+            assert!(!conditions.contains_key(&vec![0, 1]));
+            assert!(!conditions.contains_key(&vec![1, 2]));
+            // {0, 2} is compatible and must be present
+            assert!(conditions.contains_key(&vec![0, 2]));
+        } else {
+            panic!("Expected PartialComplete");
+        }
+    }
+
+    fn generate_keys_and_descriptor(
+        k: usize,
+        n: usize,
+    ) -> (ExtendedDescriptor, Arc<SignersContainer>, SecpCtx) {
+        let secp = Secp256k1::new();
+        let master = bip32::Xpriv::from_str(TPRV0_STR).unwrap();
+        let internal = master
+            .derive_priv(&secp, &[bip32::ChildNumber::from_hardened_idx(0).unwrap()])
+            .unwrap();
+
+        let mut key_strs = Vec::with_capacity(n);
+        for i in 1..=n {
+            let child = master
+                .derive_priv(
+                    &secp,
+                    &[bip32::ChildNumber::from_hardened_idx(i as u32).unwrap()],
+                )
+                .unwrap();
+            key_strs.push(format!("{child}/0/*"));
+        }
+
+        let desc_str = format!("tr({internal}/0/*,multi_a({k},{}))", key_strs.join(","));
+        let (extended_desc, key_map) =
+            ExtendedDescriptor::parse_descriptor(&secp, &desc_str).unwrap();
+        let signers = Arc::new(SignersContainer::build(key_map, &extended_desc, &secp));
+        (extended_desc, signers, secp)
+    }
+
+    #[test]
+    fn test_extract_policy_multi_a_10_of_20_success() {
+        let (extended_desc, signers, secp) = generate_keys_and_descriptor(10, 20);
+        let policy = extended_desc
+            .extract_policy(&signers, BuildSatisfaction::None, &secp)
+            .expect("should succeed within budget")
+            .expect("should have policy");
+
+        // Top level in Taproot with script tree is a Thresh node: [key_spend, script_spend]
+        assert_matches!(
+            &policy.item,
+            SatisfiableItem::Thresh { items, .. } => {
+                let multi_policy = &items[1];
+                assert_matches!(
+                    &multi_policy.item,
+                    SatisfiableItem::Multisig { threshold, .. } => {
+                        assert_eq!(*threshold, 10);
+                    }
+                );
+                assert_matches!(
+                    &multi_policy.contribution,
+                    Satisfaction::PartialComplete { n, m, items: sat_items, conditions, .. } => {
+                        assert_eq!(*n, 20);
+                        assert_eq!(*m, 10);
+                        assert_eq!(sat_items.len(), 20);
+                        // Exactly 20-choose-10 = 184,756 combinations
+                        assert_eq!(conditions.len(), 184_756);
+                    }
+                );
+            }
+        );
+    }
+
+    #[test]
+    fn test_extract_policy_multi_a_8_of_21_rejected_budget_boundary() {
+        // 8-of-21 has C(21, 8) = 203,490 combinations, just above MAX_POLICY_COMBINATIONS (200,000)
+        let (extended_desc, signers, secp) = generate_keys_and_descriptor(8, 21);
+        let err = extended_desc
+            .extract_policy(&signers, BuildSatisfaction::None, &secp)
+            .unwrap_err();
+
+        assert_matches!(
+            err,
+            Error::Policy(PolicyError::ThresholdCombinationsExceeded)
+        );
+    }
+
+    #[test]
+    fn test_extract_policy_multi_a_12_of_24_rejected_fast() {
+        // 12-of-24 has 2,704,156 combinations.
+        // Without the safeguard, this would take ~8s in release mode or ~72s in debug mode,
+        // and allocate hundreds of megabytes. With the safeguard, it terminates immediately.
+        let (extended_desc, signers, secp) = generate_keys_and_descriptor(12, 24);
+        let err = extended_desc
+            .extract_policy(&signers, BuildSatisfaction::None, &secp)
+            .unwrap_err();
+
+        assert_matches!(
+            err,
+            Error::Policy(PolicyError::ThresholdCombinationsExceeded)
+        );
+    }
+
+    #[test]
+    fn test_extract_policy_multi_a_20_of_21_near_n_success() {
+        let (extended_desc, signers, secp) = generate_keys_and_descriptor(20, 21);
+        let policy = extended_desc
+            .extract_policy(&signers, BuildSatisfaction::None, &secp)
+            .expect("should succeed within budget")
+            .expect("should have policy");
+
+        assert_matches!(
+            &policy.item,
+            SatisfiableItem::Thresh { items, .. } => {
+                let multi_policy = &items[1];
+                assert_matches!(
+                    &multi_policy.item,
+                    SatisfiableItem::Multisig { threshold, .. } => {
+                        assert_eq!(*threshold, 20);
+                    }
+                );
+                assert_matches!(
+                    &multi_policy.contribution,
+                    Satisfaction::PartialComplete { n, m, items: sat_items, conditions, .. } => {
+                        assert_eq!(*n, 21);
+                        assert_eq!(*m, 20);
+                        assert_eq!(sat_items.len(), 21);
+                        // Exactly 21-choose-20 = 21 combinations
+                        assert_eq!(conditions.len(), 21);
+                    }
+                );
+            }
+        );
+    }
+
+    #[test]
+    fn test_extract_policy_nested_threshold() {
+        let secp = Secp256k1::new();
+        let master = bip32::Xpriv::from_str(TPRV0_STR).unwrap();
+        let k1 = master
+            .derive_priv(&secp, &[bip32::ChildNumber::from_hardened_idx(1).unwrap()])
+            .unwrap();
+        let k2 = master
+            .derive_priv(&secp, &[bip32::ChildNumber::from_hardened_idx(2).unwrap()])
+            .unwrap();
+        let k3 = master
+            .derive_priv(&secp, &[bip32::ChildNumber::from_hardened_idx(3).unwrap()])
+            .unwrap();
+        let k4 = master
+            .derive_priv(&secp, &[bip32::ChildNumber::from_hardened_idx(4).unwrap()])
+            .unwrap();
+        let k5 = master
+            .derive_priv(&secp, &[bip32::ChildNumber::from_hardened_idx(5).unwrap()])
+            .unwrap();
+
+        let desc_str = format!(
+            "wsh(thresh(2,thresh(2,pk({k1}/0/*),s:pk({k2}/0/*),s:pk({k3}/0/*)),s:pk({k4}/0/*),s:pk({k5}/0/*)))"
+        );
+        let (extended_desc, key_map) =
+            ExtendedDescriptor::parse_descriptor(&secp, &desc_str).unwrap();
+        let signers = Arc::new(SignersContainer::build(key_map, &extended_desc, &secp));
+        let policy = extended_desc
+            .extract_policy(&signers, BuildSatisfaction::None, &secp)
+            .unwrap()
+            .unwrap();
+
+        assert_matches!(policy.contribution, Satisfaction::PartialComplete { n, m, .. } => {
+            assert_eq!(n, 3);
+            assert_eq!(m, 2);
+        });
     }
 }
