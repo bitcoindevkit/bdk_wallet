@@ -204,12 +204,16 @@ impl FullyNodedExport {
         Self::is_compatible_with_core(&descriptor)?;
 
         let blockheight = if include_blockheight {
-            wallet.transactions().next().map_or(0, |canonical_tx| {
-                canonical_tx
-                    .chain_position
-                    .confirmation_height_upper_bound()
-                    .unwrap_or(0)
-            })
+            wallet
+                .transactions()
+                .map(|canonical_tx| {
+                    canonical_tx
+                        .chain_position
+                        .confirmation_height_upper_bound()
+                        .unwrap_or(0)
+                })
+                .min()
+                .unwrap_or(0)
         } else {
             0
         };
@@ -702,7 +706,7 @@ mod test {
     use bitcoin::Amount;
     use core::str::FromStr;
 
-    use bdk_chain::BlockId;
+    use bdk_chain::{BlockId, ConfirmationBlockTime};
     use bitcoin::{BlockHash, Network, hashes::Hash};
 
     use super::*;
@@ -741,6 +745,52 @@ mod test {
         assert_eq!(export.change_descriptor(), Some(public_change_descriptor));
         assert_eq!(export.blockheight, 5000);
         assert_eq!(export.label, "Test Label");
+    }
+
+    #[test]
+    fn test_export_uses_earliest_confirmation_height() {
+        let descriptor = "wpkh(xprv9s21ZrQH143K4CTb63EaMxja1YiTnSEWKMbn23uoEnAzxjdUJRQkazCAtzxGm4LSoTSVTptoV9RbchnKPW9HxKtZumdyxyikZFDLhogJ5Uj/44'/0'/0'/0/*)";
+        let change_descriptor = "wpkh(xprv9s21ZrQH143K4CTb63EaMxja1YiTnSEWKMbn23uoEnAzxjdUJRQkazCAtzxGm4LSoTSVTptoV9RbchnKPW9HxKtZumdyxyikZFDLhogJ5Uj/44'/0'/0'/1/*)";
+        let mut wallet = Wallet::create(descriptor, change_descriptor)
+            .network(Network::Bitcoin)
+            .create_wallet_no_persist()
+            .unwrap();
+
+        let early_block = BlockId {
+            height: 4000,
+            hash: BlockHash::all_zeros(),
+        };
+        let later_block = BlockId {
+            height: 5000,
+            hash: BlockHash::all_zeros(),
+        };
+        insert_checkpoint(&mut wallet, early_block);
+        insert_checkpoint(&mut wallet, later_block);
+
+        receive_output(&mut wallet, Amount::from_sat(10_000), ReceiveTo::Mempool(0));
+        receive_output(&mut wallet, Amount::from_sat(20_000), ReceiveTo::Mempool(0));
+        let txids: Vec<_> = wallet.transactions().map(|tx| tx.tx_node.txid).collect();
+        assert_eq!(txids.len(), 2);
+
+        insert_anchor(
+            &mut wallet,
+            txids[0],
+            ConfirmationBlockTime {
+                block_id: later_block,
+                confirmation_time: 0,
+            },
+        );
+        insert_anchor(
+            &mut wallet,
+            txids[1],
+            ConfirmationBlockTime {
+                block_id: early_block,
+                confirmation_time: 0,
+            },
+        );
+
+        let export = FullyNodedExport::export_wallet(&wallet, "Test Label", true).unwrap();
+        assert_eq!(export.blockheight, 4000);
     }
 
     #[test]
