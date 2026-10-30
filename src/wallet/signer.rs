@@ -485,6 +485,7 @@ impl InputSigner for SignerWrapper<PrivateKey> {
                 .as_ref()
                 .is_some_and(|witness| witness != prevout)
             {
+                // Ideally InvalidWitnessUtxo; reuse this error for API compatibility.
                 return Err(SignerError::InvalidNonWitnessUtxo);
             }
         } else if !sign_options.trust_witness_utxo && input.witness_utxo.is_some() {

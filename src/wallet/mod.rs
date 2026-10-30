@@ -945,8 +945,9 @@ impl Wallet {
     /// Calculates the fee of a given transaction. Returns [`Amount::ZERO`] if `tx` is a coinbase
     /// transaction.
     ///
-    /// To calculate the fee for a [`Transaction`] with inputs not owned by this wallet you must
-    /// manually insert the TxOut(s) into the tx graph using the [`insert_txout`] function.
+    /// To calculate the fee for a [`Transaction`] with inputs not owned by this wallet, register
+    /// any missing prevouts with [`insert_txout`] or their full parent transactions with
+    /// [`apply_update`](Self::apply_update).
     ///
     /// Note `tx` does not have to be in the graph for this to work.
     ///
@@ -976,8 +977,8 @@ impl Wallet {
 
     /// Calculate the [`FeeRate`] for a given transaction.
     ///
-    /// To calculate the fee rate for a [`Transaction`] with inputs not owned by this wallet you
-    /// must manually insert the TxOut(s) into the tx graph using the [`insert_txout`] function.
+    /// To calculate the fee rate for a [`Transaction`] with inputs not owned by this wallet,
+    /// register any missing prevouts as described in [`calculate_fee`](Self::calculate_fee).
     ///
     /// Note `tx` does not have to be in the graph for this to work.
     ///
@@ -1000,7 +1001,6 @@ impl Wallet {
     /// let tx = &psbt.clone().extract_tx().expect("tx");
     /// let fee_rate = wallet.calculate_fee_rate(tx).expect("fee rate");
     /// ```
-    /// [`insert_txout`]: Self::insert_txout
     pub fn calculate_fee_rate(&self, tx: &Transaction) -> Result<FeeRate, CalculateFeeError> {
         self.calculate_fee(tx).map(|fee| fee / tx.weight())
     }
@@ -1619,6 +1619,8 @@ impl Wallet {
     /// Returns an error if the transaction is already confirmed or doesn't explicitly signal
     /// *replace by fee* (RBF). If the transaction can be fee bumped then it returns a [`TxBuilder`]
     /// pre-populated with the inputs and outputs of the original transaction.
+    /// For foreign inputs, register the required prevout data as described in
+    /// [`TxBuilder::add_foreign_utxo`](tx_builder::TxBuilder::add_foreign_utxo).
     ///
     /// ## Example
     ///
@@ -1735,25 +1737,32 @@ impl Wallet {
                             }),
                         })
                     }
-                    None => Ok(WeightedUtxo {
-                        satisfaction_weight: Weight::from_wu_usize(
-                            serialize(&txin.script_sig).len() * 4 + serialize(&txin.witness).len(),
-                        ),
-                        utxo: Utxo::Foreign {
-                            outpoint,
-                            sequence: txin.sequence,
-                            psbt_input: Box::new(psbt::Input {
-                                witness_utxo: prev_txout
-                                    .script_pubkey
-                                    .witness_version()
-                                    .map(|_| prev_txout),
-                                non_witness_utxo: tx_graph
-                                    .get_tx(outpoint.txid)
-                                    .map(|tx| tx.as_ref().clone()),
-                                ..Default::default()
-                            }),
-                        },
-                    }),
+                    None => {
+                        let witness_utxo = prev_txout
+                            .script_pubkey
+                            .witness_version()
+                            .map(|_| prev_txout);
+                        let non_witness_utxo =
+                            tx_graph.get_tx(outpoint.txid).map(|tx| tx.as_ref().clone());
+                        if witness_utxo.is_none() && non_witness_utxo.is_none() {
+                            return Err(BuildFeeBumpError::TransactionNotFound(outpoint.txid));
+                        }
+                        Ok(WeightedUtxo {
+                            satisfaction_weight: Weight::from_wu_usize(
+                                serialize(&txin.script_sig).len() * 4
+                                    + serialize(&txin.witness).len(),
+                            ),
+                            utxo: Utxo::Foreign {
+                                outpoint,
+                                sequence: txin.sequence,
+                                psbt_input: Box::new(psbt::Input {
+                                    witness_utxo,
+                                    non_witness_utxo,
+                                    ..Default::default()
+                                }),
+                            },
+                        })
+                    }
                 }
             })
             .collect::<Result<_, _>>()?;
@@ -1903,7 +1912,14 @@ impl Wallet {
                     if input.non_witness_utxo.is_none() {
                         return Err(SignerError::MissingNonWitnessUtxo);
                     }
-                    if validated_non_witness_prevout(input, txin.previous_output).is_none() {
+                    let prevout = validated_non_witness_prevout(input, txin.previous_output)
+                        .ok_or(SignerError::InvalidNonWitnessUtxo)?;
+                    if input
+                        .witness_utxo
+                        .as_ref()
+                        .is_some_and(|witness| witness != prevout)
+                    {
+                        // Ideally InvalidWitnessUtxo; reuse this error for API compatibility.
                         return Err(SignerError::InvalidNonWitnessUtxo);
                     }
                 }
