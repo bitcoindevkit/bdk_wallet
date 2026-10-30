@@ -75,6 +75,8 @@ pub struct PsbtParams<C> {
     pub(crate) fallback_sequence: Option<Sequence>,
     /// The context in which the params are used.
     pub(crate) marker: core::marker::PhantomData<C>,
+    /// Set whether to automatically lock the selected UTXOs (inputs) of the created transaction.
+    pub(crate) lock_utxos: bool,
 }
 
 impl Default for PsbtParams<CreateTx> {
@@ -101,6 +103,7 @@ impl Default for PsbtParams<CreateTx> {
             sequence_overrides: Default::default(),
             fallback_sequence: Default::default(),
             marker: core::marker::PhantomData,
+            lock_utxos: false,
         }
     }
 }
@@ -244,6 +247,7 @@ impl PsbtParams<CreateTx> {
             sequence_overrides: self.sequence_overrides,
             fallback_sequence: self.fallback_sequence,
             marker: core::marker::PhantomData,
+            lock_utxos: self.lock_utxos,
         }
     }
 }
@@ -273,6 +277,13 @@ impl<C> PsbtParams<C> {
     /// [`add_planned_input`]: PsbtParams::add_planned_input
     pub fn manually_selected_only(&mut self) -> &mut Self {
         self.manually_selected_only = true;
+        self
+    }
+
+    /// Set whether to automatically lock the selected UTXOs (inputs) of the created transaction in
+    /// the wallet.
+    pub fn lock_utxos(&mut self, lock: bool) -> &mut Self {
+        self.lock_utxos = lock;
         self
     }
 
