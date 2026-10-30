@@ -293,6 +293,22 @@ pub trait InputSigner: SignerCommon {
 ///
 /// This trait can be implemented when the signer can't sign inputs individually, but signs the
 /// whole transaction at once.
+///
+/// # Note on `trust_witness_utxo`
+///
+/// Calling a signer directly through this trait does **not** enforce
+/// [`SignOptions::trust_witness_utxo`] across the whole PSBT. Each implementation only validates
+/// the input it is signing: an input the signer has no key for, or an input carrying only a
+/// `witness_utxo`, can be left in place without raising [`SignerError::MissingNonWitnessUtxo`].
+/// The whole-PSBT check — reject the PSBT unless every input has a verified `non_witness_utxo`
+/// (or every input is Taproot) — is performed by [`Wallet::sign`], not by the signers themselves.
+///
+/// As a result, signing a PSBT directly through a [`TransactionSigner`] can commit to a fee that
+/// depends on an unverified `witness_utxo`, which [`Wallet::sign`] would have rejected under its
+/// default [`SignOptions`]. Prefer [`Wallet::sign`] unless you are deliberately performing the
+/// `non_witness_utxo` verification yourself.
+///
+/// [`Wallet::sign`]: crate::Wallet::sign
 pub trait TransactionSigner: SignerCommon {
     /// Sign all the inputs of the psbt
     fn sign_transaction(
@@ -310,6 +326,24 @@ impl<T: InputSigner> TransactionSigner for T {
         sign_options: &SignOptions,
         secp: &SecpCtx,
     ) -> Result<(), SignerError> {
+        if !sign_options.trust_witness_utxo {
+            let all_inputs_p2tr = psbt
+                .inputs
+                .iter()
+                .zip(psbt.unsigned_tx.input.iter())
+                .all(|(inp, txin)| {
+                    validated_non_witness_prevout(inp, txin.previous_output)
+                        .or(inp.witness_utxo.as_ref())
+                        .is_some_and(|txout| txout.script_pubkey.is_p2tr())
+                });
+            if !all_inputs_p2tr {
+                for (_input_index, input) in psbt.inputs.iter().enumerate() {
+                    if input.non_witness_utxo.is_none() && input.witness_utxo.is_some() {
+                        return Err(SignerError::MissingNonWitnessUtxo);
+                    }
+                }
+            }
+        }
         for input_index in 0..psbt.inputs.len() {
             self.sign_input(psbt, input_index, sign_options, secp)?;
         }
@@ -832,6 +866,17 @@ pub struct SignOptions {
     /// of the PSBT.
     ///
     /// For more details see: <https://blog.trezor.io/details-of-firmware-updates-for-trezor-one-version-1-9-1-and-trezor-model-t-version-2-3-1-1eba8f60f2dd>
+    ///
+    /// # Note
+    ///
+    /// This option is only enforced across the whole PSBT by [`Wallet::sign`], which rejects a
+    /// PSBT with [`SignerError::MissingNonWitnessUtxo`] when any input lacks a `non_witness_utxo`
+    /// (unless every input is Taproot). The individual [`TransactionSigner`] and [`InputSigner`]
+    /// implementations only apply this check to the input they are signing, so calling a signer
+    /// directly does **not** give the same whole-PSBT guarantee. See the documentation on
+    /// [`TransactionSigner`] for details.
+    ///
+    /// [`Wallet::sign`]: crate::Wallet::sign
     pub trust_witness_utxo: bool,
 
     /// Whether the wallet should assume a specific height has been reached when trying to finalize
