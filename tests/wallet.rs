@@ -3697,3 +3697,55 @@ fn test_create_and_spend_from_truc_tx() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+// Policy extraction yields `None` for descriptors made only of raw-pkh fragments, `create_tx`
+// must not panic when falling back to the descriptor policy for these.
+// See https://github.com/bitcoindevkit/bdk_wallet/issues/579
+const RAW_PKH_DESC: &str = "c:expr_raw_pkh(00112233445566778899aabbccddeeff00112233)";
+const SH_RAW_PKH_DESC: &str = "sh(c:expr_raw_pkh(00112233445566778899aabbccddeeff00112233))";
+
+fn assert_create_tx_without_policy(descriptor: &str, change_descriptor: Option<&str>) {
+    let (mut wallet, _) = match change_descriptor {
+        Some(change_descriptor) => get_funded_wallet(descriptor, change_descriptor),
+        None => get_funded_wallet_single(descriptor),
+    };
+    let addr = wallet.next_unused_address(KeychainKind::External);
+    let mut builder = wallet.build_tx();
+    builder.add_recipient(addr.script_pubkey(), Amount::from_sat(25_000));
+    let psbt = builder.finish().unwrap();
+
+    // No spending condition can be derived from a missing policy, so the defaults apply
+    assert_eq!(psbt.unsigned_tx.version, transaction::Version::TWO);
+    assert_eq!(psbt.unsigned_tx.input.len(), 1);
+    assert_eq!(
+        psbt.unsigned_tx.input[0].sequence,
+        Sequence::ENABLE_RBF_NO_LOCKTIME
+    );
+    assert!(
+        psbt.unsigned_tx
+            .output
+            .iter()
+            .any(|txout| txout.script_pubkey == addr.script_pubkey()
+                && txout.value == Amount::from_sat(25_000))
+    );
+}
+
+#[test]
+fn test_create_tx_raw_pkh_external_descriptor_without_policy() {
+    assert_create_tx_without_policy(RAW_PKH_DESC, None);
+}
+
+#[test]
+fn test_create_tx_sh_raw_pkh_external_descriptor_without_policy() {
+    assert_create_tx_without_policy(SH_RAW_PKH_DESC, None);
+}
+
+#[test]
+fn test_create_tx_raw_pkh_internal_descriptor_without_policy() {
+    assert_create_tx_without_policy(get_test_wpkh(), Some(RAW_PKH_DESC));
+}
+
+#[test]
+fn test_create_tx_sh_raw_pkh_internal_descriptor_without_policy() {
+    assert_create_tx_without_policy(get_test_wpkh(), Some(SH_RAW_PKH_DESC));
+}
