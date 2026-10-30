@@ -134,6 +134,7 @@
 //! If you need to preserve the exact original descriptor format, store it separately
 //! rather than relying on round-trip conversion.
 
+use alloc::collections::BTreeSet;
 use alloc::string::String;
 use alloc::string::ToString;
 use alloc::vec::Vec;
@@ -638,9 +639,26 @@ impl CaravanExport {
     }
 
     /// Import a wallet from Caravan format using proper Descriptor construction
+    ///
+    /// Returns an error if the same extended public key appears more than once, or if
+    /// `quorum.totalSigners` does not match the number of extended public keys.
     pub fn to_descriptors(&self) -> Result<(String, String), &'static str> {
         if self.extended_public_keys.is_empty() {
             return Err("No extended public keys found");
+        }
+
+        if self.quorum.total_signers as usize != self.extended_public_keys.len() {
+            return Err("quorum.totalSigners does not match the number of extended public keys");
+        }
+
+        // Reject configs that list the same key material more than once. Only the
+        // public key and chain code affect derivation, so xpubs that differ only in
+        // metadata (depth, parent fingerprint, child number, network) are the same key.
+        let mut seen = BTreeSet::new();
+        for key in &self.extended_public_keys {
+            if !seen.insert((key.xpub.public_key, key.xpub.chain_code)) {
+                return Err("Duplicate extended public keys found");
+            }
         }
 
         // Create DescriptorPublicKey objects for external and internal chains
@@ -840,8 +858,8 @@ mod test {
 
     #[test]
     fn test_caravan_export_p2wsh() {
-        let descriptor = "wsh(sortedmulti(2,[119dbcab/48h/0h/0h/2h]xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhgbmJbZRkrgZw4koxb5JaHWkY4ALHY2grBGRjaDMzQLcgJvLJuZZvRcEL/0/*,[e650dc93/48h/0h/0h/2h]xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhgbmJbZRkrgZw4koxb5JaHWkY4ALHY2grBGRjaDMzQLcgJvLJuZZvRcEL/0/*))";
-        let change_descriptor = "wsh(sortedmulti(2,[119dbcab/48h/0h/0h/2h]xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhgbmJbZRkrgZw4koxb5JaHWkY4ALHY2grBGRjaDMzQLcgJvLJuZZvRcEL/1/*,[e650dc93/48h/0h/0h/2h]xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhgbmJbZRkrgZw4koxb5JaHWkY4ALHY2grBGRjaDMzQLcgJvLJuZZvRcEL/1/*))";
+        let descriptor = "wsh(sortedmulti(2,[119dbcab/48h/0h/0h/2h]xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhgbmJbZRkrgZw4koxb5JaHWkY4ALHY2grBGRjaDMzQLcgJvLJuZZvRcEL/0/*,[e650dc93/48h/0h/0h/2h]xpub6BzhLAQUDcBUfHRQHZxDF2AbcJqp4Kaeq6bzJpXrjrWuK26ymTFwkEFbxPra2bJ7yeZKbDjfDeFwxe93JMqpo5SsPJH6dZdvV9kMzJkAZ69/0/*))";
+        let change_descriptor = "wsh(sortedmulti(2,[119dbcab/48h/0h/0h/2h]xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhgbmJbZRkrgZw4koxb5JaHWkY4ALHY2grBGRjaDMzQLcgJvLJuZZvRcEL/1/*,[e650dc93/48h/0h/0h/2h]xpub6BzhLAQUDcBUfHRQHZxDF2AbcJqp4Kaeq6bzJpXrjrWuK26ymTFwkEFbxPra2bJ7yeZKbDjfDeFwxe93JMqpo5SsPJH6dZdvV9kMzJkAZ69/1/*))";
         let network = Network::Bitcoin;
 
         let wallet = get_test_wallet(descriptor, change_descriptor, network);
@@ -945,7 +963,7 @@ mod test {
         let json = r#"{
             "name": "Test Wallet",
             "addressType": "P2WSH",
-            "network": "mainnet",
+            "network": "testnet",
             "client": {
                 "type": "public"
             },
@@ -957,19 +975,19 @@ mod test {
                 {
                     "name": "key1",
                     "bip32Path": "m/48'/0'/0'/2'",
-                    "xpub": "xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhgbmJbZRkrgZw4koxb5JaHWkY4ALHY2grBGRjaDMzQLcgJvLJuZZvRcEL",
+                    "xpub": "tpubDCKxNyM3bLgbEX13Mcd8mYxbVg9ajDkWXMh29hMWBurKfVmBfWAM96QVP3zaUcN51HvkZ3ar4VwP82kC8JZhhux8vFQoJintSpVBwpFvyU3",
                     "xfp": "119dbcab"
                 },
                 {
                     "name": "key2",
                     "bip32Path": "m/48'/0'/0'/2'",
-                    "xpub": "xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhgbmJbZRkrgZw4koxb5JaHWkY4ALHY2grBGRjaDMzQLcgJvLJuZZvRcEL",
+                    "xpub": "tpubDDp3ZSH1yCwusRppH7zgSxq2t1VEUyXSeEp8E5aFS8m43MknUjiF1bSLo3CGWAxbDyhF1XowA5ukPzyJZjznYk3kYi6oe7QxtX2euvKWsk4",
                     "xfp": "e650dc93"
                 },
                 {
                     "name": "key3",
                     "bip32Path": "m/48'/0'/0'/2'",
-                    "xpub": "xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhgbmJbZRkrgZw4koxb5JaHWkY4ALHY2grBGRjaDMzQLcgJvLJuZZvRcEL",
+                    "xpub": "tpubDCDi5W4sP6zSnzJeowy8rQDVhBdRARaPhK1axABi8V1661wEPeanpEXj4ZLAUEoikVtoWcyK26TKKJSecSfeKxwHCcRrge9k1ybuiL71z4a",
                     "xfp": "bcc3df08"
                 }
             ],
@@ -1118,5 +1136,166 @@ mod test {
         assert_eq!(key.bip32_path, deserialized.bip32_path);
         assert_eq!(key.xpub.to_string(), deserialized.xpub.to_string());
         assert_eq!(key.xfp, deserialized.xfp);
+    }
+
+    #[test]
+    fn test_caravan_import_rejects_duplicate_xpubs() {
+        let json = r#"{
+           "name": "Test Wallet",
+           "addressType": "P2WSH",
+           "network": "testnet",
+           "client": { "type": "public" },
+           "quorum": { "requiredSigners": 2, "totalSigners": 2 },
+           "extendedPublicKeys": [
+               {
+                   "name": "key1",
+                   "bip32Path": "m/48'/1'/0'/2'",
+                   "xpub": "tpubDCKxNyM3bLgbEX13Mcd8mYxbVg9ajDkWXMh29hMWBurKfVmBfWAM96QVP3zaUcN51HvkZ3ar4VwP82kC8JZhhux8vFQoJintSpVBwpFvyU3",
+                   "xfp": "73756c7f"
+               },
+               {
+                   "name": "key2",
+                   "bip32Path": "m/48'/1'/0'/2'",
+                   "xpub": "tpubDCKxNyM3bLgbEX13Mcd8mYxbVg9ajDkWXMh29hMWBurKfVmBfWAM96QVP3zaUcN51HvkZ3ar4VwP82kC8JZhhux8vFQoJintSpVBwpFvyU3",
+                   "xfp": "73756c7f"
+               }
+           ],
+           "startingAddressIndex": 0
+       }"#;
+
+        let import = CaravanExport::from_str(json).unwrap();
+        assert_eq!(
+            import.to_descriptors(),
+            Err("Duplicate extended public keys found")
+        );
+    }
+
+    #[test]
+    fn test_caravan_import_rejects_total_signers_mismatch() {
+        let json = r#"{
+            "name": "Test Wallet",
+            "addressType": "P2WSH",
+            "network": "testnet",
+            "client": { "type": "public" },
+            "quorum": { "requiredSigners": 2, "totalSigners": 2 },
+            "extendedPublicKeys": [
+                {
+                    "name": "key1",
+                    "bip32Path": "m/48'/1'/0'/2'",
+                    "xpub": "tpubDCKxNyM3bLgbEX13Mcd8mYxbVg9ajDkWXMh29hMWBurKfVmBfWAM96QVP3zaUcN51HvkZ3ar4VwP82kC8JZhhux8vFQoJintSpVBwpFvyU3",
+                    "xfp": "73756c7f"
+                },
+                {
+                    "name": "key2",
+                    "bip32Path": "m/48'/1'/0'/2'",
+                    "xpub": "tpubDDp3ZSH1yCwusRppH7zgSxq2t1VEUyXSeEp8E5aFS8m43MknUjiF1bSLo3CGWAxbDyhF1XowA5ukPzyJZjznYk3kYi6oe7QxtX2euvKWsk4",
+                    "xfp": "f9f62194"
+                }
+            ],
+            "startingAddressIndex": 0
+        }"#;
+
+        let mut import = CaravanExport::from_str(json).unwrap();
+        assert!(import.to_descriptors().is_ok());
+
+        // Declares more signers than keys provided.
+        import.quorum.total_signers = 3;
+        assert_eq!(
+            import.to_descriptors(),
+            Err("quorum.totalSigners does not match the number of extended public keys")
+        );
+
+        // Declares fewer signers than keys provided.
+        import.quorum.total_signers = 1;
+        assert_eq!(
+            import.to_descriptors(),
+            Err("quorum.totalSigners does not match the number of extended public keys")
+        );
+    }
+
+    /// A valid 2-of-2 import with two distinct keys.
+    fn two_signer_import() -> CaravanExport {
+        let json = r#"{
+            "name": "Test Wallet",
+            "addressType": "P2WSH",
+            "network": "testnet",
+            "client": { "type": "public" },
+            "quorum": { "requiredSigners": 2, "totalSigners": 2 },
+            "extendedPublicKeys": [
+                {
+                    "name": "key1",
+                    "bip32Path": "m/48'/1'/0'/2'",
+                    "xpub": "tpubDCKxNyM3bLgbEX13Mcd8mYxbVg9ajDkWXMh29hMWBurKfVmBfWAM96QVP3zaUcN51HvkZ3ar4VwP82kC8JZhhux8vFQoJintSpVBwpFvyU3",
+                    "xfp": "73756c7f"
+                },
+                {
+                    "name": "key2",
+                    "bip32Path": "m/48'/1'/0'/2'",
+                    "xpub": "tpubDDp3ZSH1yCwusRppH7zgSxq2t1VEUyXSeEp8E5aFS8m43MknUjiF1bSLo3CGWAxbDyhF1XowA5ukPzyJZjznYk3kYi6oe7QxtX2euvKWsk4",
+                    "xfp": "f9f62194"
+                }
+            ],
+            "startingAddressIndex": 0
+        }"#;
+        CaravanExport::from_str(json).unwrap()
+    }
+
+    #[test]
+    fn test_caravan_import_rejects_same_key_material_with_different_metadata() {
+        let original = two_signer_import().extended_public_keys[0].xpub;
+
+        let mut different_depth = original;
+        different_depth.depth = original.depth.wrapping_add(1);
+
+        let mut different_child_number = original;
+        different_child_number.child_number =
+            bitcoin::bip32::ChildNumber::from_normal_idx(7).unwrap();
+
+        let mut different_parent = original;
+        different_parent.parent_fingerprint = Fingerprint::from([1, 2, 3, 4]);
+
+        let mut different_network = original;
+        different_network.network = NetworkKind::Main;
+
+        for variant in [
+            different_depth,
+            different_child_number,
+            different_parent,
+            different_network,
+        ] {
+            let mut import = two_signer_import();
+            import.extended_public_keys[1].xpub = variant;
+            // Different origin information too.
+            import.extended_public_keys[1].xfp = Fingerprint::from([0xde, 0xad, 0xbe, 0xef]);
+            import.extended_public_keys[1].bip32_path =
+                DerivationPath::from_str("m/48'/1'/1'/2'").unwrap();
+
+            assert_eq!(
+                import.to_descriptors(),
+                Err("Duplicate extended public keys found")
+            );
+        }
+    }
+
+    #[test]
+    fn test_caravan_import_allows_keys_sharing_only_pubkey_or_chain_code() {
+        let base = two_signer_import();
+        let first = base.extended_public_keys[0].xpub;
+
+        // Same public key, different chain code: derives different children.
+        let mut import = two_signer_import();
+        import.extended_public_keys[1].xpub.public_key = first.public_key;
+        assert_ne!(
+            import.to_descriptors(),
+            Err("Duplicate extended public keys found")
+        );
+
+        // Same chain code, different public key: derives different children.
+        let mut import = two_signer_import();
+        import.extended_public_keys[1].xpub.chain_code = first.chain_code;
+        assert_ne!(
+            import.to_descriptors(),
+            Err("Duplicate extended public keys found")
+        );
     }
 }
