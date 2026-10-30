@@ -64,7 +64,7 @@ use crate::descriptor::ExtractPolicy;
 use crate::keys::ExtScriptContext;
 use crate::types::IndexOutOfBoundsError;
 use crate::wallet::signer::{SignerId, SignersContainer};
-use crate::wallet::utils::{After, Older, SecpCtx};
+use crate::wallet::utils::{After, ConfirmationHeight, Older, SecpCtx};
 
 use super::XKeyUtils;
 use super::checksum::calc_checksum;
@@ -980,7 +980,11 @@ impl<Ctx: ScriptContext + 'static> ExtractPolicy for Miniscript<DescriptorPublic
                     psbt,
                 } = build_sat
                 {
-                    let older = Older::new(Some(current_height), Some(input_max_height), false);
+                    let older = Older::new(
+                        Some(current_height),
+                        Some(ConfirmationHeight::Confirmed(input_max_height)),
+                        false,
+                    );
                     let older_sat =
                         Satisfier::<bitcoin::PublicKey>::check_older(&older, (*value).into());
                     let inputs_sat = psbt_inputs_sat(psbt).all(|sat| {

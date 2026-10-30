@@ -76,7 +76,7 @@ use crate::wallet::{
     error::{BuildFeeBumpError, CreateTxError, MiniscriptPsbtError},
     signer::{SignOptions, SignerError, SignerOrdering, SignersContainer, TransactionSigner},
     tx_builder::{FeePolicy, TxBuilder, TxParams},
-    utils::{After, Older, SecpCtx, check_nsequence_rbf},
+    utils::{After, ConfirmationHeight, Older, SecpCtx, check_nsequence_rbf},
 };
 // Unstable bdk-tx imports — only active with --cfg bdk_wallet_unstable and feature = "bdk-tx".
 #[cfg(all(bdk_wallet_unstable, feature = "bdk-tx", feature = "std"))]
@@ -2017,11 +2017,13 @@ impl Wallet {
             .map(|canon_tx| {
                 let txid = canon_tx.tx_node.txid;
                 match canon_tx.chain_position {
-                    ChainPosition::Confirmed { anchor, .. } => (txid, anchor.block_id.height),
-                    ChainPosition::Unconfirmed { .. } => (txid, u32::MAX),
+                    ChainPosition::Confirmed { anchor, .. } => {
+                        (txid, ConfirmationHeight::Confirmed(anchor.block_id.height))
+                    }
+                    ChainPosition::Unconfirmed { .. } => (txid, ConfirmationHeight::Unconfirmed),
                 }
             })
-            .collect::<HashMap<Txid, u32>>();
+            .collect::<HashMap<Txid, ConfirmationHeight>>();
         let current_height = sign_options
             .assume_height
             .unwrap_or_else(|| self.chain.tip().height());
@@ -2066,7 +2068,7 @@ impl Wallet {
         clear_output_derivations: bool,
     ) -> Result<FinalizePsbtOutcome, IndexOutOfBoundsError>
     where
-        F: FnMut(usize, &bitcoin::TxIn) -> Option<u32>,
+        F: FnMut(usize, &bitcoin::TxIn) -> Option<ConfirmationHeight>,
     {
         let tx = &psbt.unsigned_tx;
         if psbt.inputs.len() < tx.input.len() {
