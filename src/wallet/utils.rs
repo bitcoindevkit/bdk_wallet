@@ -278,4 +278,116 @@ mod test {
         shuffle_slice(&mut test, &mut rng);
         assert_eq!(test, &[0, 4, 1, 2, 5]);
     }
+
+    // --- Older::check_older boundary tests (addresses TODO on line 111) ---
+
+    use super::{After, Older};
+    use bitcoin::{absolute, relative, PublicKey};
+    use miniscript::Satisfier;
+
+    #[test]
+    fn test_check_older_at_boundary() {
+        // current_height == create_height + n → should pass (>=)
+        let older = Older::new(Some(110), Some(100), false);
+        assert!(Satisfier::<PublicKey>::check_older(
+            &older,
+            relative::LockTime::from_height(10)
+        ));
+    }
+
+    #[test]
+    fn test_check_older_above_boundary() {
+        // current_height > create_height + n → should pass
+        let older = Older::new(Some(111), Some(100), false);
+        assert!(Satisfier::<PublicKey>::check_older(
+            &older,
+            relative::LockTime::from_height(10)
+        ));
+    }
+
+    #[test]
+    fn test_check_older_below_boundary() {
+        // current_height < create_height + n → should fail
+        let older = Older::new(Some(109), Some(100), false);
+        assert!(!Satisfier::<PublicKey>::check_older(
+            &older,
+            relative::LockTime::from_height(10)
+        ));
+    }
+
+    #[test]
+    fn test_check_older_none_height_assume_true() {
+        let older = Older::new(None, Some(100), true);
+        assert!(Satisfier::<PublicKey>::check_older(
+            &older,
+            relative::LockTime::from_height(10)
+        ));
+    }
+
+    #[test]
+    fn test_check_older_none_height_assume_false() {
+        let older = Older::new(None, Some(100), false);
+        assert!(!Satisfier::<PublicKey>::check_older(
+            &older,
+            relative::LockTime::from_height(10)
+        ));
+    }
+
+    #[test]
+    fn test_check_older_none_create_height() {
+        // create_height defaults to 0, so current_height >= 0 + 10
+        let older = Older::new(Some(10), None, false);
+        assert!(Satisfier::<PublicKey>::check_older(
+            &older,
+            relative::LockTime::from_height(10)
+        ));
+    }
+
+    // --- After::check_after boundary tests ---
+
+    #[test]
+    fn test_check_after_at_boundary() {
+        // current_height == locktime → should pass (>=)
+        let after = After::new(Some(100_000), false);
+        assert!(Satisfier::<PublicKey>::check_after(
+            &after,
+            absolute::LockTime::from_consensus(100_000)
+        ));
+    }
+
+    #[test]
+    fn test_check_after_above_boundary() {
+        let after = After::new(Some(100_001), false);
+        assert!(Satisfier::<PublicKey>::check_after(
+            &after,
+            absolute::LockTime::from_consensus(100_000)
+        ));
+    }
+
+    #[test]
+    fn test_check_after_below_boundary() {
+        let after = After::new(Some(99_999), false);
+        assert!(!Satisfier::<PublicKey>::check_after(
+            &after,
+            absolute::LockTime::from_consensus(100_000)
+        ));
+    }
+
+    #[test]
+    fn test_check_after_none_height_assume_true() {
+        let after = After::new(None, true);
+        assert!(Satisfier::<PublicKey>::check_after(
+            &after,
+            absolute::LockTime::from_consensus(100_000)
+        ));
+    }
+
+    #[test]
+    fn test_check_after_none_height_assume_false() {
+        let after = After::new(None, false);
+        assert!(!Satisfier::<PublicKey>::check_after(
+            &after,
+            absolute::LockTime::from_consensus(100_000)
+        ));
+    }
 }
