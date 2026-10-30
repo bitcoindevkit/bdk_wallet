@@ -171,6 +171,8 @@ pub enum CreateTxError {
     Version0,
     /// Requested transaction version `1`, but at least `2` is needed to use OP_CSV
     Version1Csv,
+    /// The synced chain tip height cannot be represented as a block-based locktime
+    InvalidChainTipHeight(u32),
     /// Requested `LockTime` is less than is required to spend from this script
     LockTime {
         /// Requested `LockTime`
@@ -235,6 +237,9 @@ impl fmt::Display for CreateTxError {
                     f,
                     "TxBuilder requested version `1`, but at least `2` is needed to use OP_CSV"
                 )
+            }
+            CreateTxError::InvalidChainTipHeight(height) => {
+                write!(f, "Invalid chain tip height: {height}")
             }
             CreateTxError::LockTime {
                 requested,
