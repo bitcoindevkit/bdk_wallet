@@ -399,6 +399,9 @@ impl OutputGroup {
 
 /// Branch and bound coin selection
 ///
+/// Optional UTXOs with non-positive effective value are excluded from both branch and bound
+/// and the fallback algorithm. Required UTXOs are always included, regardless of effective value.
+///
 /// Code adapted from Bitcoin Core's implementation and from Mark Erhardt Master's Thesis: <http://murch.one/wp-content/uploads/2016/11/erhardt2016coinselection.pdf>
 #[derive(Debug, Clone)]
 pub struct BranchAndBoundCoinSelection<Cs = SingleRandomDraw> {
@@ -455,13 +458,13 @@ impl<Cs: CoinSelectionAlgorithm> CoinSelectionAlgorithm for BranchAndBoundCoinSe
             .map(|u| OutputGroup::new(u.clone(), fee_rate))
             .collect();
 
-        // Mapping every (UTXO, usize) to an output group, filtering UTXOs with a negative
-        // effective value
-        let optional_ogs: Vec<OutputGroup> = optional_utxos
-            .iter()
-            .map(|u| OutputGroup::new(u.clone(), fee_rate))
+        // Use the same positive-effective-value candidates for BnB and its fallback.
+        let (optional_utxos, optional_ogs): (Vec<_>, Vec<_>) = optional_utxos
+            .into_iter()
+            .map(|u| OutputGroup::new(u, fee_rate))
             .filter(|u| u.effective_value.is_positive())
-            .collect();
+            .map(|u| (u.weighted_utxo.clone(), u))
+            .unzip();
 
         let curr_value = required_ogs
             .iter()
@@ -1703,6 +1706,69 @@ mod test {
                 ..
             }) if available.to_sat() == 300_010
         );
+    }
+
+    #[test]
+    fn test_bnb_fallback_excludes_non_positive_effective_value() {
+        // Each input costs 680 sat at 10 sat/vB. The only economical input has
+        // 49_320 sat of effective value, outside the BnB changeless range for
+        // both targets, so selection must use the fallback.
+        let economical = confirmed_utxo(Amount::from_sat(50_000), 2, 2, 0);
+        let selector = BranchAndBoundCoinSelection::new(31, OldestFirstCoinSelection);
+        for value in [300, 680] {
+            for target in [30_000, 49_000] {
+                let uneconomical = confirmed_utxo(Amount::from_sat(value), 1, 1, 0);
+                let result = selector
+                    .coin_select(
+                        vec![],
+                        vec![uneconomical, economical.clone()],
+                        FeeRate::from_sat_per_vb_u32(10),
+                        Amount::from_sat(target),
+                        &ScriptBuf::new(),
+                        &mut thread_rng(),
+                    )
+                    .unwrap();
+                assert_eq!(result.selected, vec![economical.utxo.clone()]);
+                assert_eq!(result.fee_amount, Amount::from_sat(680));
+            }
+        }
+    }
+
+    #[test]
+    fn test_bnb_fallback_keeps_required_negative_effective_value() {
+        let required = confirmed_utxo(Amount::from_sat(300), 0, 1, 0);
+        let optional = confirmed_utxo(Amount::from_sat(50_000), 1, 2, 0);
+        let result = BranchAndBoundCoinSelection::new(31, OldestFirstCoinSelection)
+            .coin_select(
+                vec![required.clone()],
+                vec![optional.clone()],
+                FeeRate::from_sat_per_vb_u32(10),
+                Amount::from_sat(30_000),
+                &ScriptBuf::new(),
+                &mut thread_rng(),
+            )
+            .unwrap();
+        assert_eq!(result.selected, vec![required.utxo, optional.utxo]);
+        assert_eq!(result.fee_amount, Amount::from_sat(1_360));
+    }
+
+    #[test]
+    fn test_bnb_fallback_keeps_positive_effective_value() {
+        // The oldest input contributes just one sat after its spending fee.
+        let small = confirmed_utxo(Amount::from_sat(681), 0, 1, 0);
+        let large = confirmed_utxo(Amount::from_sat(50_000), 1, 2, 0);
+        let result = BranchAndBoundCoinSelection::new(31, OldestFirstCoinSelection)
+            .coin_select(
+                vec![],
+                vec![small.clone(), large.clone()],
+                FeeRate::from_sat_per_vb_u32(10),
+                Amount::from_sat(30_000),
+                &ScriptBuf::new(),
+                &mut thread_rng(),
+            )
+            .unwrap();
+        assert_eq!(result.selected, vec![small.utxo, large.utxo]);
+        assert_eq!(result.fee_amount, Amount::from_sat(1_360));
     }
 
     #[test]
