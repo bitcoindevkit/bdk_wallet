@@ -484,10 +484,15 @@ impl Condition {
         }
     }
 
-    /// Merge two [`Condition`]s into the strictest combined CSV / CLTV requirements.
+    /// Merge two conditions, returning the strictest requirement satisfying both.
     ///
-    /// Useful when combining external and internal keychain requirements into one `Condition`
-    /// before passing it to the transaction builder.
+    /// Use this to combine the conditions of every keychain from which inputs may be selected,
+    /// before handing the result to
+    /// [`TxBuilder::set_condition`](crate::wallet::tx_builder::TxBuilder::set_condition).
+    ///
+    /// # Errors
+    ///
+    /// If the two conditions are incompatible, e.g. a height-based and a time-based timelock.
     pub fn merge(mut self, other: &Condition) -> Result<Self, PolicyError> {
         match (self.csv, other.csv) {
             (Some(a), Some(b)) => self.csv = Some(Self::merge_nsequence(a, b)?),

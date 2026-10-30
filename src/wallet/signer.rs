@@ -14,9 +14,9 @@
 //! This module provides the ability to build caller-owned signer containers and use them with
 //! [`Wallet::sign_with_signers`](super::Wallet::sign_with_signers).
 //!
-//! This is an interim bridge for callers still relying on bdk's signer infrastructure. Ideally
-//! you should sign PSBTs with [`bitcoin::Psbt::sign`] (software signing), or have your own signer
-//! (hardware signing).
+//! The `Wallet` no longer holds key material. Prefer signing PSBTs with
+//! [`bitcoin::Psbt::sign`] directly; reach for the containers here when you need the extra
+//! control that [`SignOptions`] provides, or when plugging in your own [`TransactionSigner`].
 //!
 //! ```
 //! # use alloc::sync::Arc;
@@ -76,7 +76,6 @@
 //! let wallet = Wallet::create(descriptor, change_descriptor)
 //!     .network(Network::Testnet)
 //!     .create_wallet_no_persist()?;
-//!
 //! let mut external_signers = SignersContainer::new();
 //! external_signers.add_external(
 //!     custom_signer.id(wallet.secp_ctx()),
