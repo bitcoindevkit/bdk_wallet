@@ -32,12 +32,11 @@
 //! }"#;
 //!
 //! let import = FullyNodedExport::from_str(import)?;
-//! let wallet = Wallet::create(
-//!     import.descriptor(),
-//!     import.change_descriptor().expect("change descriptor"),
-//! )
-//! .network(Network::Testnet)
-//! .create_wallet_no_persist()?;
+//! let wallet = Wallet::create(Network::Testnet)
+//!     .descriptor(KeychainKind::External, import.descriptor())
+//!     .descriptor(KeychainKind::Internal, import.change_descriptor().expect("change descriptor"))
+//!     .create_wallet_no_persist()
+//!     .expect("valid descriptors");
 //! # Ok::<_, Box<dyn core::error::Error>>(())
 //! ```
 //!
@@ -46,12 +45,13 @@
 //! # use bitcoin::*;
 //! # use bdk_wallet::export::*;
 //! # use bdk_wallet::*;
-//! let wallet = Wallet::create(
-//!     "wpkh([c258d2e4/84h/1h/0h]tpubDD3ynpHgJQW8VvWRzQ5WFDCrs4jqVFGHB3vLC3r49XHJSqP8bHKdK4AriuUKLccK68zfzowx7YhmDN8SiSkgCDENUFx9qVw65YyqM78vyVe/0/*)",
-//!     "wpkh([c258d2e4/84h/1h/0h]tpubDD3ynpHgJQW8VvWRzQ5WFDCrs4jqVFGHB3vLC3r49XHJSqP8bHKdK4AriuUKLccK68zfzowx7YhmDN8SiSkgCDENUFx9qVw65YyqM78vyVe/1/*)",
-//! )
-//!     .network(Network::Testnet)
-//!     .create_wallet_no_persist()?;
+//! const EXTERNAL: &str = "wpkh([c258d2e4/84h/1h/0h]tpubDD3ynpHgJQW8VvWRzQ5WFDCrs4jqVFGHB3vLC3r49XHJSqP8bHKdK4AriuUKLccK68zfzowx7YhmDN8SiSkgCDENUFx9qVw65YyqM78vyVe/0/*)";
+//! const INTERNAL: &str = "wpkh([c258d2e4/84h/1h/0h]tpubDD3ynpHgJQW8VvWRzQ5WFDCrs4jqVFGHB3vLC3r49XHJSqP8bHKdK4AriuUKLccK68zfzowx7YhmDN8SiSkgCDENUFx9qVw65YyqM78vyVe/1/*)";
+//! let wallet = Wallet::create(Network::Testnet)
+//!     .descriptor(KeychainKind::External, EXTERNAL)
+//!     .descriptor(KeychainKind::Internal, INTERNAL)
+//!     .create_wallet_no_persist()
+//!     .expect("valid descriptors");
 //! let export = FullyNodedExport::export_wallet(&wallet, "exported wallet", true)?;
 //!
 //! println!("Exported: {}", export.to_string());
@@ -63,12 +63,11 @@
 //! # use bitcoin::*;
 //! # use bdk_wallet::export::*;
 //! # use bdk_wallet::*;
-//! let wallet = Wallet::create(
-//!     "wsh(sortedmulti(2,[73756c7f/48h/0h/0h/2h]tpubDCKxNyM3bLgbEX13Mcd8mYxbVg9ajDkWXMh29hMWBurKfVmBfWAM96QVP3zaUcN51HvkZ3ar4VwP82kC8JZhhux8vFQoJintSpVBwpFvyU3/0/*,[f9f62194/48h/0h/0h/2h]tpubDDp3ZSH1yCwusRppH7zgSxq2t1VEUyXSeEp8E5aFS8m43MknUjiF1bSLo3CGWAxbDyhF1XowA5ukPzyJZjznYk3kYi6oe7QxtX2euvKWsk4/0/*))",
-//!     "wsh(sortedmulti(2,[73756c7f/48h/0h/0h/2h]tpubDCKxNyM3bLgbEX13Mcd8mYxbVg9ajDkWXMh29hMWBurKfVmBfWAM96QVP3zaUcN51HvkZ3ar4VwP82kC8JZhhux8vFQoJintSpVBwpFvyU3/1/*,[f9f62194/48h/0h/0h/2h]tpubDDp3ZSH1yCwusRppH7zgSxq2t1VEUyXSeEp8E5aFS8m43MknUjiF1bSLo3CGWAxbDyhF1XowA5ukPzyJZjznYk3kYi6oe7QxtX2euvKWsk4/1/*))",
-//! )
-//! .network(Network::Testnet)
-//! .create_wallet_no_persist()?;
+//! let wallet = Wallet::create(Network::Testnet)
+//!     .descriptor(KeychainKind::External, "wsh(sortedmulti(2,[73756c7f/48h/0h/0h/2h]tpubDCKxNyM3bLgbEX13Mcd8mYxbVg9ajDkWXMh29hMWBurKfVmBfWAM96QVP3zaUcN51HvkZ3ar4VwP82kC8JZhhux8vFQoJintSpVBwpFvyU3/0/*,[f9f62194/48h/0h/0h/2h]tpubDDp3ZSH1yCwusRppH7zgSxq2t1VEUyXSeEp8E5aFS8m43MknUjiF1bSLo3CGWAxbDyhF1XowA5ukPzyJZjznYk3kYi6oe7QxtX2euvKWsk4/0/*))")
+//!     .descriptor(KeychainKind::Internal, "wsh(sortedmulti(2,[73756c7f/48h/0h/0h/2h]tpubDCKxNyM3bLgbEX13Mcd8mYxbVg9ajDkWXMh29hMWBurKfVmBfWAM96QVP3zaUcN51HvkZ3ar4VwP82kC8JZhhux8vFQoJintSpVBwpFvyU3/1/*,[f9f62194/48h/0h/0h/2h]tpubDDp3ZSH1yCwusRppH7zgSxq2t1VEUyXSeEp8E5aFS8m43MknUjiF1bSLo3CGWAxbDyhF1XowA5ukPzyJZjznYk3kYi6oe7QxtX2euvKWsk4/1/*))")
+//!     .create_wallet_no_persist()
+//!     .expect("valid descriptors");
 //! let export = CaravanExport::export_wallet(&wallet, "My Multisig Wallet").unwrap();
 //!
 //! println!("Exported: {}", export.to_string());
@@ -195,7 +194,7 @@ impl FullyNodedExport {
     /// If the database is empty or `include_blockheight` is false, the `blockheight` field
     /// returned will be `0`.
     pub fn export_wallet(
-        wallet: &Wallet,
+        wallet: &Wallet<KeychainKind>,
         label: &str,
         include_blockheight: bool,
     ) -> Result<Self, &'static str> {
@@ -494,7 +493,7 @@ impl CaravanExport {
     /// supported by Caravan or if the descriptor is not a multisig descriptor.
     ///
     /// Caravan supports P2SH, P2WSH, and P2SH-P2WSH multisig wallets.
-    pub fn export_wallet(wallet: &Wallet, name: &str) -> Result<Self, &'static str> {
+    pub fn export_wallet(wallet: &Wallet<KeychainKind>, name: &str) -> Result<Self, &'static str> {
         // Get the descriptor directly from the wallet
         let descriptor = wallet.public_descriptor(KeychainKind::External);
 
@@ -709,11 +708,16 @@ mod test {
     use crate::Wallet;
     use crate::test_utils::*;
 
-    fn get_test_wallet(descriptor: &str, change_descriptor: &str, network: Network) -> Wallet {
-        let mut wallet = Wallet::create(descriptor.to_string(), change_descriptor.to_string())
-            .network(network)
+    fn get_test_wallet(
+        descriptor: &str,
+        change_descriptor: &str,
+        network: Network,
+    ) -> Wallet<KeychainKind> {
+        let mut wallet = Wallet::create(network)
+            .descriptor(KeychainKind::External, descriptor.to_string())
+            .descriptor(KeychainKind::Internal, change_descriptor.to_string())
             .create_wallet_no_persist()
-            .expect("must create wallet");
+            .expect("valid descriptors");
         let block = BlockId {
             height: 5000,
             hash: BlockHash::all_zeros(),
@@ -1024,17 +1028,11 @@ mod test {
         let (external_desc, internal_desc) = import.to_descriptors().unwrap();
 
         // Verify the descriptors can create a functional BDK Wallet
-        let wallet_result = Wallet::create(external_desc, internal_desc)
-            .network(bitcoin::Network::Testnet)
-            .create_wallet_no_persist();
-
-        assert!(
-            wallet_result.is_ok(),
-            "Failed to create wallet from Caravan export descriptors: {:?}",
-            wallet_result.err()
-        );
-
-        let mut wallet = wallet_result.unwrap();
+        let mut wallet = Wallet::create(bitcoin::Network::Testnet)
+            .descriptor(crate::types::KeychainKind::External, external_desc)
+            .descriptor(crate::types::KeychainKind::Internal, internal_desc)
+            .create_wallet_no_persist()
+            .expect("valid descriptors");
 
         // Verify basic wallet functionality
         assert_eq!(wallet.network(), bitcoin::Network::Testnet);

@@ -78,7 +78,7 @@ fn wallet_is_persisted() -> anyhow::Result<()> {
         assert_eq!(cache_cmp, expected_cmp, "{}", msg.as_ref());
     }
 
-    fn staged_cache(wallet: &Wallet) -> SpkCacheChangeSet {
+    fn staged_cache(wallet: &Wallet<KeychainKind>) -> SpkCacheChangeSet {
         wallet.staged().map_or(SpkCacheChangeSet::default(), |cs| {
             cs.indexer.spk_cache.clone()
         })
@@ -92,7 +92,7 @@ fn wallet_is_persisted() -> anyhow::Result<()> {
     where
         CreateDb: Fn(&Path) -> anyhow::Result<Db>,
         OpenDb: Fn(&Path) -> anyhow::Result<Db>,
-        Db: WalletPersister,
+        Db: WalletPersister<KeychainKind>,
         Db::Error: core::error::Error + Send + Sync + 'static,
     {
         let temp_dir = tempfile::tempdir().expect("must create tempdir");
@@ -102,8 +102,9 @@ fn wallet_is_persisted() -> anyhow::Result<()> {
         // create new wallet
         let wallet_spk_index = {
             let mut db = create_db(&file_path)?;
-            let mut wallet = Wallet::create(external_desc, internal_desc)
-                .network(Network::Testnet)
+            let mut wallet = Wallet::create(Network::Testnet)
+                .descriptor(KeychainKind::External, external_desc)
+                .descriptor(KeychainKind::Internal, internal_desc)
                 .use_spk_cache(true)
                 .create_wallet(&mut db)?;
 
@@ -238,7 +239,7 @@ fn wallet_load_checks() -> anyhow::Result<()> {
     where
         CreateDb: Fn(&Path) -> anyhow::Result<Db>,
         OpenDb: Fn(&Path) -> anyhow::Result<Db>,
-        Db: WalletPersister + std::fmt::Debug,
+        Db: WalletPersister<KeychainKind> + std::fmt::Debug,
         Db::Error: core::error::Error + Send + Sync + 'static,
     {
         let temp_dir = tempfile::tempdir().expect("must create tempdir");
@@ -247,8 +248,9 @@ fn wallet_load_checks() -> anyhow::Result<()> {
         let (external_desc, internal_desc) = get_test_tr_single_sig_xprv_and_change_desc();
 
         // create new wallet
-        let _ = Wallet::create(external_desc, internal_desc)
-            .network(network)
+        let _ = Wallet::create(network)
+            .descriptor(KeychainKind::External, external_desc)
+            .descriptor(KeychainKind::Internal, internal_desc)
             .create_wallet(&mut create_db(&file_path)?)?;
 
         assert_matches!(
@@ -296,8 +298,12 @@ fn wallet_load_checks() -> anyhow::Result<()> {
 
     run(
         "store.db",
-        |path| Ok(bdk_file_store::Store::<ChangeSet>::create(DB_MAGIC, path)?),
-        |path| Ok(bdk_file_store::Store::<ChangeSet>::load(DB_MAGIC, path)?.0),
+        |path| {
+            Ok(bdk_file_store::Store::<ChangeSet<KeychainKind>>::create(
+                DB_MAGIC, path,
+            )?)
+        },
+        |path| Ok(bdk_file_store::Store::<ChangeSet<KeychainKind>>::load(DB_MAGIC, path)?.0),
     )?;
     run(
         "store.sqlite",
@@ -316,8 +322,8 @@ fn wallet_should_persist_anchors_and_recover() {
     let mut db = rusqlite::Connection::open(db_path).unwrap();
 
     let desc = get_test_tr_single_sig_xprv();
-    let mut wallet = Wallet::create_single(desc)
-        .network(Network::Testnet)
+    let mut wallet = Wallet::create(Network::Testnet)
+        .descriptor(KeychainKind::External, desc)
         .create_wallet(&mut db)
         .unwrap();
     let small_output_tx = Transaction {
@@ -369,8 +375,8 @@ fn single_descriptor_wallet_persist_and_recover() {
     let mut db = rusqlite::Connection::open(db_path).unwrap();
 
     let desc = get_test_tr_single_sig_xprv();
-    let mut wallet = Wallet::create_single(desc)
-        .network(Network::Testnet)
+    let mut wallet = Wallet::create(Network::Testnet)
+        .descriptor(KeychainKind::External, desc)
         .create_wallet(&mut db)
         .unwrap();
     let _ = wallet.reveal_addresses_to(KeychainKind::External, 2);
@@ -399,6 +405,52 @@ fn single_descriptor_wallet_persist_and_recover() {
     );
 }
 
+/// A `ChangeSet` assembled outside this crate can assign descriptors that derive the same scripts
+/// to two keychains — `Merge` only refuses to rebind a keychain, it says nothing about the
+/// descriptor side. Loading it must report the conflict, not panic inside the indexer.
+#[test]
+fn load_rejects_changeset_with_conflicting_descriptors() {
+    // The same xpub with and without origin information: structurally distinct descriptors that
+    // derive identical scripts.
+    const WITH_ORIGIN: &str = "wpkh([e273fe42/84'/1'/0']tpubDCmr3Luq75npLaYmRqqW1rLfSbfpnBXwLwAmUbR333fp95wjCHar3zoc9zSWovZFwrWr53mm3NTVqt6d1Pt6G26uf4etQjc3Pr5Hxe9QEQ2/0/*)";
+    const NO_ORIGIN: &str = "wpkh(tpubDCmr3Luq75npLaYmRqqW1rLfSbfpnBXwLwAmUbR333fp95wjCHar3zoc9zSWovZFwrWr53mm3NTVqt6d1Pt6G26uf4etQjc3Pr5Hxe9QEQ2/0/*)";
+
+    let secp = Secp256k1::new();
+    let parse = |desc: &str| {
+        desc.into_wallet_descriptor(&secp, NetworkKind::Test)
+            .unwrap()
+            .0
+    };
+    let (external, internal) = (parse(WITH_ORIGIN), parse(NO_ORIGIN));
+    assert_ne!(external, internal, "descriptors must not be equal");
+    assert_eq!(
+        external.descriptor_id(),
+        internal.descriptor_id(),
+        "descriptors must derive the same scripts"
+    );
+
+    // Build the wallet from the well-formed half, then splice in the conflicting keychain the way
+    // an externally written changeset could.
+    let mut changeset = Wallet::create(Network::Testnet)
+        .descriptor(KeychainKind::External, WITH_ORIGIN)
+        .create_wallet_no_persist()
+        .expect("valid descriptor")
+        .take_staged()
+        .expect("wallet creation stages a changeset");
+    changeset
+        .descriptors
+        .insert(KeychainKind::Internal, internal);
+
+    // The reported descriptor is the one already assigned, in the spelling `External` holds.
+    assert_matches!(
+        Wallet::load_with_params(changeset, bdk_wallet::LoadParams::new()),
+        Err(LoadError::ConflictingDescriptors { keychain, existing_keychain, descriptor })
+            if keychain == KeychainKind::Internal
+                && existing_keychain == KeychainKind::External
+                && descriptor == Box::new(external)
+    );
+}
+
 #[test]
 fn two_path_descriptor_wallet_persist_and_recover() {
     use bdk_chain::rusqlite;
@@ -407,16 +459,29 @@ fn two_path_descriptor_wallet_persist_and_recover() {
     let db_path = temp_dir.path().join("wallet.db");
     let mut db = rusqlite::Connection::open(db_path).unwrap();
 
-    let two_path_descriptor = get_test_two_path_wpkh();
-    let mut wallet = Wallet::create_from_two_path_descriptor(two_path_descriptor)
-        .network(Network::Testnet4)
+    // Split the two-path descriptor into the single-path halves the wallet actually holds.
+    let secp = Secp256k1::new();
+    let (multipath, _keymap) = get_test_two_path_wpkh()
+        .into_wallet_descriptor(&secp, Network::Testnet4.into())
+        .expect("valid descriptor");
+    let paths = multipath
+        .into_single_descriptors()
+        .expect("descriptor splits into single paths");
+    assert_eq!(paths.len(), 2);
+    let (external_desc, internal_desc) = (paths[0].clone(), paths[1].clone());
+
+    let mut wallet = Wallet::create(Network::Testnet4)
+        .descriptor(KeychainKind::External, external_desc.clone())
+        .descriptor(KeychainKind::Internal, internal_desc.clone())
         .create_wallet(&mut db)
         .unwrap();
+
     let _ = wallet.reveal_addresses_to(KeychainKind::External, 2);
     assert!(wallet.persist(&mut db).unwrap());
 
     let loaded = Wallet::load()
-        .two_path_descriptor(two_path_descriptor)
+        .descriptor(KeychainKind::External, Some(external_desc))
+        .descriptor(KeychainKind::Internal, Some(internal_desc))
         .check_network(Network::Testnet4)
         .load_wallet(&mut db)
         .unwrap()
@@ -483,8 +548,9 @@ fn test_lock_outpoint_persist() -> anyhow::Result<()> {
     let mut conn = rusqlite::Connection::open_in_memory()?;
 
     let (desc, change_desc) = get_test_tr_single_sig_xprv_and_change_desc();
-    let mut wallet = Wallet::create(desc, change_desc)
-        .network(Network::Signet)
+    let mut wallet = Wallet::create(Network::Signet)
+        .descriptor(KeychainKind::External, desc)
+        .descriptor(KeychainKind::Internal, change_desc)
         .create_wallet(&mut conn)?;
 
     // Receive coins.

@@ -96,9 +96,12 @@ let mut wallet = match Wallet::load()
     .load_wallet(&mut conn)?
 {
     Some(wallet) => wallet,
-    None => Wallet::create(descriptor, change_descriptor)
-        .network(network)
-        .create_wallet(&mut conn)?,
+    None => {
+        Wallet::create(network)
+            .descriptor(KeychainKind::External, descriptor)
+            .descriptor(KeychainKind::Internal, change_descriptor)
+            .create_wallet(&mut conn)?
+    }
 };
 
 // Get a new address to receive bitcoin!

@@ -101,14 +101,14 @@ fn main() -> anyhow::Result<()> {
         .load_wallet(&mut db)?;
     let mut wallet = match wallet_opt {
         Some(wallet) => wallet,
-        None => match &args.change_descriptor {
-            Some(change_desc) => Wallet::create(args.descriptor.clone(), change_desc.clone())
-                .network(args.network)
-                .create_wallet(&mut db)?,
-            None => Wallet::create_single(args.descriptor.clone())
-                .network(args.network)
-                .create_wallet(&mut db)?,
-        },
+        None => {
+            let mut params = Wallet::create(args.network)
+                .descriptor(KeychainKind::External, args.descriptor.clone());
+            if let Some(change_desc) = &args.change_descriptor {
+                params = params.descriptor(KeychainKind::Internal, change_desc.clone());
+            }
+            params.create_wallet(&mut db)?
+        }
     };
     println!(
         "Loaded wallet in {}s",

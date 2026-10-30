@@ -14,7 +14,7 @@ use bitcoin::{
 };
 use miniscript::{Descriptor, DescriptorPublicKey};
 
-use crate::{AsyncWalletPersister, ChangeSet, WalletPersister, locked_outpoints};
+use crate::{AsyncWalletPersister, ChangeSet, KeychainKind, WalletPersister, locked_outpoints};
 
 macro_rules! block_id {
     ($height:expr, $hash:literal) => {{
@@ -68,7 +68,7 @@ fn spk_at_index(descriptor: &Descriptor<DescriptorPublicKey>, index: u32) -> Scr
 pub fn persist_wallet_changeset<F, P>(create_store: F) -> Result<(), PersistError>
 where
     F: FnOnce() -> Result<P, P::Error>,
-    P: WalletPersister,
+    P: WalletPersister<KeychainKind>,
     P::Error: core::error::Error + 'static,
 {
     let mut persister = init_wallet_persister(create_store)?;
@@ -90,7 +90,7 @@ where
 pub fn persist_multiple_wallet_changesets<F, P>(create_stores: F) -> Result<(), PersistError>
 where
     F: Fn() -> Result<(P, P), P::Error>,
-    P: WalletPersister,
+    P: WalletPersister<KeychainKind>,
     P::Error: core::error::Error + 'static,
 {
     use PersistError as E;
@@ -113,8 +113,11 @@ where
     let change_descriptor: Descriptor<DescriptorPublicKey> = DESCRIPTORS[1].parse().unwrap();
 
     let changeset1 = ChangeSet {
-        descriptor: Some(descriptor.clone()),
-        change_descriptor: Some(change_descriptor.clone()),
+        descriptors: [
+            (KeychainKind::External, descriptor.clone()),
+            (KeychainKind::Internal, change_descriptor.clone()),
+        ]
+        .into(),
         network: Some(Network::Testnet),
         ..ChangeSet::default()
     };
@@ -137,8 +140,11 @@ where
     let change_descriptor: Descriptor<DescriptorPublicKey> = DESCRIPTORS[3].parse().unwrap();
 
     let changeset2 = ChangeSet {
-        descriptor: Some(descriptor.clone()),
-        change_descriptor: Some(change_descriptor.clone()),
+        descriptors: [
+            (KeychainKind::External, descriptor.clone()),
+            (KeychainKind::Internal, change_descriptor.clone()),
+        ]
+        .into(),
         network: Some(Network::Testnet),
         ..ChangeSet::default()
     };
@@ -175,7 +181,7 @@ where
 pub fn persist_network<F, P>(create_store: F) -> Result<(), PersistError>
 where
     F: FnOnce() -> Result<P, P::Error>,
-    P: WalletPersister,
+    P: WalletPersister<KeychainKind>,
     P::Error: core::error::Error + 'static,
 {
     let mut persister = init_wallet_persister(create_store)?;
@@ -190,7 +196,7 @@ where
 pub fn persist_keychains<F, P>(create_store: F) -> Result<(), PersistError>
 where
     F: FnOnce() -> Result<P, P::Error>,
-    P: WalletPersister,
+    P: WalletPersister<KeychainKind>,
     P::Error: core::error::Error + 'static,
 {
     let mut persister = init_wallet_persister(create_store)?;
@@ -215,7 +221,7 @@ where
 fn init_wallet_persister<F, P>(create_store: F) -> Result<P, PersistError>
 where
     F: FnOnce() -> Result<P, P::Error>,
-    P: WalletPersister,
+    P: WalletPersister<KeychainKind>,
     P::Error: core::error::Error + 'static,
 {
     let mut persister = create_store().map_err(PersistError::persister)?;
@@ -238,11 +244,11 @@ where
 /// - If the newly initialized [`ChangeSet`] doesn't match `expected`
 fn check_changeset_is_persisted<P>(
     persister: &mut P,
-    changeset: &ChangeSet,
-    expected: &ChangeSet,
+    changeset: &ChangeSet<KeychainKind>,
+    expected: &ChangeSet<KeychainKind>,
 ) -> Result<(), PersistError>
 where
-    P: WalletPersister,
+    P: WalletPersister<KeychainKind>,
     P::Error: core::error::Error + 'static,
 {
     WalletPersister::persist(persister, changeset).map_err(PersistError::persister)?;
@@ -256,31 +262,31 @@ where
     Ok(())
 }
 
-fn network_changeset() -> ChangeSet {
+fn network_changeset() -> ChangeSet<KeychainKind> {
     ChangeSet {
         network: Some(Network::Bitcoin),
         ..Default::default()
     }
 }
 
-fn descriptor_changeset() -> ChangeSet {
+fn descriptor_changeset() -> ChangeSet<KeychainKind> {
     let descriptor: Descriptor<DescriptorPublicKey> = DESCRIPTORS[0].parse().unwrap();
     ChangeSet {
-        descriptor: Some(descriptor),
+        descriptors: [(KeychainKind::External, descriptor)].into(),
         ..Default::default()
     }
 }
 
-fn change_descriptor_changeset() -> ChangeSet {
+fn change_descriptor_changeset() -> ChangeSet<KeychainKind> {
     let change_descriptor: Descriptor<DescriptorPublicKey> = DESCRIPTORS[1].parse().unwrap();
     ChangeSet {
-        change_descriptor: Some(change_descriptor),
+        descriptors: [(KeychainKind::Internal, change_descriptor)].into(),
         ..Default::default()
     }
 }
 
 /// Creates a [`ChangeSet`].
-fn get_changeset(tx1: Transaction) -> ChangeSet {
+fn get_changeset(tx1: Transaction) -> ChangeSet<KeychainKind> {
     let descriptor: Descriptor<DescriptorPublicKey> = DESCRIPTORS[0].parse().unwrap();
     let change_descriptor: Descriptor<DescriptorPublicKey> = DESCRIPTORS[1].parse().unwrap();
 
@@ -351,8 +357,11 @@ fn get_changeset(tx1: Transaction) -> ChangeSet {
     };
 
     ChangeSet {
-        descriptor: Some(descriptor.clone()),
-        change_descriptor: Some(change_descriptor.clone()),
+        descriptors: [
+            (KeychainKind::External, descriptor.clone()),
+            (KeychainKind::Internal, change_descriptor.clone()),
+        ]
+        .into(),
         network: Some(Network::Testnet),
         local_chain: local_chain_changeset,
         tx_graph: tx_graph_changeset,
@@ -365,7 +374,7 @@ fn get_changeset(tx1: Transaction) -> ChangeSet {
 ///
 /// To correctly test a wallet persister this should return a different
 /// [`ChangeSet`] than the one returned by [`get_changeset`].
-fn get_changeset_two(tx2: Transaction) -> ChangeSet {
+fn get_changeset_two(tx2: Transaction) -> ChangeSet<KeychainKind> {
     let descriptor: Descriptor<DescriptorPublicKey> = DESCRIPTORS[0].parse().unwrap();
 
     let local_chain_changeset = local_chain::ChangeSet {
@@ -411,8 +420,7 @@ fn get_changeset_two(tx2: Transaction) -> ChangeSet {
     };
 
     ChangeSet {
-        descriptor: None,
-        change_descriptor: None,
+        descriptors: Default::default(),
         network: None,
         local_chain: local_chain_changeset,
         tx_graph: tx_graph_changeset,
@@ -428,9 +436,9 @@ pub enum PersistError {
     /// Change set mismatch
     ChangeSetMismatch {
         /// the resulting changeset
-        got: Box<ChangeSet>,
+        got: Box<ChangeSet<KeychainKind>>,
         /// the expected changeset
-        expected: Box<ChangeSet>,
+        expected: Box<ChangeSet<KeychainKind>>,
     },
     /// The wallet persister implementation failed
     Persister(Box<dyn core::error::Error + 'static>),
@@ -471,7 +479,7 @@ impl PersistError {
 pub async fn persist_wallet_changeset_async<F, P>(create_store: F) -> Result<(), PersistError>
 where
     F: AsyncFnOnce() -> Result<P, P::Error>,
-    P: AsyncWalletPersister,
+    P: AsyncWalletPersister<KeychainKind>,
     P::Error: core::error::Error + 'static,
 {
     let mut persister = init_async_wallet_persister(create_store).await?;
@@ -492,7 +500,7 @@ where
 pub async fn persist_keychains_async<F, P>(create_store: F) -> Result<(), PersistError>
 where
     F: AsyncFnOnce() -> Result<P, P::Error>,
-    P: AsyncWalletPersister,
+    P: AsyncWalletPersister<KeychainKind>,
     P::Error: core::error::Error + 'static,
 {
     let mut persister = init_async_wallet_persister(create_store).await?;
@@ -512,7 +520,7 @@ where
 pub async fn persist_network_async<F, P>(create_store: F) -> Result<(), PersistError>
 where
     F: AsyncFnOnce() -> Result<P, P::Error>,
-    P: AsyncWalletPersister,
+    P: AsyncWalletPersister<KeychainKind>,
     P::Error: core::error::Error + 'static,
 {
     let mut persister = init_async_wallet_persister(create_store).await?;
@@ -532,7 +540,7 @@ where
 async fn init_async_wallet_persister<F, P>(create_store: F) -> Result<P, PersistError>
 where
     F: AsyncFnOnce() -> Result<P, P::Error>,
-    P: AsyncWalletPersister,
+    P: AsyncWalletPersister<KeychainKind>,
     P::Error: core::error::Error + 'static,
 {
     let mut persister = create_store().await.map_err(PersistError::persister)?;
@@ -557,11 +565,11 @@ where
 /// - If the newly initialized [`ChangeSet`] doesn't match `expected`
 async fn check_changeset_is_persisted_async<P>(
     persister: &mut P,
-    changeset: &ChangeSet,
-    expected: &ChangeSet,
+    changeset: &ChangeSet<KeychainKind>,
+    expected: &ChangeSet<KeychainKind>,
 ) -> Result<(), PersistError>
 where
-    P: AsyncWalletPersister,
+    P: AsyncWalletPersister<KeychainKind>,
     P::Error: core::error::Error + 'static,
 {
     AsyncWalletPersister::persist(persister, changeset)

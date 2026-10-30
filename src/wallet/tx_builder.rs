@@ -112,7 +112,7 @@ use crate::{KeychainKind, LocalOutput, Utxo, WeightedUtxo};
 /// [`coin_selection`]: Self::coin_selection
 #[derive(Debug)]
 pub struct TxBuilder<'a, Cs> {
-    pub(crate) wallet: &'a mut Wallet,
+    pub(crate) wallet: &'a mut Wallet<KeychainKind>,
     pub(crate) params: TxParams,
     pub(crate) coin_selection: Cs,
 }
@@ -222,9 +222,10 @@ impl<'a, Cs> TxBuilder<'a, Cs> {
     /// #     "snj:and_v(v:pk(cMnkdebixpXMPfkcNEjjGin7s94hiehAH4mLbYkZoh9KSiNNmqC8),",
     /// #     "after(630000))))",
     /// # );
-    /// # let mut wallet = Wallet::create_single(descriptor)
-    /// #     .network(Network::Regtest)
-    /// #     .create_wallet_no_persist()?;
+    /// # let mut wallet = Wallet::create(Network::Regtest)
+    /// #     .descriptor(KeychainKind::External, descriptor)
+    /// #     .create_wallet_no_persist()
+    /// #     .expect("valid descriptors");
     /// let policy = wallet
     ///     .public_descriptor(KeychainKind::External)
     ///     .extract_policy(
@@ -263,7 +264,7 @@ impl<'a, Cs> TxBuilder<'a, Cs> {
     /// If a UTXO is inserted multiple times, only the final insertion will take effect.
     pub fn add_utxos(&mut self, outpoints: &[OutPoint]) -> Result<&mut Self, AddUtxoError> {
         // Canonicalize once, instead of once for every call to `get_utxo`.
-        let unspent: HashMap<OutPoint, LocalOutput> = self
+        let unspent: HashMap<OutPoint, LocalOutput<KeychainKind>> = self
             .wallet
             .list_unspent()
             .map(|output| (output.outpoint, output))
@@ -894,7 +895,7 @@ pub enum ChangeSpendPolicy {
 }
 
 impl ChangeSpendPolicy {
-    pub(crate) fn is_satisfied_by(&self, utxo: &LocalOutput) -> bool {
+    pub(crate) fn is_satisfied_by(&self, utxo: &LocalOutput<KeychainKind>) -> bool {
         match self {
             ChangeSpendPolicy::ChangeAllowed => true,
             ChangeSpendPolicy::OnlyChange => utxo.keychain == KeychainKind::Internal,
@@ -1067,7 +1068,7 @@ mod test {
         assert_ne!(tx_2, original_tx);
     }
 
-    fn get_test_utxos() -> Vec<LocalOutput> {
+    fn get_test_utxos() -> Vec<LocalOutput<KeychainKind>> {
         use bitcoin::hashes::Hash;
 
         vec![
@@ -1148,10 +1149,10 @@ mod test {
         use bdk_chain::BlockId;
         use bitcoin::{BlockHash, Network, hashes::Hash};
 
-        let mut wallet = Wallet::create_single(get_test_tr_single_sig())
-            .network(Network::Regtest)
+        let mut wallet = Wallet::create(Network::Regtest)
+            .descriptor(KeychainKind::External, get_test_tr_single_sig())
             .create_wallet_no_persist()
-            .unwrap();
+            .expect("valid descriptors");
         let recipient = wallet.next_unused_address(KeychainKind::External).address;
 
         insert_checkpoint(
@@ -1237,10 +1238,10 @@ mod test {
         use bdk_chain::BlockId;
         use bitcoin::{BlockHash, Network, hashes::Hash};
 
-        let mut wallet = Wallet::create_single(get_test_tr_single_sig())
-            .network(Network::Regtest)
+        let mut wallet = Wallet::create(Network::Regtest)
+            .descriptor(KeychainKind::External, get_test_tr_single_sig())
             .create_wallet_no_persist()
-            .unwrap();
+            .expect("valid descriptors");
 
         insert_checkpoint(
             &mut wallet,
@@ -1310,10 +1311,11 @@ mod test {
     fn test_add_utxo_final_outpoint_retained() {
         // Create empty wallet
         let (desc, change_desc) = get_test_wpkh_and_change_desc();
-        let mut wallet = Wallet::create(desc, change_desc)
-            .network(bdk_wallet::bitcoin::Network::Regtest)
+        let mut wallet = Wallet::create(bdk_wallet::bitcoin::Network::Regtest)
+            .descriptor(KeychainKind::External, desc)
+            .descriptor(KeychainKind::Internal, change_desc)
             .create_wallet_no_persist()
-            .unwrap();
+            .expect("valid descriptors");
 
         let outpoint_0 = receive_output(
             &mut wallet,

@@ -24,12 +24,73 @@ use bdk_tx::bdk_coin_select;
 use bitcoin::{Amount, BlockHash, Network, OutPoint, Sequence, Txid, absolute, psbt};
 use core::fmt;
 
+/// The error type when creating a [`Wallet`] from [`CreateParams`].
+///
+/// [`Wallet`]: crate::wallet::Wallet
+/// [`CreateParams`]: crate::wallet::CreateParams
+#[derive(Debug, PartialEq)]
+#[non_exhaustive]
+pub enum CreateError<K> {
+    /// A descriptor is invalid, does not match the network, or fails the checks applied to every
+    /// wallet descriptor.
+    Descriptor(DescriptorError),
+    /// No keychains were added.
+    MissingDescriptors,
+    /// The keychain was added more than once.
+    ///
+    /// A keychain identifies exactly one descriptor for the life of the wallet.
+    KeychainAlreadyAssigned(K),
+    /// The descriptor is already assigned to a different keychain.
+    ///
+    /// Two keychains sharing a descriptor cannot be told apart when attributing discovered
+    /// outputs, so the indexer rejects it. Two descriptors are the same descriptor when they
+    /// derive the same scripts, even if they are written differently — see
+    /// [`DescriptorId`](bdk_chain::DescriptorId).
+    DescriptorAlreadyAssigned {
+        /// The keychain whose descriptor conflicts with one already assigned.
+        keychain: K,
+        /// The keychain already assigned a descriptor deriving the same scripts.
+        existing_keychain: K,
+        /// The rejected descriptor, as it was given for `keychain`.
+        descriptor: Box<ExtendedDescriptor>,
+    },
+}
+
+impl<K> From<DescriptorError> for CreateError<K> {
+    fn from(err: DescriptorError) -> Self {
+        Self::Descriptor(err)
+    }
+}
+
+impl<K: fmt::Debug> fmt::Display for CreateError<K> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Descriptor(e) => e.fmt(f),
+            Self::MissingDescriptors => write!(f, "no keychains were added"),
+            Self::KeychainAlreadyAssigned(keychain) => {
+                write!(f, "keychain {keychain:?} was added more than once")
+            }
+            Self::DescriptorAlreadyAssigned {
+                keychain,
+                existing_keychain,
+                descriptor,
+            } => write!(
+                f,
+                "descriptor {descriptor} for keychain {keychain:?} derives the same scripts as \
+                 the one on keychain {existing_keychain:?}"
+            ),
+        }
+    }
+}
+
+impl<K: fmt::Debug> core::error::Error for CreateError<K> {}
+
 /// The error type when loading a [`Wallet`] from a [`ChangeSet`].
 ///
 /// [`Wallet`]: crate::wallet::Wallet
 /// [`ChangeSet`]: crate::wallet::ChangeSet
 #[derive(Debug, PartialEq)]
-pub enum LoadError {
+pub enum LoadError<K> {
     /// There was a problem with the passed-in descriptor(s).
     Descriptor(crate::descriptor::DescriptorError),
     /// Data loaded from persistence is missing network type.
@@ -37,32 +98,60 @@ pub enum LoadError {
     /// Data loaded from persistence is missing genesis hash.
     MissingGenesis,
     /// Data loaded from persistence is missing descriptor.
-    MissingDescriptor(KeychainKind),
+    MissingDescriptors,
+    /// Data loaded from persistence assigns the same descriptor to more than one keychain.
+    ///
+    /// Two descriptors are the same descriptor when they derive the same scripts, even if they
+    /// are written differently — see [`DescriptorId`](bdk_chain::DescriptorId). A `ChangeSet`
+    /// written by this crate never contains such a pair, because
+    /// [`CreateParams`](crate::CreateParams) rejects one before a [`Wallet`](crate::Wallet) can be
+    /// built; a changeset that does has been assembled or edited outside it.
+    ConflictingDescriptors {
+        /// The keychain whose descriptor conflicts with one already assigned.
+        keychain: K,
+        /// The keychain already assigned a descriptor deriving the same scripts.
+        existing_keychain: K,
+        /// The descriptor assigned to `existing_keychain`.
+        ///
+        /// The descriptor on `keychain` may be written differently while deriving the same
+        /// scripts — that is the point of this error — so this is not necessarily how the
+        /// conflicting keychain spells it.
+        descriptor: Box<ExtendedDescriptor>,
+    },
     /// Data loaded is unexpected.
-    Mismatch(LoadMismatch),
+    Mismatch(LoadMismatch<K>),
 }
 
-impl fmt::Display for LoadError {
+impl<K: fmt::Debug> fmt::Display for LoadError<K> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             LoadError::Descriptor(e) => e.fmt(f),
             LoadError::MissingNetwork => write!(f, "loaded data is missing network type"),
             LoadError::MissingGenesis => write!(f, "loaded data is missing genesis hash"),
-            LoadError::MissingDescriptor(k) => {
-                write!(f, "loaded data is missing descriptor for {k} keychain")
+            LoadError::MissingDescriptors => {
+                write!(f, "loaded data is missing descriptors")
             }
+            LoadError::ConflictingDescriptors {
+                keychain,
+                existing_keychain,
+                descriptor,
+            } => write!(
+                f,
+                "loaded data assigns keychain {keychain:?} a descriptor deriving the same scripts \
+                 as the one on keychain {existing_keychain:?}: {descriptor}"
+            ),
             LoadError::Mismatch(e) => write!(f, "{e}"),
         }
     }
 }
 
-impl core::error::Error for LoadError {}
+impl<K: fmt::Debug> core::error::Error for LoadError<K> {}
 
 /// Represents a mismatch with what is loaded and what is expected from [`LoadParams`].
 ///
 /// [`LoadParams`]: crate::wallet::LoadParams
 #[derive(Debug, PartialEq)]
-pub enum LoadMismatch {
+pub enum LoadMismatch<K> {
     /// Network does not match.
     Network {
         /// The network that is loaded.
@@ -80,7 +169,7 @@ pub enum LoadMismatch {
     /// Descriptor's [`DescriptorId`](bdk_chain::DescriptorId) does not match.
     Descriptor {
         /// Keychain identifying the descriptor.
-        keychain: KeychainKind,
+        keychain: K,
         /// The loaded descriptor.
         loaded: Option<Box<ExtendedDescriptor>>,
         /// The expected descriptor.
@@ -88,7 +177,7 @@ pub enum LoadMismatch {
     },
 }
 
-impl fmt::Display for LoadMismatch {
+impl<K: fmt::Debug> fmt::Display for LoadMismatch<K> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             LoadMismatch::Network { loaded, expected } => {
@@ -107,7 +196,7 @@ impl fmt::Display for LoadMismatch {
             } => {
                 write!(
                     f,
-                    "Descriptor mismatch for {} keychain: loaded {}, expected {}",
+                    "Descriptor mismatch for {:?} keychain: loaded {}, expected {}",
                     keychain,
                     loaded
                         .as_ref()
@@ -121,14 +210,14 @@ impl fmt::Display for LoadMismatch {
     }
 }
 
-impl<E> From<LoadMismatch> for LoadWithPersistError<E> {
-    fn from(mismatch: LoadMismatch) -> Self {
+impl<E, K> From<LoadMismatch<K>> for LoadWithPersistError<E, K> {
+    fn from(mismatch: LoadMismatch<K>) -> Self {
         Self::InvalidChangeSet(LoadError::Mismatch(mismatch))
     }
 }
 
-impl From<LoadMismatch> for LoadError {
-    fn from(mismatch: LoadMismatch) -> Self {
+impl<K> From<LoadMismatch<K>> for LoadError<K> {
+    fn from(mismatch: LoadMismatch<K>) -> Self {
         Self::Mismatch(mismatch)
     }
 }
@@ -384,6 +473,16 @@ pub enum CreatePsbtError {
     /// [`SelectionStrategy::All`]: crate::SelectionStrategy::All
     /// [`change_script`]: crate::PsbtParams::change_script
     NoRecipients,
+    /// No change destination was configured. Every PSBT needs one: set either
+    /// [`change_keychain`] or [`change_script`].
+    ///
+    /// [`change_keychain`]: crate::PsbtParams::change_keychain
+    /// [`change_script`]: crate::PsbtParams::change_script
+    NoChangeSource,
+    /// The keychain given to [`change_keychain`] is not held by this wallet.
+    ///
+    /// [`change_keychain`]: crate::PsbtParams::change_keychain
+    UnknownChangeKeychain,
     /// After coin selection, all outputs fell below the dust threshold and were
     /// dropped to fees.
     AllOutputsBelowDust,
@@ -413,6 +512,13 @@ impl fmt::Display for CreatePsbtError {
             Self::Bnb(e) => write!(f, "{e}"),
             Self::InsufficientFunds(e) => write!(f, "{e}"),
             Self::NoRecipients => write!(f, "no output destinations were configured"),
+            Self::NoChangeSource => write!(
+                f,
+                "no change destination configured: set a change keychain or a change script"
+            ),
+            Self::UnknownChangeKeychain => {
+                write!(f, "the change keychain is not held by this wallet")
+            }
             Self::AllOutputsBelowDust => write!(f, "all outputs are below the dust threshold",),
             Self::MissingKeyOrigin(e) => write!(f, "missing key origin: {e}"),
             Self::Plan(op) => write!(f, "failed to create a plan for txout with outpoint {op}"),

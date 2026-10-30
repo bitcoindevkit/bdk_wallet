@@ -60,9 +60,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("Compiled into Descriptor: \n{descriptor}");
 
     // Create a new wallet from descriptors
-    let mut wallet = Wallet::create_single(descriptor)
-        .network(Network::Regtest)
-        .create_wallet_no_persist()?;
+    let mut wallet = Wallet::create(Network::Regtest)
+        .descriptor(KeychainKind::External, descriptor)
+        .create_wallet_no_persist()
+        .expect("valid descriptors");
 
     println!(
         "First derived address from the descriptor: \n{}",

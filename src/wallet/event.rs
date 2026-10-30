@@ -84,8 +84,8 @@ pub enum WalletEvent {
 
 /// Generate `WalletEvent`s by comparing the chain tip and wallet transactions before and after
 /// updating the state of the `Wallet`.
-pub(crate) fn wallet_events(
-    wallet: &Wallet,
+pub(crate) fn wallet_events<K: Ord + Clone + core::fmt::Debug>(
+    wallet: &Wallet<K>,
     chain_tip1: BlockId,
     chain_tip2: BlockId,
     wallet_txs1: BTreeMap<Txid, (Arc<Transaction>, ChainPosition<ConfirmationBlockTime>)>,

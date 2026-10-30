@@ -88,3 +88,15 @@ required-features = ["bdk-tx"]
 name = "replace_by_fee"
 required-features = ["bdk-tx"]
 
+[[example]]
+name = "multi_keychain_custom_keychain"
+path = "examples/multi_keychain/custom_keychain.rs"
+
+[[example]]
+name = "multi_keychain_address_generation"
+path = "examples/multi_keychain/address_generation.rs"
+
+[[example]]
+name = "multi_keychain_persistence"
+path = "examples/multi_keychain/persistence.rs"
+required-features = ["rusqlite"]

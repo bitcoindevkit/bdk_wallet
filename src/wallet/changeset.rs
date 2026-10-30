@@ -1,3 +1,5 @@
+use crate::collections::BTreeMap;
+use alloc::collections::btree_map::Entry;
 use bdk_chain::{
     ConfirmationBlockTime, Merge, indexed_tx_graph, keychain_txout, local_chain, tx_graph,
 };
@@ -37,13 +39,13 @@ type IndexedTxGraphChangeSet =
 /// ## Members and required fields
 ///
 /// The change set has certain required fields without which a [`Wallet`] cannot function.
-/// These include the [`descriptor`] and the [`bitcoin::Network`] in use. These are required to be
+/// These include the [`descriptors`] and the [`bitcoin::Network`] in use. These are required to be
 /// non-empty *in the aggregate*, meaning the field must be present and non-null in the union of all
 /// persisted changes, but may be empty in any one change set, where "empty" is defined by the
 /// [`Merge`](Merge::is_empty) implementation of that change set. This requirement also applies to
 /// the [`local_chain`] field in that the aggregate change set must include a genesis block.
 ///
-/// For example, the [`descriptor`] and [`bitcoin::Network`] are present in the first change set
+/// For example, the [`descriptors`] and [`bitcoin::Network`] are present in the first change set
 /// after wallet creation, but are usually omitted in subsequent updates, as they are not permitted
 /// to change at any point thereafter.
 ///
@@ -53,10 +55,9 @@ type IndexedTxGraphChangeSet =
 /// * [`tx_graph`](Self::tx_graph)
 /// * [`indexer`](Self::indexer)
 ///
-/// The [`change_descriptor`] is special in that its presence is optional, however the value of the
-/// change descriptor should be defined at wallet creation time and respected for the life of the
-/// wallet, meaning that if a change descriptor is originally defined, it must also be present in
-/// the aggregate change set.
+/// A keychain may be introduced by a later change set — a wallet can start tracking a new one at
+/// any time — but the descriptor bound to a keychain is fixed at the point that keychain first
+/// appears, and must be identical in every change set thereafter.
 ///
 /// ## Staging
 ///
@@ -121,8 +122,7 @@ type IndexedTxGraphChangeSet =
 /// please refer to the documentation for [`WalletPersister`] and [`PersistedWallet`] for more
 /// information.
 ///
-/// [`change_descriptor`]: Self::change_descriptor
-/// [`descriptor`]: Self::descriptor
+/// [`descriptors`]: Self::descriptors
 /// [`local_chain`]: Self::local_chain
 /// [merged]: bdk_chain::Merge
 /// [`network`]: Self::network
@@ -133,12 +133,13 @@ type IndexedTxGraphChangeSet =
 /// [`Wallet::staged`]: crate::Wallet::staged
 /// [`Wallet`]: crate::Wallet
 /// [Semantic Versioning]: <https://doc.rust-lang.org/cargo/reference/semver.html>
-#[derive(Default, Debug, Clone, PartialEq, Deserialize, Serialize)]
-pub struct ChangeSet {
-    /// Descriptor for recipient addresses.
-    pub descriptor: Option<Descriptor<DescriptorPublicKey>>,
-    /// Descriptor for change addresses.
-    pub change_descriptor: Option<Descriptor<DescriptorPublicKey>>,
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+pub struct ChangeSet<K: Ord> {
+    /// The descriptor tracked by each keychain.
+    ///
+    /// A keychain's descriptor is fixed for the life of the wallet: [`Merge`] will accept a
+    /// keychain it has not seen before, but never a different descriptor for one it has.
+    pub descriptors: BTreeMap<K, Descriptor<DescriptorPublicKey>>,
     /// Stores the network type of the transaction data.
     pub network: Option<bitcoin::Network>,
     /// Changes to the [`LocalChain`](local_chain::LocalChain).
@@ -152,25 +153,37 @@ pub struct ChangeSet {
     pub locked_outpoints: locked_outpoints::ChangeSet,
 }
 
-impl Merge for ChangeSet {
+impl<K: Ord> Default for ChangeSet<K> {
+    fn default() -> Self {
+        Self {
+            descriptors: BTreeMap::new(),
+            network: None,
+            local_chain: Default::default(),
+            tx_graph: Default::default(),
+            indexer: Default::default(),
+            locked_outpoints: Default::default(),
+        }
+    }
+}
+
+impl<K: Ord> Merge for ChangeSet<K> {
     /// Merge another [`ChangeSet`] into itself.
     fn merge(&mut self, other: Self) {
-        if self.descriptor.is_none() && other.descriptor.is_some() {
-            self.descriptor = other.descriptor;
-        } else {
-            debug_assert!(
-                other.descriptor.is_none() || self.descriptor == other.descriptor,
-                "descriptor must never change"
-            );
-        }
-        if self.change_descriptor.is_none() && other.change_descriptor.is_some() {
-            self.change_descriptor = other.change_descriptor;
-        } else {
-            debug_assert!(
-                other.change_descriptor.is_none()
-                    || self.change_descriptor == other.change_descriptor,
-                "change descriptor must never change"
-            );
+        // A keychain may be introduced by a later changeset, but the descriptor it is bound to
+        // must never change. `extend` would silently overwrite, which would let a corrupt or
+        // hostile changeset swap a descriptor out from under a loaded wallet.
+        for (keychain, descriptor) in other.descriptors {
+            match self.descriptors.entry(keychain) {
+                Entry::Vacant(slot) => {
+                    slot.insert(descriptor);
+                }
+                Entry::Occupied(slot) => {
+                    debug_assert!(
+                        *slot.get() == descriptor,
+                        "a keychain's descriptor must never change"
+                    );
+                }
+            }
         }
         if self.network.is_none() && other.network.is_some() {
             self.network = other.network;
@@ -190,8 +203,7 @@ impl Merge for ChangeSet {
     }
 
     fn is_empty(&self) -> bool {
-        self.descriptor.is_none()
-            && self.change_descriptor.is_none()
+        self.descriptors.is_empty()
             && self.network.is_none()
             && self.local_chain.is_empty()
             && self.tx_graph.is_empty()
@@ -201,7 +213,10 @@ impl Merge for ChangeSet {
 }
 
 #[cfg(feature = "rusqlite")]
-impl ChangeSet {
+impl<K> ChangeSet<K>
+where
+    K: Ord + Clone + chain::rusqlite::ToSql + chain::rusqlite::types::FromSql,
+{
     /// Schema name for wallet.
     pub const WALLET_SCHEMA_NAME: &'static str = "bdk_wallet";
     /// Name of table to store wallet descriptors and network.
@@ -234,12 +249,29 @@ impl ChangeSet {
         )
     }
 
+    /// Name of table storing one descriptor per keychain.
+    pub const WALLET_KEYCHAIN_TABLE_NAME: &'static str = "bdk_wallet_keychain";
+
+    /// Get v2 sqlite [`ChangeSet`] schema.
+    ///
+    /// Schema v2 replaces the single-row `descriptor` / `change_descriptor` columns with one row
+    /// per keychain, so a wallet may track any number of them.
+    pub fn schema_v2() -> alloc::string::String {
+        format!(
+            "CREATE TABLE {} ( \
+                keychain TEXT PRIMARY KEY NOT NULL, \
+                descriptor TEXT NOT NULL \
+                ) STRICT;",
+            Self::WALLET_KEYCHAIN_TABLE_NAME,
+        )
+    }
+
     /// Initialize sqlite tables for wallet tables.
     pub fn init_sqlite_tables(db_tx: &chain::rusqlite::Transaction) -> chain::rusqlite::Result<()> {
         crate::rusqlite_impl::migrate_schema(
             db_tx,
             Self::WALLET_SCHEMA_NAME,
-            &[&Self::schema_v0(), &Self::schema_v1()],
+            &[&Self::schema_v0(), &Self::schema_v1(), &Self::schema_v2()],
         )?;
 
         bdk_chain::local_chain::ChangeSet::init_sqlite_tables(db_tx)?;
@@ -257,25 +289,30 @@ impl ChangeSet {
 
         let mut changeset = Self::default();
 
-        let mut wallet_statement = db_tx.prepare(&format!(
-            "SELECT descriptor, change_descriptor, network FROM {}",
-            Self::WALLET_TABLE_NAME,
-        ))?;
-        let row = wallet_statement
+        let mut network_statement =
+            db_tx.prepare(&format!("SELECT network FROM {}", Self::WALLET_TABLE_NAME,))?;
+        let row = network_statement
             .query_row([], |row| {
-                Ok((
-                    row.get::<_, Option<Impl<Descriptor<DescriptorPublicKey>>>>("descriptor")?,
-                    row.get::<_, Option<Impl<Descriptor<DescriptorPublicKey>>>>(
-                        "change_descriptor",
-                    )?,
-                    row.get::<_, Option<Impl<bitcoin::Network>>>("network")?,
-                ))
+                row.get::<_, Option<Impl<bitcoin::Network>>>("network")
             })
             .optional()?;
-        if let Some((desc, change_desc, network)) = row {
-            changeset.descriptor = desc.map(Impl::into_inner);
-            changeset.change_descriptor = change_desc.map(Impl::into_inner);
-            changeset.network = network.map(Impl::into_inner);
+        if let Some(network) = row.flatten() {
+            changeset.network = Some(network.into_inner());
+        }
+
+        let mut keychain_statement = db_tx.prepare(&format!(
+            "SELECT keychain, descriptor FROM {}",
+            Self::WALLET_KEYCHAIN_TABLE_NAME,
+        ))?;
+        let rows = keychain_statement.query_map([], |row| {
+            Ok((
+                row.get::<_, K>("keychain")?,
+                row.get::<_, Impl<Descriptor<DescriptorPublicKey>>>("descriptor")?,
+            ))
+        })?;
+        for row in rows {
+            let (keychain, Impl(descriptor)) = row?;
+            changeset.descriptors.insert(keychain, descriptor);
         }
 
         // Select locked outpoints.
@@ -311,27 +348,15 @@ impl ChangeSet {
         use chain::Impl;
         use chain::rusqlite::named_params;
 
-        let mut descriptor_statement = db_tx.prepare_cached(&format!(
-            "INSERT INTO {}(id, descriptor) VALUES(:id, :descriptor) ON CONFLICT(id) DO UPDATE SET descriptor=COALESCE({}.descriptor, :descriptor)",
-            Self::WALLET_TABLE_NAME,
-            Self::WALLET_TABLE_NAME,
+        // A keychain's descriptor never changes once written, so first write wins.
+        let mut keychain_statement = db_tx.prepare_cached(&format!(
+            "INSERT OR IGNORE INTO {}(keychain, descriptor) VALUES(:keychain, :descriptor)",
+            Self::WALLET_KEYCHAIN_TABLE_NAME,
         ))?;
-        if let Some(descriptor) = &self.descriptor {
-            descriptor_statement.execute(named_params! {
-                ":id": 0,
+        for (keychain, descriptor) in &self.descriptors {
+            keychain_statement.execute(named_params! {
+                ":keychain": keychain,
                 ":descriptor": Impl(descriptor.clone()),
-            })?;
-        }
-
-        let mut change_descriptor_statement = db_tx.prepare_cached(&format!(
-            "INSERT INTO {}(id, change_descriptor) VALUES(:id, :change_descriptor) ON CONFLICT(id) DO UPDATE SET change_descriptor=COALESCE({}.change_descriptor, :change_descriptor)",
-            Self::WALLET_TABLE_NAME,
-            Self::WALLET_TABLE_NAME,
-        ))?;
-        if let Some(change_descriptor) = &self.change_descriptor {
-            change_descriptor_statement.execute(named_params! {
-                ":id": 0,
-                ":change_descriptor": Impl(change_descriptor.clone()),
             })?;
         }
 
@@ -376,9 +401,64 @@ impl ChangeSet {
         self.indexer.persist_to_sqlite(db_tx)?;
         Ok(())
     }
+
+    /// Recover descriptors written by schema v0 or v1.
+    ///
+    /// Those versions stored the wallet's two descriptors as `descriptor` and `change_descriptor`
+    /// columns on a single row, rather than one row per keychain in
+    /// [`WALLET_KEYCHAIN_TABLE_NAME`](Self::WALLET_KEYCHAIN_TABLE_NAME).
+    ///
+    /// The legacy columns carry no keychain identifier of their own — the schema encoded it
+    /// positionally. They are recovered here by asking `K` to parse the same strings
+    /// [`KeychainKind`](crate::KeychainKind) serialises to, `"external"` and `"internal"`. A
+    /// keychain type that does not recognise them cannot have written a v0/v1 database in the
+    /// first place, so it is left untouched.
+    ///
+    /// Existing keychains are never overwritten: anything already read from the v2 table wins.
+    pub fn read_legacy_descriptors(
+        db_tx: &chain::rusqlite::Transaction,
+        changeset: &mut Self,
+    ) -> chain::rusqlite::Result<()> {
+        use chain::Impl;
+        use chain::rusqlite::OptionalExtension;
+        use chain::rusqlite::types::ValueRef;
+
+        let mut statement = db_tx.prepare(&format!(
+            "SELECT descriptor, change_descriptor FROM {}",
+            Self::WALLET_TABLE_NAME,
+        ))?;
+        let row = statement
+            .query_row([], |row| {
+                Ok((
+                    row.get::<_, Option<Impl<Descriptor<DescriptorPublicKey>>>>("descriptor")?,
+                    row.get::<_, Option<Impl<Descriptor<DescriptorPublicKey>>>>(
+                        "change_descriptor",
+                    )?,
+                ))
+            })
+            .optional()?;
+
+        let Some((descriptor, change_descriptor)) = row else {
+            return Ok(());
+        };
+
+        for (column, keychain_name) in [(descriptor, "external"), (change_descriptor, "internal")] {
+            let Some(Impl(descriptor)) = column else {
+                continue;
+            };
+            // `K` not recognising the legacy name means this database was never written by a
+            // wallet using this keychain type. Nothing to migrate.
+            let Ok(keychain) = K::column_result(ValueRef::Text(keychain_name.as_bytes())) else {
+                continue;
+            };
+            changeset.descriptors.entry(keychain).or_insert(descriptor);
+        }
+
+        Ok(())
+    }
 }
 
-impl From<local_chain::ChangeSet> for ChangeSet {
+impl<K: Ord> From<local_chain::ChangeSet> for ChangeSet<K> {
     fn from(chain: local_chain::ChangeSet) -> Self {
         Self {
             local_chain: chain,
@@ -387,7 +467,7 @@ impl From<local_chain::ChangeSet> for ChangeSet {
     }
 }
 
-impl From<IndexedTxGraphChangeSet> for ChangeSet {
+impl<K: Ord> From<IndexedTxGraphChangeSet> for ChangeSet<K> {
     fn from(indexed_tx_graph: IndexedTxGraphChangeSet) -> Self {
         Self {
             tx_graph: indexed_tx_graph.tx_graph,
@@ -397,7 +477,7 @@ impl From<IndexedTxGraphChangeSet> for ChangeSet {
     }
 }
 
-impl From<tx_graph::ChangeSet<ConfirmationBlockTime>> for ChangeSet {
+impl<K: Ord> From<tx_graph::ChangeSet<ConfirmationBlockTime>> for ChangeSet<K> {
     fn from(tx_graph: tx_graph::ChangeSet<ConfirmationBlockTime>) -> Self {
         Self {
             tx_graph,
@@ -406,7 +486,7 @@ impl From<tx_graph::ChangeSet<ConfirmationBlockTime>> for ChangeSet {
     }
 }
 
-impl From<keychain_txout::ChangeSet> for ChangeSet {
+impl<K: Ord> From<keychain_txout::ChangeSet> for ChangeSet<K> {
     fn from(indexer: keychain_txout::ChangeSet) -> Self {
         Self {
             indexer,
@@ -415,7 +495,7 @@ impl From<keychain_txout::ChangeSet> for ChangeSet {
     }
 }
 
-impl From<locked_outpoints::ChangeSet> for ChangeSet {
+impl<K: Ord> From<locked_outpoints::ChangeSet> for ChangeSet<K> {
     fn from(locked_outpoints: locked_outpoints::ChangeSet) -> Self {
         Self {
             locked_outpoints,
@@ -427,6 +507,8 @@ impl From<locked_outpoints::ChangeSet> for ChangeSet {
 #[cfg_attr(coverage_nightly, coverage(off))]
 #[cfg(test)]
 mod test {
+    use super::*;
+
     // Tests that merging `ChangeSet`s with write-once fields follows "first write wins" semantics
     //
     // Verifies three scenarios:
@@ -523,6 +605,208 @@ mod test {
             change_set.network,
             Some(Network::Bitcoin),
             "network must not change when merging other value"
+        );
+    }
+
+    #[cfg(feature = "rusqlite")]
+    #[test]
+    fn reads_descriptors_from_a_legacy_v0_database() {
+        use crate::KeychainKind;
+        use bitcoin::Network;
+        use chain::rusqlite::{Connection, named_params};
+
+        const EXTERNAL: &str = "wpkh([41f2aed0/84h/1h/0h]tpubDDFSdQWw75hk1ewbwnNpPp5DvXFRKt68ioPoyJDY752cNHKkFxPWqkqCyCf4hxrEfpuxh46QisehL3m8Bi6MsAv394QVLopwbtfvryFQNUH/0/*)";
+        const INTERNAL: &str = "wpkh([41f2aed0/84h/1h/0h]tpubDDFSdQWw75hk1ewbwnNpPp5DvXFRKt68ioPoyJDY752cNHKkFxPWqkqCyCf4hxrEfpuxh46QisehL3m8Bi6MsAv394QVLopwbtfvryFQNUH/1/*)";
+
+        let mut conn = Connection::open_in_memory().unwrap();
+        let db_tx = conn.transaction().unwrap();
+        ChangeSet::<KeychainKind>::init_sqlite_tables(&db_tx).unwrap();
+
+        // Simulate a wallet written before schema v2: descriptors live in the columns on the
+        // single wallet row, and the per-keychain table is empty.
+        let external: Descriptor<DescriptorPublicKey> = EXTERNAL.parse().unwrap();
+        let internal: Descriptor<DescriptorPublicKey> = INTERNAL.parse().unwrap();
+        db_tx
+            .execute(
+                &format!(
+                    "INSERT INTO {}(id, descriptor, change_descriptor, network) \
+                     VALUES(:id, :descriptor, :change_descriptor, :network)",
+                    ChangeSet::<KeychainKind>::WALLET_TABLE_NAME
+                ),
+                named_params! {
+                    ":id": 0,
+                    ":descriptor": chain::Impl(external.clone()),
+                    ":change_descriptor": chain::Impl(internal.clone()),
+                    ":network": chain::Impl(Network::Testnet),
+                },
+            )
+            .unwrap();
+
+        let mut changeset = ChangeSet::<KeychainKind>::from_sqlite(&db_tx).unwrap();
+        // Nothing in the v2 table yet.
+        assert!(changeset.descriptors.is_empty());
+        assert_eq!(changeset.network, Some(Network::Testnet));
+
+        ChangeSet::<KeychainKind>::read_legacy_descriptors(&db_tx, &mut changeset).unwrap();
+
+        assert_eq!(
+            changeset.descriptors.get(&KeychainKind::External),
+            Some(&external),
+            "legacy `descriptor` column must map to the external keychain"
+        );
+        assert_eq!(
+            changeset.descriptors.get(&KeychainKind::Internal),
+            Some(&internal),
+            "legacy `change_descriptor` column must map to the internal keychain"
+        );
+    }
+
+    #[cfg(feature = "rusqlite")]
+    #[test]
+    fn legacy_read_never_overwrites_v2_descriptors() {
+        use crate::KeychainKind;
+        use chain::rusqlite::{Connection, named_params};
+
+        const V2_DESC: &str = "wpkh([41f2aed0/84h/1h/0h]tpubDDFSdQWw75hk1ewbwnNpPp5DvXFRKt68ioPoyJDY752cNHKkFxPWqkqCyCf4hxrEfpuxh46QisehL3m8Bi6MsAv394QVLopwbtfvryFQNUH/0/*)";
+        const LEGACY_DESC: &str = "wpkh([41f2aed0/84h/1h/0h]tpubDDFSdQWw75hk1ewbwnNpPp5DvXFRKt68ioPoyJDY752cNHKkFxPWqkqCyCf4hxrEfpuxh46QisehL3m8Bi6MsAv394QVLopwbtfvryFQNUH/1/*)";
+
+        let mut conn = Connection::open_in_memory().unwrap();
+        let db_tx = conn.transaction().unwrap();
+        ChangeSet::<KeychainKind>::init_sqlite_tables(&db_tx).unwrap();
+
+        let v2: Descriptor<DescriptorPublicKey> = V2_DESC.parse().unwrap();
+        let legacy: Descriptor<DescriptorPublicKey> = LEGACY_DESC.parse().unwrap();
+
+        // A stale legacy column alongside an authoritative v2 row for the same keychain.
+        db_tx
+            .execute(
+                &format!(
+                    "INSERT INTO {}(id, descriptor) VALUES(:id, :descriptor)",
+                    ChangeSet::<KeychainKind>::WALLET_TABLE_NAME
+                ),
+                named_params! { ":id": 0, ":descriptor": chain::Impl(legacy) },
+            )
+            .unwrap();
+
+        let mut changeset = ChangeSet::<KeychainKind>::default();
+        changeset
+            .descriptors
+            .insert(KeychainKind::External, v2.clone());
+
+        ChangeSet::<KeychainKind>::read_legacy_descriptors(&db_tx, &mut changeset).unwrap();
+
+        assert_eq!(
+            changeset.descriptors.get(&KeychainKind::External),
+            Some(&v2),
+            "schema v2 is authoritative; a legacy column must not overwrite it"
+        );
+    }
+
+    /// A keychain type that has nothing to do with `external`/`internal`.
+    #[cfg(feature = "rusqlite")]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    enum Account {
+        Savings,
+        Spending,
+    }
+
+    #[cfg(feature = "rusqlite")]
+    impl chain::rusqlite::ToSql for Account {
+        fn to_sql(&self) -> chain::rusqlite::Result<chain::rusqlite::types::ToSqlOutput<'_>> {
+            Ok(match self {
+                Account::Savings => "savings".into(),
+                Account::Spending => "spending".into(),
+            })
+        }
+    }
+
+    #[cfg(feature = "rusqlite")]
+    impl chain::rusqlite::types::FromSql for Account {
+        fn column_result(
+            value: chain::rusqlite::types::ValueRef<'_>,
+        ) -> chain::rusqlite::types::FromSqlResult<Self> {
+            match value.as_str()? {
+                "savings" => Ok(Account::Savings),
+                "spending" => Ok(Account::Spending),
+                other => Err(chain::rusqlite::types::FromSqlError::Other(
+                    alloc::boxed::Box::new(crate::types::UnknownKeychain(
+                        alloc::string::String::from(other),
+                    )),
+                )),
+            }
+        }
+    }
+
+    #[cfg(feature = "rusqlite")]
+    #[test]
+    fn descriptors_round_trip_through_sqlite_for_a_custom_keychain() {
+        use bitcoin::Network;
+        use chain::rusqlite::Connection;
+
+        const SAVINGS: &str = "wpkh([41f2aed0/84h/1h/0h]tpubDDFSdQWw75hk1ewbwnNpPp5DvXFRKt68ioPoyJDY752cNHKkFxPWqkqCyCf4hxrEfpuxh46QisehL3m8Bi6MsAv394QVLopwbtfvryFQNUH/0/*)";
+        const SPENDING: &str = "wpkh([41f2aed0/84h/1h/0h]tpubDDFSdQWw75hk1ewbwnNpPp5DvXFRKt68ioPoyJDY752cNHKkFxPWqkqCyCf4hxrEfpuxh46QisehL3m8Bi6MsAv394QVLopwbtfvryFQNUH/1/*)";
+
+        let mut changeset = ChangeSet::<Account> {
+            network: Some(Network::Testnet),
+            ..Default::default()
+        };
+        changeset
+            .descriptors
+            .insert(Account::Savings, SAVINGS.parse().unwrap());
+        changeset
+            .descriptors
+            .insert(Account::Spending, SPENDING.parse().unwrap());
+
+        let mut conn = Connection::open_in_memory().unwrap();
+        let db_tx = conn.transaction().unwrap();
+        ChangeSet::<Account>::init_sqlite_tables(&db_tx).unwrap();
+        changeset.persist_to_sqlite(&db_tx).unwrap();
+        let read_back = ChangeSet::<Account>::from_sqlite(&db_tx).unwrap();
+        db_tx.commit().unwrap();
+
+        assert_eq!(
+            read_back.descriptors, changeset.descriptors,
+            "a custom keychain type must survive the sqlite round-trip"
+        );
+        assert_eq!(read_back.network, Some(Network::Testnet));
+    }
+
+    #[cfg(feature = "rusqlite")]
+    #[test]
+    fn legacy_read_is_a_no_op_for_a_keychain_type_that_never_wrote_one() {
+        use bitcoin::Network;
+        use chain::rusqlite::{Connection, named_params};
+
+        const EXTERNAL: &str = "wpkh([41f2aed0/84h/1h/0h]tpubDDFSdQWw75hk1ewbwnNpPp5DvXFRKt68ioPoyJDY752cNHKkFxPWqkqCyCf4hxrEfpuxh46QisehL3m8Bi6MsAv394QVLopwbtfvryFQNUH/0/*)";
+
+        let mut conn = Connection::open_in_memory().unwrap();
+        let db_tx = conn.transaction().unwrap();
+        ChangeSet::<Account>::init_sqlite_tables(&db_tx).unwrap();
+
+        // A v0/v1-shaped row, whose descriptors are keyed positionally as external/internal.
+        let external: Descriptor<DescriptorPublicKey> = EXTERNAL.parse().unwrap();
+        db_tx
+            .execute(
+                &format!(
+                    "INSERT INTO {}(id, descriptor, network) VALUES(:id, :descriptor, :network)",
+                    ChangeSet::<Account>::WALLET_TABLE_NAME
+                ),
+                named_params! {
+                    ":id": 0,
+                    ":descriptor": chain::Impl(external),
+                    ":network": chain::Impl(Network::Testnet),
+                },
+            )
+            .unwrap();
+
+        // `Account` cannot represent "external", so there is nothing to recover — and crucially
+        // this must not be an error, since such a database was never written by this wallet.
+        let mut changeset = ChangeSet::<Account>::default();
+        ChangeSet::<Account>::read_legacy_descriptors(&db_tx, &mut changeset).unwrap();
+
+        assert!(
+            changeset.descriptors.is_empty(),
+            "legacy descriptors must not be forced onto an unrelated keychain type"
         );
     }
 }

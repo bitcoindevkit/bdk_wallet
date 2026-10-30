@@ -37,8 +37,9 @@ fn main() -> Result<(), anyhow::Error> {
         .load_wallet(&mut db)?;
     let mut wallet = match wallet_opt {
         Some(wallet) => wallet,
-        None => Wallet::create(external_descriptor, internal_descriptor)
-            .network(NETWORK)
+        None => Wallet::create(NETWORK)
+            .descriptor(KeychainKind::External, external_descriptor)
+            .descriptor(KeychainKind::Internal, internal_descriptor)
             .create_wallet(&mut db)?,
     };
 
