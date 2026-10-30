@@ -1436,7 +1436,7 @@ impl Wallet {
             //FIXME: see https://github.com/bitcoindevkit/bdk/issues/256
             FeePolicy::FeeAmount(fee) => {
                 if let Some(previous_fee) = params.bumping_fee {
-                    if fee < previous_fee.absolute {
+                    if fee <= previous_fee.absolute {
                         return Err(CreateTxError::FeeTooLow {
                             required: previous_fee.absolute,
                         });
@@ -1446,13 +1446,9 @@ impl Wallet {
             }
             FeePolicy::FeeRate(rate) => {
                 if let Some(previous_fee) = params.bumping_fee {
-                    let required_feerate = FeeRate::from_sat_per_kwu(
-                        previous_fee.rate.to_sat_per_kwu()
-                            + FeeRate::BROADCAST_MIN.to_sat_per_kwu(), // +1 sat/vb
-                    );
-                    if rate < required_feerate {
+                    if rate < previous_fee.min_replacement_rate() {
                         return Err(CreateTxError::FeeRateTooLow {
-                            required: required_feerate,
+                            required: previous_fee.min_replacement_rate(),
                         });
                     }
                 }
@@ -1532,6 +1528,28 @@ impl Wallet {
             }
         };
 
+        // A replacement is validated against its final size, which is only known once the inputs
+        // are selected. Keep each candidate's satisfaction weight, keeping in mind the segwit
+        // marker/flag and a witness field where applicable
+        let satisfaction_weights: HashMap<OutPoint, (Weight, bool)> = match params.bumping_fee {
+            Some(_) => required_utxos
+                .iter()
+                .chain(&optional_utxos)
+                .map(|wu| {
+                    let is_segwit = match &wu.utxo {
+                        Utxo::Local(local) => self
+                            .public_descriptor(local.keychain)
+                            .desc_type()
+                            .segwit_version()
+                            .is_some(),
+                        Utxo::Foreign { psbt_input, .. } => psbt_input.witness_utxo.is_some(),
+                    };
+                    (wu.utxo.outpoint(), (wu.satisfaction_weight, is_segwit))
+                })
+                .collect(),
+            None => HashMap::new(),
+        };
+
         let coin_selection = coin_selection
             .coin_select(
                 required_utxos,
@@ -1599,6 +1617,54 @@ impl Wallet {
         // Sort inputs/outputs according to the chosen algorithm.
         params.ordering.sort_tx_with_aux_rand(&mut tx, rng);
 
+        if let Some(previous_fee) = params.bumping_fee {
+            // The inputs of `tx` are not signed yet, so add the satisfaction weight of every
+            // selected input to get the weight of the final transaction.
+            // If any selected input is segwit, the whole transaction becomes segwit-formatted:
+            // This factors in a witness field (even an empty one costs 1 wu for its item count), plus a one-time
+            // 2 wu for the segwit marker and flag. A purely-legacy replacement pays neither.
+            let (satisfaction_weight, any_segwit) = coin_selection.selected.iter().fold(
+                (Weight::ZERO, false),
+                |(w, any_segwit), utxo| match satisfaction_weights.get(&utxo.outpoint()) {
+                    Some(&(sat_w, is_segwit)) => (w + sat_w, any_segwit || is_segwit),
+                    None => (w, any_segwit),
+                },
+            );
+            let weight = tx.weight()
+                + satisfaction_weight
+                + if any_segwit {
+                    Weight::from_wu(2 + coin_selection.selected.len() as u64)
+                } else {
+                    Weight::ZERO
+                };
+
+            // The fee that is really paid, including any dust/excess that is not worth a change output.
+            let fee = coin_selection
+                .selected_amount()
+                .checked_sub(tx.output.iter().map(|txout| txout.value).sum())
+                .unwrap_or_default();
+
+            // The replacement must pay a higher fee rate than the original
+            let feerate_weight = Weight::from_wu(weight.to_wu().next_multiple_of(4));
+            let min_fee = previous_fee.min_replacement_rate() * feerate_weight;
+            if fee < min_fee {
+                return Err(CreateTxError::FeeRateTooLow {
+                    required: FeeRate::from_sat_per_kwu(
+                        (min_fee.to_sat() * 1000).div_ceil(weight.to_wu()),
+                    ),
+                });
+            }
+
+            // The replacement must pay at least the fee of the original,
+            // plus the incremental relay fee for its own size.
+            let required_fee = previous_fee.absolute + FeeRate::BROADCAST_MIN * weight;
+            if fee < required_fee {
+                return Err(CreateTxError::FeeTooLow {
+                    required: required_fee,
+                });
+            }
+        }
+
         let psbt = self.complete_transaction(tx, coin_selection.selected, params)?;
 
         // Recording changes to the change keychain.
@@ -1619,6 +1685,13 @@ impl Wallet {
     /// Returns an error if the transaction is already confirmed or doesn't explicitly signal
     /// *replace by fee* (RBF). If the transaction can be fee bumped then it returns a [`TxBuilder`]
     /// pre-populated with the inputs and outputs of the original transaction.
+    ///
+    /// The replacement must pay the fee of the original, and of its unconfirmed descendants that
+    /// are evicted with it, plus the incremental relay fee for its own size. The fee of a
+    /// descendant that spends inputs the wallet doesn't know the value of is not counted, use
+    /// [`insert_txout`] to add them.
+    ///
+    /// [`insert_txout`]: Self::insert_txout
     ///
     /// ## Example
     ///
@@ -1703,6 +1776,15 @@ impl Wallet {
             .map_err(|_| BuildFeeBumpError::FeeRateUnavailable)?;
         let fee_rate = fee / tx.weight();
 
+        // The descendants of the transaction are evicted from the mempool along with it, so the
+        // replacement must pay for them too. A descendant whose fee is
+        // unknown, for example because it spends foreign inputs, is not counted.
+        let descendant_fee: Amount = tx_graph
+            .walk_descendants(txid, |_, txid| Some(txid))
+            .filter(|txid| chain_positions.contains_key(txid))
+            .filter_map(|txid| self.calculate_fee(&*tx_graph.get_tx(txid)?).ok())
+            .sum();
+
         // Remove the inputs from the tx and process them.
         let utxos: Vec<WeightedUtxo> = tx
             .input
@@ -1784,7 +1866,7 @@ impl Wallet {
                 .collect(),
             utxos,
             bumping_fee: Some(tx_builder::PreviousFee {
-                absolute: fee,
+                absolute: fee + descendant_fee,
                 rate: fee_rate,
             }),
             ..Default::default()
