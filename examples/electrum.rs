@@ -132,7 +132,7 @@ fn main() -> Result<(), anyhow::Error> {
 
     // bump fee rate for tx by at least 1 sat per vbyte
     let feerate = FeeRate::from_sat_per_vb(tx_feerate.to_sat_per_vb_ceil() + 1).unwrap();
-    let mut builder = wallet.build_fee_bump(txid).expect("failed to bump tx");
+    let mut builder = wallet.build_fee_bump([txid]).expect("failed to bump tx");
     builder.fee_rate(feerate);
     let mut bumped_psbt = builder.finish().unwrap();
     bumped_psbt
