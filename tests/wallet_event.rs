@@ -108,7 +108,7 @@ fn test_tx_replaced_event() {
     );
 
     // create rbf tx
-    let mut builder = wallet.build_fee_bump(orig_txid).unwrap();
+    let mut builder = wallet.build_fee_bump([orig_txid]).unwrap();
     builder.fee_rate(FeeRate::from_sat_per_vb(10).unwrap());
     let psbt = builder.finish().unwrap();
     let rbf_tx = Arc::new(psbt.extract_tx().unwrap());
