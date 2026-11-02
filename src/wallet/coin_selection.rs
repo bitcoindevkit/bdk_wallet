@@ -118,6 +118,10 @@ use rand_core::RngCore;
 use super::utils::shuffle_slice;
 /// Default coin selection algorithm used by [`TxBuilder`](super::tx_builder::TxBuilder) if not
 /// overridden
+///
+/// This is [`BranchAndBoundCoinSelection`] with [`SingleRandomDraw`] as its fallback: if branch
+/// and bound cannot find a selection that avoids a change output, [`SingleRandomDraw`] is used
+/// instead.
 pub type DefaultCoinSelectionAlgorithm = BranchAndBoundCoinSelection<SingleRandomDraw>;
 
 /// Wallet's UTXO set is not enough to cover recipient's requested plus fee.
