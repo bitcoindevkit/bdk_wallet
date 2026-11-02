@@ -7,7 +7,8 @@ use bdk_wallet::KeychainKind;
 use bdk_wallet::coin_selection;
 use bdk_wallet::coin_selection::InsufficientFunds;
 use bdk_wallet::descriptor::{
-    DescriptorError, ExtractPolicy, calc_checksum, policy::BuildSatisfaction,
+    DescriptorError, ExtractPolicy, calc_checksum,
+    policy::{BuildSatisfaction, PolicyError},
 };
 use bdk_wallet::error::CreateTxError;
 use bdk_wallet::psbt::PsbtUtils;
@@ -222,6 +223,21 @@ fn test_create_tx_version_1_csv() {
         .add_recipient(addr.script_pubkey(), Amount::from_sat(25_000))
         .version(1);
     assert!(matches!(builder.finish(), Err(CreateTxError::Version1Csv)));
+}
+
+#[test]
+fn test_create_tx_raw_pkh() {
+    let desc = "wsh(and_v(v:pk(tprv8ZgxMBicQKsPdy6LMhUtFHAgpocR8GC6QmwMSFpZs7h6Eziw3SpThFfczTDh5rW2krkqffa11UpX3XkeTTB2FvzZKWXqPY54Y6Rq4AQ5R8L/*),c:expr_raw_pkh(7dd65592d0ab2fe0d0257d571abf032cd9db93dc)))";
+    let (mut wallet, _) = get_funded_wallet_single(desc);
+    let addr = wallet.next_unused_address(KeychainKind::External);
+    let mut builder = wallet.build_tx();
+    builder.add_recipient(addr.script_pubkey(), Amount::from_sat(25_000));
+    assert_matches!(
+        builder.finish(),
+        Err(CreateTxError::Descriptor(DescriptorError::Policy(
+            PolicyError::RawPkH
+        )))
+    );
 }
 
 #[test]
