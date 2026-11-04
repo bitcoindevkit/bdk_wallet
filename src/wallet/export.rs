@@ -640,10 +640,15 @@ impl CaravanExport {
 
     /// Import a wallet from Caravan format using proper Descriptor construction
     ///
-    /// Returns an error if the same extended public key appears more than once.
+    /// Returns an error if the same extended public key appears more than once, or if
+    /// `quorum.totalSigners` does not match the number of extended public keys.
     pub fn to_descriptors(&self) -> Result<(String, String), &'static str> {
         if self.extended_public_keys.is_empty() {
             return Err("No extended public keys found");
+        }
+
+        if self.quorum.total_signers as usize != self.extended_public_keys.len() {
+            return Err("quorum.totalSigners does not match the number of extended public keys");
         }
 
         // Reject configs that list the same key material more than once. Only the
@@ -1140,6 +1145,26 @@ mod test {
         assert_eq!(
             import.to_descriptors(),
             Err("Duplicate extended public keys found")
+        );
+    }
+
+    #[test]
+    fn test_caravan_import_rejects_total_signers_mismatch() {
+        let mut import = two_signer_import();
+        assert!(import.to_descriptors().is_ok());
+
+        // Declares more signers than keys provided.
+        import.quorum.total_signers = 3;
+        assert_eq!(
+            import.to_descriptors(),
+            Err("quorum.totalSigners does not match the number of extended public keys")
+        );
+
+        // Declares fewer signers than keys provided.
+        import.quorum.total_signers = 1;
+        assert_eq!(
+            import.to_descriptors(),
+            Err("quorum.totalSigners does not match the number of extended public keys")
         );
     }
 
