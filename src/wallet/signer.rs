@@ -337,7 +337,7 @@ impl InputSigner for SignerWrapper<DescriptorXKey<Xpriv>> {
         secp: &SecpCtx,
     ) -> Result<(), SignerError> {
         if input_index >= psbt.inputs.len() {
-            return Err(IndexOutOfBoundsError::new(input_index, psbt.inputs.len()))?;
+            Err(IndexOutOfBoundsError::new(input_index, psbt.inputs.len()))?;
         }
 
         if psbt.inputs[input_index].final_script_sig.is_some()
@@ -462,10 +462,10 @@ impl InputSigner for SignerWrapper<PrivateKey> {
         secp: &SecpCtx,
     ) -> Result<(), SignerError> {
         if input_index >= psbt.inputs.len() {
-            return Err(IndexOutOfBoundsError::new(input_index, psbt.inputs.len()))?;
+            Err(IndexOutOfBoundsError::new(input_index, psbt.inputs.len()))?;
         }
         if input_index >= psbt.unsigned_tx.input.len() {
-            return Err(IndexOutOfBoundsError::new(
+            Err(IndexOutOfBoundsError::new(
                 input_index,
                 psbt.unsigned_tx.input.len(),
             ))?;
