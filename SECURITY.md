@@ -14,7 +14,7 @@ The following key may be used to communicate sensitive information to BDK via em
 
 You can import the key by running the following command:
 ```
-gpg --recv-keys 7416BB255E60E40D482E591B72018930A1FB3444 --keyserver hkps://keys.openpgp.org
+gpg --keyserver hkps://keys.openpgp.org --recv-keys 7416BB255E60E40D482E591B72018930A1FB3444
 ```
 
 You can also download it from [our website](https://bitcoindevkit.org/foundation/pgp/#security-disclosures).
