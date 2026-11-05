@@ -1714,6 +1714,169 @@ fn test_signing_only_one_of_multiple_inputs() {
 }
 
 #[test]
+fn test_sign_missing_non_witness_utxo() {
+    let descriptor = get_test_wpkh();
+    let (mut wallet, _) = get_funded_wallet_single(descriptor);
+    let signers = signers_from_descriptor(&wallet, descriptor);
+    let addr = wallet.next_unused_address(KeychainKind::External);
+    let mut builder = wallet.build_tx();
+    builder
+        .drain_to(addr.script_pubkey())
+        .only_witness_utxo()
+        .drain_wallet();
+    let mut psbt = builder.finish().unwrap();
+    assert!(psbt.inputs[0].witness_utxo.is_some());
+    assert!(psbt.inputs[0].non_witness_utxo.is_none());
+
+    let result = wallet.sign_with_signers(&mut psbt, &[&signers], SignOptions::default());
+    assert_matches!(
+        result,
+        Err(SignerError::MissingNonWitnessUtxo),
+        "Signing a segwit v0 input should fail without the previous tx to verify its amount"
+    );
+    assert!(
+        psbt.inputs[0].partial_sigs.is_empty(),
+        "The input should be left unsigned"
+    );
+
+    let result = wallet.sign_with_signers(
+        &mut psbt,
+        &[&signers],
+        SignOptions {
+            trust_witness_utxo: true,
+            ..Default::default()
+        },
+    );
+    assert_matches!(
+        result,
+        Ok(true),
+        "Should finalize the input since we can sign it"
+    );
+}
+
+#[test]
+fn test_sign_invalid_non_witness_utxo() {
+    let descriptor = get_test_wpkh();
+    let (mut wallet, _) = get_funded_wallet_single(descriptor);
+    let signers = signers_from_descriptor(&wallet, descriptor);
+    let addr = wallet.next_unused_address(KeychainKind::External);
+    let mut builder = wallet.build_tx();
+    builder.drain_to(addr.script_pubkey()).drain_wallet();
+    let mut psbt = builder.finish().unwrap();
+    // Alter the previous tx so that it no longer hashes to the outpoint's txid.
+    let mut wrong_prev_tx = psbt.inputs[0].non_witness_utxo.clone().unwrap();
+    wrong_prev_tx.lock_time = absolute::LockTime::from_consensus(42);
+    assert_ne!(
+        wrong_prev_tx.compute_txid(),
+        psbt.unsigned_tx.input[0].previous_output.txid
+    );
+    psbt.inputs[0].non_witness_utxo = Some(wrong_prev_tx);
+    let result = wallet.sign_with_signers(&mut psbt, &[&signers], SignOptions::default());
+    assert_matches!(
+        result,
+        Err(SignerError::InvalidNonWitnessUtxo),
+        "Signing should fail when the previous tx doesn't match the input's outpoint"
+    );
+    assert!(
+        psbt.inputs[0].partial_sigs.is_empty(),
+        "The input should be left unsigned"
+    );
+    // `trust_witness_utxo` waives a *missing* previous tx, but never accepts a wrong one.
+    let result = wallet.sign_with_signers(
+        &mut psbt,
+        &[&signers],
+        SignOptions {
+            trust_witness_utxo: true,
+            ..Default::default()
+        },
+    );
+    assert_matches!(
+        result,
+        Err(SignerError::InvalidNonWitnessUtxo),
+        "A mismatching previous tx should be rejected even with `trust_witness_utxo`"
+    );
+    assert!(
+        psbt.inputs[0].partial_sigs.is_empty(),
+        "The input should be left unsigned"
+    );
+}
+
+#[test]
+fn test_sign_foreign_input_invalid_non_witness_utxo() {
+    use bdk_wallet::tx_builder::TxOrdering;
+
+    let (descriptor, change_descriptor) = get_test_wpkh_and_change_desc();
+    let (mut wallet, _) = get_funded_wallet(descriptor, change_descriptor);
+    let external_signers = signers_from_descriptor(&wallet, descriptor);
+    let internal_signers = signers_from_descriptor(&wallet, change_descriptor);
+    let (foreign_wallet, foreign_txid) =
+        get_funded_wallet_single("wpkh(cVbZ8ovhye9AoAHFsqobCf7LxbXDAECy9Kb8TZdfsDYMZGBUyCnm)");
+
+    let local_utxo = wallet.list_unspent().next().unwrap();
+    let foreign_utxo = foreign_wallet.list_unspent().next().unwrap();
+    let foreign_tx = foreign_wallet
+        .get_tx(foreign_txid)
+        .unwrap()
+        .tx_node
+        .as_ref()
+        .clone();
+    let foreign_utxo_satisfaction = foreign_wallet
+        .public_descriptor(KeychainKind::External)
+        .max_weight_to_satisfy()
+        .unwrap();
+    let addr = wallet.next_unused_address(KeychainKind::External);
+
+    // `add_foreign_utxo` rejects a mismatching previous tx up front, so the only way one reaches
+    // the signer is a PSBT that was tampered with after it was built.
+    let mut builder = wallet.build_tx();
+    builder
+        .ordering(TxOrdering::Untouched)
+        .manually_selected_only()
+        .add_utxo(local_utxo.outpoint)
+        .unwrap()
+        .add_foreign_utxo(
+            foreign_utxo.outpoint,
+            bitcoin::psbt::Input {
+                witness_utxo: Some(foreign_utxo.txout.clone()),
+                non_witness_utxo: Some(foreign_tx.clone()),
+                ..Default::default()
+            },
+            foreign_utxo_satisfaction,
+        )
+        .unwrap()
+        .add_recipient(addr.script_pubkey(), Amount::from_sat(10_000));
+    let mut psbt = builder.finish().unwrap();
+
+    assert_eq!(psbt.inputs.len(), 2);
+    assert_eq!(
+        psbt.unsigned_tx.input[1].previous_output,
+        foreign_utxo.outpoint
+    );
+
+    let mut wrong_prev_tx = foreign_tx;
+    wrong_prev_tx.lock_time = absolute::LockTime::from_consensus(42);
+    assert_ne!(wrong_prev_tx.compute_txid(), foreign_utxo.outpoint.txid);
+    psbt.inputs[1].non_witness_utxo = Some(wrong_prev_tx);
+
+    let result = wallet.sign_with_signers(
+        &mut psbt,
+        &[&external_signers, &internal_signers],
+        SignOptions::default(),
+    );
+    assert_matches!(
+        result,
+        Err(SignerError::InvalidNonWitnessUtxo),
+        "A foreign input whose previous tx doesn't match the outpoint should block signing"
+    );
+    assert!(
+        psbt.inputs
+            .iter()
+            .all(|input| input.partial_sigs.is_empty()),
+        "No input should be signed, not even the one we own"
+    );
+}
+
+#[test]
 fn test_try_finalize_sign_option() {
     let descriptor = "wpkh(tprv8ZgxMBicQKsPd3EupYiPRhaMooHKUHJxNsTfYuScep13go8QFfHdtkG9nRkFGb7busX4isf6X9dURGCoKgitaApQ6MupRhZMcELAxTBRJgS/*)";
     let (mut wallet, _) = get_funded_wallet_single(descriptor);
