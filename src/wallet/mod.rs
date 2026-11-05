@@ -37,7 +37,7 @@ use bitcoin::{
     Address, Amount, Block, FeeRate, Network, NetworkKind, OutPoint, Psbt, ScriptBuf, Sequence,
     SignedAmount, Transaction, TxOut, Txid, Weight, Witness, absolute,
     consensus::encode::serialize,
-    constants::genesis_block,
+    constants::{ChainHash, genesis_block},
     psbt,
     secp256k1::Secp256k1,
     sighash::{EcdsaSighashType, TapSighashType},
@@ -340,9 +340,20 @@ impl Wallet {
         let secp = SecpCtx::new();
         let network = params.network;
         let network_kind = NetworkKind::from(network);
-        let genesis_hash = params
-            .genesis_hash
-            .unwrap_or(genesis_block(network).block_hash());
+        let genesis_hash = match params.genesis_hash {
+            Some(hash) => {
+                if network_kind.is_mainnet()
+                    && ChainHash::from_genesis_block_hash(hash) != ChainHash::BITCOIN
+                {
+                    return Err(DescriptorError::GenesisHashMismatch {
+                        network,
+                        genesis_hash: hash,
+                    });
+                }
+                hash
+            }
+            None => genesis_block(network).block_hash(),
+        };
         let (chain, chain_changeset) = LocalChain::from_genesis_hash(genesis_hash);
 
         let (descriptor, mut descriptor_keymap) = (params.descriptor)(&secp, network_kind)?;
@@ -470,6 +481,14 @@ impl Wallet {
                     expected: exp_network,
                 }));
             }
+        }
+        if network_kind.is_mainnet()
+            && ChainHash::from_genesis_block_hash(chain.genesis_hash()) != ChainHash::BITCOIN
+        {
+            return Err(LoadError::GenesisNetworkMismatch {
+                network,
+                genesis_hash: chain.genesis_hash(),
+            });
         }
         if let Some(exp_genesis_hash) = params.check_genesis_hash {
             if chain.genesis_hash() != exp_genesis_hash {

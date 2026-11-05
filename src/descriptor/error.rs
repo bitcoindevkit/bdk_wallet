@@ -10,6 +10,7 @@
 // licenses.
 
 //! Descriptor errors
+use bitcoin::{BlockHash, Network};
 use core::fmt;
 
 /// Errors related to the parsing and usage of descriptors
@@ -44,6 +45,13 @@ pub enum Error {
     Hex(bitcoin::hex::HexToBytesError),
     /// The provided wallet descriptors are identical
     ExternalAndInternalAreTheSame,
+    /// The provided genesis hash does not match the expected mainnet genesis hash
+    GenesisHashMismatch {
+        /// The configured network
+        network: Network,
+        /// The genesis hash that was provided
+        genesis_hash: BlockHash,
+    },
 }
 
 impl From<crate::keys::KeyError> for Error {
@@ -84,6 +92,13 @@ impl fmt::Display for Error {
             Self::ExternalAndInternalAreTheSame => {
                 write!(f, "External and internal descriptors are the same")
             }
+            Self::GenesisHashMismatch {
+                network,
+                genesis_hash,
+            } => write!(
+                f,
+                "Genesis hash {genesis_hash} does not match expected genesis hash for network {network}"
+            ),
         }
     }
 }
