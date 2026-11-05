@@ -146,8 +146,18 @@ pub(crate) struct TxParams {
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct PreviousFee {
+    /// The fee of the transaction being replaced, plus the fees of its descendants that are
+    /// evicted with it.
     pub absolute: Amount,
+    /// The fee rate of the transaction being replaced alone.
     pub rate: FeeRate,
+}
+
+impl PreviousFee {
+    /// The lowest fee rate a replacement can pay
+    pub(crate) fn min_replacement_rate(&self) -> FeeRate {
+        FeeRate::from_sat_per_kwu(self.rate.to_sat_per_kwu() + 1)
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
