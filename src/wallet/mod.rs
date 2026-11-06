@@ -777,9 +777,10 @@ impl Wallet {
         &self,
         keychain: KeychainKind,
     ) -> impl DoubleEndedIterator<Item = AddressInfo> + '_ {
+        let keychain = self.map_keychain(keychain);
         self.tx_graph
             .index
-            .unused_keychain_spks(self.map_keychain(keychain))
+            .unused_keychain_spks(keychain)
             .map(move |(index, spk)| AddressInfo {
                 index,
                 address: Address::from_script(spk.as_script(), self.network)
@@ -2126,7 +2127,9 @@ impl Wallet {
     /// The derivation index of this wallet. It will return `None` if it has not derived any
     /// addresses. Otherwise, it will return the index of the highest address it has derived.
     pub fn derivation_index(&self, keychain: KeychainKind) -> Option<u32> {
-        self.tx_graph.index.last_revealed_index(keychain)
+        self.tx_graph
+            .index
+            .last_revealed_index(self.map_keychain(keychain))
     }
 
     /// The index of the next address that you would get if you were to ask the wallet for a new

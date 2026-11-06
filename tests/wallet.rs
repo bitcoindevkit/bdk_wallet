@@ -2411,6 +2411,47 @@ fn test_reveal_addresses() {
 }
 
 #[test]
+fn test_single_descriptor_wallet_maps_internal_keychain() {
+    let mut wallet = Wallet::create_single(get_test_tr_single_sig_xprv())
+        .network(Network::Signet)
+        .create_wallet_no_persist()
+        .unwrap();
+    let keychain = KeychainKind::Internal;
+
+    let revealed = wallet.reveal_next_address(keychain);
+    assert_eq!(revealed.keychain, KeychainKind::External);
+    assert_eq!(wallet.derivation_index(keychain), Some(0));
+    assert_eq!(
+        wallet.list_unused_addresses(keychain).collect::<Vec<_>>(),
+        vec![revealed]
+    );
+
+    assert!(wallet.mark_used(keychain, 0));
+    assert_eq!(wallet.list_unused_addresses(keychain).count(), 0);
+    assert!(wallet.unmark_used(keychain, 0));
+    assert_eq!(wallet.list_unused_addresses(keychain).count(), 1);
+}
+
+#[test]
+fn test_two_descriptor_wallet_keeps_internal_keychain_separate() {
+    let (desc, change_desc) = get_test_tr_single_sig_xprv_and_change_desc();
+    let mut wallet = Wallet::create(desc, change_desc)
+        .network(Network::Signet)
+        .create_wallet_no_persist()
+        .unwrap();
+    let keychain = KeychainKind::Internal;
+
+    wallet.reveal_next_address(KeychainKind::External);
+    assert_eq!(wallet.list_unused_addresses(keychain).count(), 0);
+
+    let revealed = wallet.reveal_next_address(keychain);
+    assert_eq!(
+        wallet.list_unused_addresses(keychain).collect::<Vec<_>>(),
+        vec![revealed]
+    );
+}
+
+#[test]
 fn test_get_address_no_reuse() {
     use bdk_wallet::descriptor::template::Bip84;
     use std::collections::HashSet;
