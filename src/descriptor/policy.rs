@@ -38,11 +38,10 @@
 
 use alloc::string::String;
 use alloc::vec::Vec;
-use core::cmp::max;
 use core::fmt;
 
 use bitcoin::{
-    PublicKey, Sequence, absolute,
+    PublicKey, absolute,
     bip32::Fingerprint,
     hashes::{hash160, ripemd160, sha256},
     key::XOnlyPublicKey,
@@ -64,6 +63,7 @@ use crate::descriptor::ExtractPolicy;
 use crate::keys::ExtScriptContext;
 use crate::types::IndexOutOfBoundsError;
 use crate::wallet::signer::{SignerId, SignersContainer};
+pub use crate::wallet::tx_builder::Condition;
 use crate::wallet::utils::SecpCtx;
 
 use super::XKeyUtils;
@@ -448,66 +448,6 @@ pub struct Policy {
     pub satisfaction: Satisfaction,
     /// How the wallet's descriptor can satisfy this policy node
     pub contribution: Satisfaction,
-}
-
-/// An extra condition that must be satisfied but that is out of control of the user
-/// TODO: use `bitcoin::LockTime` and `bitcoin::Sequence`
-#[derive(Hash, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Default, Serialize)]
-pub struct Condition {
-    /// Optional CheckSequenceVerify condition
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub csv: Option<Sequence>,
-    /// Optional timelock condition
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub timelock: Option<absolute::LockTime>,
-}
-
-impl Condition {
-    fn merge_nlocktime(
-        a: absolute::LockTime,
-        b: absolute::LockTime,
-    ) -> Result<absolute::LockTime, PolicyError> {
-        if !a.is_same_unit(b) {
-            Err(PolicyError::MixedTimelockUnits)
-        } else if a > b {
-            Ok(a)
-        } else {
-            Ok(b)
-        }
-    }
-
-    fn merge_nsequence(a: Sequence, b: Sequence) -> Result<Sequence, PolicyError> {
-        if a.is_time_locked() != b.is_time_locked() {
-            Err(PolicyError::MixedTimelockUnits)
-        } else {
-            Ok(max(a, b))
-        }
-    }
-
-    /// Merge two [`Condition`]s into the strictest combined CSV / CLTV requirements.
-    ///
-    /// Useful when combining external and internal keychain requirements into one `Condition`
-    /// before passing it to the transaction builder.
-    pub fn merge(mut self, other: &Condition) -> Result<Self, PolicyError> {
-        match (self.csv, other.csv) {
-            (Some(a), Some(b)) => self.csv = Some(Self::merge_nsequence(a, b)?),
-            (None, any) => self.csv = any,
-            _ => {}
-        }
-
-        match (self.timelock, other.timelock) {
-            (Some(a), Some(b)) => self.timelock = Some(Self::merge_nlocktime(a, b)?),
-            (None, any) => self.timelock = any,
-            _ => {}
-        }
-
-        Ok(self)
-    }
-
-    /// Returns `true` if there are no extra conditions to verify
-    pub fn is_null(&self) -> bool {
-        self.csv.is_none() && self.timelock.is_none()
-    }
 }
 
 /// Errors that can happen while extracting and manipulating policies
@@ -1184,7 +1124,7 @@ mod test {
     use assert_matches::assert_matches;
     use core::str::FromStr;
 
-    use bitcoin::{Network, NetworkKind, bip32, secp256k1::Secp256k1};
+    use bitcoin::{Network, NetworkKind, Sequence, bip32, secp256k1::Secp256k1};
 
     use crate::keys::{DescriptorKey, IntoDescriptorKey};
     use crate::wallet::signer::SignersContainer;

@@ -37,6 +37,7 @@
 //! ```
 
 use alloc::{boxed::Box, string::String, vec::Vec};
+use core::cmp::max;
 use core::fmt;
 
 use alloc::sync::Arc;
@@ -48,14 +49,75 @@ use bitcoin::{
     absolute, transaction::Version,
 };
 use rand_core::RngCore;
+use serde::Serialize;
 
 use super::coin_selection::CoinSelectionAlgorithm;
 use super::utils::shuffle_slice;
 use super::{CreateTxError, Wallet};
 use crate::collections::{BTreeMap, HashMap, HashSet};
-use crate::descriptor::Condition;
+use crate::descriptor::policy::PolicyError;
 use crate::psbt::validated_non_witness_prevout;
 use crate::{KeychainKind, LocalOutput, Utxo, WeightedUtxo};
+
+/// An extra condition that must be satisfied but that is out of control of the user
+/// TODO: use `bitcoin::LockTime` and `bitcoin::Sequence`
+#[derive(Hash, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Default, Serialize)]
+pub struct Condition {
+    /// Optional CheckSequenceVerify condition
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub csv: Option<Sequence>,
+    /// Optional timelock condition
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timelock: Option<absolute::LockTime>,
+}
+
+impl Condition {
+    fn merge_nlocktime(
+        a: absolute::LockTime,
+        b: absolute::LockTime,
+    ) -> Result<absolute::LockTime, PolicyError> {
+        if !a.is_same_unit(b) {
+            Err(PolicyError::MixedTimelockUnits)
+        } else if a > b {
+            Ok(a)
+        } else {
+            Ok(b)
+        }
+    }
+
+    fn merge_nsequence(a: Sequence, b: Sequence) -> Result<Sequence, PolicyError> {
+        if a.is_time_locked() != b.is_time_locked() {
+            Err(PolicyError::MixedTimelockUnits)
+        } else {
+            Ok(max(a, b))
+        }
+    }
+
+    /// Merge two [`Condition`]s into the strictest combined CSV / CLTV requirements.
+    ///
+    /// Useful when combining external and internal keychain requirements into one `Condition`
+    /// before passing it to the transaction builder.
+    pub fn merge(mut self, other: &Condition) -> Result<Self, PolicyError> {
+        match (self.csv, other.csv) {
+            (Some(a), Some(b)) => self.csv = Some(Self::merge_nsequence(a, b)?),
+            (None, any) => self.csv = any,
+            _ => {}
+        }
+
+        match (self.timelock, other.timelock) {
+            (Some(a), Some(b)) => self.timelock = Some(Self::merge_nlocktime(a, b)?),
+            (None, any) => self.timelock = any,
+            _ => {}
+        }
+
+        Ok(self)
+    }
+
+    /// Returns `true` if there are no extra conditions to verify
+    pub fn is_null(&self) -> bool {
+        self.csv.is_none() && self.timelock.is_none()
+    }
+}
 
 /// A transaction builder
 ///
