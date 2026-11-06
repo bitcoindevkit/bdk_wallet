@@ -342,6 +342,10 @@ impl<C> PsbtParams<C> {
     }
 
     /// Set the strategy to be used when selecting coins.
+    ///
+    /// If not set, defaults to [`SelectionStrategy::SingleRandomDraw`]. Note that this differs from
+    /// [`TxBuilder`](crate::TxBuilder), which defaults to branch and bound with a single random
+    /// draw fallback.
     pub fn coin_selection(&mut self, strategy: SelectionStrategy) -> &mut Self {
         self.coin_selection = strategy;
         self
@@ -530,7 +534,11 @@ pub enum SelectionStrategy {
         /// How many times to run BnB before giving up.
         max_rounds: usize,
     },
-    /// Single random draw.
+    /// Single random draw (the default).
+    ///
+    /// Manually selected inputs are spent first; the remaining candidates are shuffled using the
+    /// provided RNG and selected in order until the target (outputs plus fee) is met. A change
+    /// output is added if the excess is above the dust threshold.
     #[default]
     SingleRandomDraw,
 }
