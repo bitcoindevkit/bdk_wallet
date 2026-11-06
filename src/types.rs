@@ -116,21 +116,26 @@ impl Utxo {
         }
     }
 
-    /// Get the `TxOut` of the UTXO
-    pub fn txout(&self) -> &TxOut {
+    /// Get the `TxOut` for this UTXO if available. For foreign UTXOs, this will return `None`
+    /// if neither `witness_utxo` nor `non_witness_utxo` is set, or whose `non_witness_utxo` does
+    /// not contain the output at the specified `vout`.
+    pub fn txout(&self) -> Option<&TxOut> {
         match &self {
-            Utxo::Local(local) => &local.txout,
+            Utxo::Local(local) => Some(&local.txout),
             Utxo::Foreign {
                 outpoint,
                 psbt_input,
                 ..
-            } => psbt_input.witness_utxo.as_ref().unwrap_or_else(|| {
-                psbt_input
-                    .non_witness_utxo
-                    .as_ref()
-                    .and_then(|tx| tx.output.get(outpoint.vout as usize))
-                    .expect("Foreign UTXOs should have one of witness_utxo, non_witness_utxo set")
-            }),
+            } => {
+                if let Some(txout) = &psbt_input.witness_utxo {
+                    Some(txout)
+                } else {
+                    psbt_input
+                        .non_witness_utxo
+                        .as_ref()
+                        .and_then(|prev_tx| prev_tx.output.get(outpoint.vout as usize))
+                }
+            }
         }
     }
 
@@ -256,7 +261,7 @@ mod tests {
                 ..Default::default()
             }),
         };
-        assert_eq!(utxo.txout(), &txout);
+        assert_eq!(utxo.txout(), Some(&txout));
     }
 
     #[test]
@@ -277,19 +282,37 @@ mod tests {
                 ..Default::default()
             }),
         };
-        assert_eq!(utxo.txout(), &txout);
+        assert_eq!(utxo.txout(), Some(&txout));
     }
 
     #[test]
-    #[should_panic(
-        expected = "Foreign UTXOs should have one of witness_utxo, non_witness_utxo set"
-    )]
-    fn txout_foreign_panics_with_empty_psbt_input() {
+    fn txout_foreign_returns_none_with_empty_psbt_input() {
         let utxo = Utxo::Foreign {
             outpoint: OutPoint::null(),
             sequence: Sequence::MAX,
             psbt_input: Box::new(psbt::Input::default()),
         };
-        utxo.txout();
+        assert_eq!(utxo.txout(), None);
+    }
+
+    #[test]
+    fn txout_foreign_returns_none_when_vout_is_out_of_bounds() {
+        let txout = TxOut {
+            value: Amount::from_sat(100_000),
+            script_pubkey: ScriptBuf::default(),
+        };
+        let prev_tx = build_tx(txout);
+        let utxo = Utxo::Foreign {
+            outpoint: OutPoint {
+                txid: prev_tx.compute_txid(),
+                vout: 1, // out of bounds
+            },
+            sequence: Sequence::MAX,
+            psbt_input: Box::new(psbt::Input {
+                non_witness_utxo: Some(prev_tx),
+                ..Default::default()
+            }),
+        };
+        assert_eq!(utxo.txout(), None);
     }
 }
