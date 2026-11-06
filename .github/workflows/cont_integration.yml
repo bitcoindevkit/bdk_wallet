@@ -28,7 +28,7 @@ jobs:
       # The 'toolchain' argument on this action overrides the Rust compiler version set in rust-toolchain.toml
       # in order to test our MSRV.
       - name: Install Rust toolchain
-        uses: actions-rust-lang/setup-rust-toolchain@v1
+        uses: actions-rust-lang/setup-rust-toolchain@v2
         with:
           toolchain: 1.85 # MSRV
           cache: true
@@ -60,7 +60,7 @@ jobs:
       # This action will honor the Rust compiler version set in rust-toolchain.toml. We aim to keep it in sync with
       # Rust stable.
       - name: Install Rust toolchain
-        uses: actions-rust-lang/setup-rust-toolchain@v1
+        uses: actions-rust-lang/setup-rust-toolchain@v2
         with:
           cache: true
       - name: Build (no default features)
@@ -83,7 +83,7 @@ jobs:
           persist-credentials: false
       # This action automatically reads and applies rust-toolchain.toml
       - name: Install Rust toolchain
-        uses: actions-rust-lang/setup-rust-toolchain@v1
+        uses: actions-rust-lang/setup-rust-toolchain@v2
         with:
           cache: true
       - name: Check no-std
@@ -107,7 +107,7 @@ jobs:
       - run: sudo apt-get install -y libclang-common-14-dev clang-14 libc6-dev-i386 || exit 1
       # This action automatically reads and applies rust-toolchain.toml
       - name: Install Rust toolchain
-        uses: actions-rust-lang/setup-rust-toolchain@v1
+        uses: actions-rust-lang/setup-rust-toolchain@v2
         with:
           cache: true
           target: wasm32-unknown-unknown
@@ -126,7 +126,7 @@ jobs:
           persist-credentials: false
       # This action automatically reads and applies rust-toolchain.toml
       - name: Install Rust toolchain
-        uses: actions-rust-lang/setup-rust-toolchain@v1
+        uses: actions-rust-lang/setup-rust-toolchain@v2
         with:
           cache: true
       - name: Check fmt
@@ -144,7 +144,7 @@ jobs:
           persist-credentials: false
       # This action automatically reads and applies rust-toolchain.toml
       - name: Install Rust toolchain
-        uses: actions-rust-lang/setup-rust-toolchain@v1
+        uses: actions-rust-lang/setup-rust-toolchain@v2
         with:
           cache: true
       - name: Clippy
@@ -162,7 +162,7 @@ jobs:
           persist-credentials: false
       # This action automatically reads and applies rust-toolchain.toml
       - name: Install Rust toolchain
-        uses: actions-rust-lang/setup-rust-toolchain@v1
+        uses: actions-rust-lang/setup-rust-toolchain@v2
         with:
           cache: true
       - name: Check docs
