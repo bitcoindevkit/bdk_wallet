@@ -8,7 +8,7 @@ use bdk_chain::{
     ChainPosition, ConfirmationBlockTime, DescriptorExt, keychain_txout::DEFAULT_LOOKAHEAD,
 };
 use bdk_wallet::coin_selection::InsufficientFunds;
-use bdk_wallet::descriptor::IntoWalletDescriptor;
+use bdk_wallet::descriptor::{DescriptorError, IntoWalletDescriptor};
 use bdk_wallet::error::CreateTxError;
 
 use bdk_wallet::persist_test_utils::{
@@ -324,6 +324,41 @@ fn wallet_load_checks() -> anyhow::Result<()> {
     )?;
 
     Ok(())
+}
+
+#[test]
+fn wallet_load_rejects_invalid_expected_descriptor() {
+    let two_path = get_test_two_path_wpkh();
+    let mut wallet = Wallet::create_from_two_path_descriptor(two_path)
+        .network(Network::Testnet)
+        .create_wallet_no_persist()
+        .unwrap();
+    let changeset = wallet.take_staged().unwrap();
+    let load = |params| Wallet::load_with_params(changeset.clone(), params);
+    let assert_hardened = |params| {
+        assert_matches!(
+            load(params),
+            Err(LoadError::Descriptor(
+                DescriptorError::HardenedDerivationXpub
+            ))
+        )
+    };
+
+    let xprv = get_test_tr_single_sig_xprv().replace("/*)", "/*h)");
+    assert_hardened(Wallet::load().descriptor(KeychainKind::External, Some(xprv)));
+    assert_hardened(Wallet::load().two_path_descriptor(two_path.replace("<0;1>", "1h/<0;1>")));
+    for keychain in [KeychainKind::External, KeychainKind::Internal] {
+        for desc in [
+            two_path.replace("<0;1>/*", "*h"),
+            two_path.replace("<0;1>", "1h"),
+        ] {
+            assert_hardened(Wallet::load().descriptor(keychain, Some(desc)));
+        }
+        assert_matches!(
+            load(Wallet::load().descriptor(keychain, Some(two_path))),
+            Err(LoadError::Descriptor(DescriptorError::Miniscript(_)))
+        );
+    }
 }
 
 #[test]
