@@ -46,9 +46,10 @@ pub mod template;
 
 pub use self::checksum::calc_checksum;
 pub use self::error::Error as DescriptorError;
-pub use self::policy::{Condition, Policy};
+pub use self::policy::Policy;
 use self::template::DescriptorTemplateOut;
 use crate::keys::{IntoDescriptorKey, KeyError};
+pub use crate::wallet::tx_builder::Condition;
 use crate::wallet::{signer::SignersContainer, utils::SecpCtx};
 
 /// Alias for a [`Descriptor`] that can contain extended keys using [`DescriptorPublicKey`]
