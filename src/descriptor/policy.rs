@@ -528,6 +528,15 @@ pub enum PolicyError {
     MixedTimelockUnits,
     /// Incompatible conditions (not currently used)
     IncompatibleConditions,
+    /// The descriptor contains an `expr_raw_pkh` fragment, which can't be represented as a policy
+    ///
+    /// Without a policy the wallet can't work out the timelocks a spending path needs. A
+    /// transaction can still be built with [`TxBuilder::set_condition`], which skips the policy,
+    /// but then the caller has to supply the timelocks. For example, with `older(144)` in the
+    /// descriptor an empty [`Condition`] gives the input sequence `0xfffffffd` rather than `0x90`.
+    ///
+    /// [`TxBuilder::set_condition`]: crate::TxBuilder::set_condition
+    RawPkH,
 }
 
 impl fmt::Display for PolicyError {
@@ -539,6 +548,7 @@ impl fmt::Display for PolicyError {
             Self::AddOnPartialComplete => write!(f, "Add on partial complete"),
             Self::MixedTimelockUnits => write!(f, "Mixed timelock units"),
             Self::IncompatibleConditions => write!(f, "Incompatible conditions"),
+            Self::RawPkH => write!(f, "Unsupported `expr_raw_pkh` fragment"),
         }
     }
 }
@@ -1059,7 +1069,7 @@ impl<Ctx: ScriptContext + 'static> ExtractPolicy for Miniscript<DescriptorPublic
             }
 
             // Unsupported
-            Terminal::RawPkH(_) => None,
+            Terminal::RawPkH(_) => return Err(PolicyError::RawPkH.into()),
         })
     }
 }
@@ -1954,6 +1964,34 @@ mod test {
                 condition: Default::default()
             }
         );
+    }
+
+    #[test]
+    fn test_extract_policy_raw_pkh() {
+        let secp = Secp256k1::new();
+        let a = "02c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5";
+        let h = "7dd65592d0ab2fe0d0257d571abf032cd9db93dc";
+
+        for desc in [
+            format!("wsh(and_v(v:pkh({a}),c:expr_raw_pkh({h})))"),
+            format!("wsh(or_i(pk({a}),c:expr_raw_pkh({h})))"),
+            format!("wsh(thresh(1,c:pk_k({a}),ac:expr_raw_pkh({h})))"),
+        ] {
+            let (wallet_desc, _) = desc
+                .as_str()
+                .into_wallet_descriptor(&secp, NetworkKind::Test)
+                .unwrap();
+            let result = wallet_desc.extract_policy(
+                &SignersContainer::default(),
+                BuildSatisfaction::None,
+                &secp,
+            );
+            assert_matches!(
+                result,
+                Err(crate::descriptor::error::Error::Policy(PolicyError::RawPkH)),
+                "{desc}"
+            );
+        }
     }
 
     #[test]
