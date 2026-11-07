@@ -241,6 +241,31 @@ fn test_psbt_fee_rate_with_missing_txout() {
 }
 
 #[test]
+fn test_psbt_fee_rate_above_default_max_fee_rate() {
+    let descriptor = "wpkh(tprv8ZgxMBicQKsPd3EupYiPRhaMooHKUHJxNsTfYuScep13go8QFfHdtkG9nRkFGb7busX4isf6X9dURGCoKgitaApQ6MupRhZMcELAxTBRJgS/*)";
+    let (mut wallet, _) = get_funded_wallet_single(descriptor);
+    receive_output_in_latest_block(&mut wallet, Amount::ONE_BTC);
+    let addr = wallet.peek_address(KeychainKind::External, 0);
+    let mut builder = wallet.build_tx();
+    builder.add_recipient(addr.script_pubkey(), Amount::from_sat(100_000));
+    builder.fee_absolute(Amount::from_sat(10_000_000));
+    let mut psbt = builder.finish().unwrap();
+    let unfinalized_fee_rate = psbt.fee_rate().unwrap();
+    assert!(unfinalized_fee_rate > Psbt::DEFAULT_MAX_FEE_RATE);
+
+    let signer = KeyMapWrapper::from(keymap_from_descriptor(&wallet, descriptor));
+    psbt.sign(&signer, wallet.secp_ctx()).unwrap();
+    let finalized = wallet.finalize_psbt(&mut psbt, Default::default()).unwrap();
+    assert!(finalized);
+
+    let weight = psbt.clone().extract_tx_unchecked_fee_rate().weight();
+    let finalized_fee_rate = psbt.fee_rate().unwrap();
+    assert_eq!(finalized_fee_rate, psbt.fee_amount().unwrap() / weight);
+    assert!(finalized_fee_rate > Psbt::DEFAULT_MAX_FEE_RATE);
+    assert!(finalized_fee_rate < unfinalized_fee_rate);
+}
+
+#[test]
 fn test_psbt_multiple_internalkey_signers() {
     use bdk_wallet::KeychainKind;
     use bdk_wallet::signer::{SignerContext, SignerOrdering, SignerWrapper, TransactionSigner};

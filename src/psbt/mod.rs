@@ -81,9 +81,15 @@ impl PsbtUtils for Psbt {
     }
 
     fn fee_rate(&self) -> Option<FeeRate> {
-        let fee_amount = self.fee_amount();
-        let weight = self.clone().extract_tx().ok()?.weight();
-        fee_amount.map(|fee| fee / weight)
+        let fee = self.fee_amount()?;
+        let weight = self
+            .clone()
+            .extract_tx_with_fee_rate_limit(FeeRate::MAX)
+            .ok()?
+            .weight();
+        Some(FeeRate::from_sat_per_kwu(
+            fee.to_sat().saturating_mul(1000) / weight.to_wu(),
+        ))
     }
 }
 
@@ -166,5 +172,29 @@ mod tests {
 
         // Must return None — vout out of bounds, no panic
         assert_eq!(psbt.get_utxo_for(0), None);
+    }
+
+    #[test]
+    fn fee_rate_returns_none_on_vout_out_of_bounds() {
+        let prev_tx = build_tx(Amount::from_sat(100_000));
+        let mut psbt = build_psbt(&prev_tx, 3);
+        psbt.inputs[0].non_witness_utxo = Some(prev_tx);
+
+        assert_eq!(psbt.fee_rate(), None);
+    }
+
+    #[test]
+    fn fee_rate_saturates_when_fee_overflows() {
+        let mut psbt = build_psbt(&build_tx(Amount::from_sat(100_000)), 0);
+        psbt.inputs[0].witness_utxo = Some(TxOut {
+            value: Amount::MAX,
+            script_pubkey: ScriptBuf::default(),
+        });
+
+        let weight = psbt.unsigned_tx.weight().to_wu();
+        assert_eq!(
+            psbt.fee_rate(),
+            Some(FeeRate::from_sat_per_kwu(u64::MAX / weight))
+        );
     }
 }
