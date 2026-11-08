@@ -717,13 +717,14 @@ impl From<(SignerId, SignerOrdering)> for SignersContainerKey {
 
 /// Container for multiple signers
 #[derive(Debug, Default, Clone)]
-pub struct SignersContainer(BTreeMap<SignersContainerKey, Arc<dyn TransactionSigner>>);
+pub struct SignersContainer(BTreeMap<SignersContainerKey, Vec<Arc<dyn TransactionSigner>>>);
 
 impl SignersContainer {
     /// Create a map of public keys to secret keys
     pub fn as_key_map(&self, secp: &SecpCtx) -> KeyMap {
         self.0
             .values()
+            .flatten()
             .filter_map(|signer| signer.descriptor_secret_key())
             .filter_map(|secret| secret.to_public(secp).ok().map(|public| (public, secret)))
             .collect()
@@ -750,7 +751,7 @@ impl SignersContainer {
             };
 
             match secret {
-                DescriptorSecretKey::Single(private_key) => container.add_external(
+                DescriptorSecretKey::Single(private_key) => container.push(
                     SignerId::from(
                         private_key
                             .key
@@ -760,12 +761,12 @@ impl SignersContainer {
                     SignerOrdering::default(),
                     Arc::new(SignerWrapper::new(private_key.key, ctx)),
                 ),
-                DescriptorSecretKey::XPrv(xprv) => container.add_external(
+                DescriptorSecretKey::XPrv(xprv) => container.push(
                     SignerId::from(xprv.root_fingerprint(secp)),
                     SignerOrdering::default(),
                     Arc::new(SignerWrapper::new(xprv, ctx)),
                 ),
-                DescriptorSecretKey::MultiXPrv(xprv) => container.add_external(
+                DescriptorSecretKey::MultiXPrv(xprv) => container.push(
                     SignerId::from(xprv.root_fingerprint(secp)),
                     SignerOrdering::default(),
                     Arc::new(SignerWrapper::new(xprv, ctx)),
@@ -775,6 +776,13 @@ impl SignersContainer {
 
         container
     }
+
+    fn push(&mut self, id: SignerId, ordering: SignerOrdering, signer: Arc<dyn TransactionSigner>) {
+        self.0
+            .entry((id, ordering).into())
+            .or_default()
+            .push(signer);
+    }
 }
 
 impl SignersContainer {
@@ -783,37 +791,41 @@ impl SignersContainer {
         SignersContainer(Default::default())
     }
 
-    /// Adds an external signer to the container for the specified id. Optionally returns the
-    /// signer that was previously in the container, if any
+    /// Adds an external signer to the container for the specified id and ordering, replacing any
+    /// signers already stored under them. Optionally returns the last of those, if any
     pub fn add_external(
         &mut self,
         id: SignerId,
         ordering: SignerOrdering,
         signer: Arc<dyn TransactionSigner>,
     ) -> Option<Arc<dyn TransactionSigner>> {
-        self.0.insert((id, ordering).into(), signer)
+        self.0
+            .insert((id, ordering).into(), vec![signer])
+            .and_then(|mut previous| previous.pop())
     }
 
-    /// Removes a signer from the container and returns it
+    /// Removes the signers with the specified id and ordering and returns the last of them
     pub fn remove(
         &mut self,
         id: SignerId,
         ordering: SignerOrdering,
     ) -> Option<Arc<dyn TransactionSigner>> {
-        self.0.remove(&(id, ordering).into())
+        self.0
+            .remove(&(id, ordering).into())
+            .and_then(|mut removed| removed.pop())
     }
 
     /// Returns the list of identifiers of all the signers in the container
     pub fn ids(&self) -> Vec<&SignerId> {
         self.0
-            .keys()
-            .map(|SignersContainerKey { id, .. }| id)
+            .iter()
+            .flat_map(|(key, signers)| core::iter::repeat_n(&key.id, signers.len()))
             .collect()
     }
 
     /// Returns the list of signers in the container, sorted by lowest to highest `ordering`
     pub fn signers(&self) -> Vec<&Arc<dyn TransactionSigner>> {
-        self.0.values().collect()
+        self.0.values().flatten().collect()
     }
 
     /// Finds the signer with lowest ordering for a given id in the container.
@@ -824,8 +836,7 @@ impl SignersContainer {
                 Included(&(id.clone(), SignerOrdering(usize::MAX)).into()),
             ))
             .filter(|(k, _)| k.id == id)
-            .map(|(_, v)| v)
-            .next()
+            .find_map(|(_, v)| v.last())
     }
 }
 
@@ -1029,6 +1040,33 @@ mod signers_container_tests {
 
         let signers = signers.signers();
         assert_eq!(signers.len(), 2);
+    }
+
+    #[test]
+    fn signers_with_same_id() {
+        let secp = Secp256k1::new();
+        let (wallet_desc, keymap) = format!("wsh(multi(2,{TPRV0_STR}/0/*,{TPRV0_STR}/1/*))")
+            .as_str()
+            .into_wallet_descriptor(&secp, NetworkKind::Test)
+            .unwrap();
+
+        let mut signers = SignersContainer::build(keymap.clone(), &wallet_desc, &secp);
+        assert_eq!(signers.ids().len(), 2);
+        assert_eq!(signers.as_key_map(&secp), keymap);
+
+        let id = signers.ids()[0].clone();
+        let last = signers.signers()[1].clone();
+        assert!(Arc::ptr_eq(signers.find(id.clone()).unwrap(), &last));
+
+        let mut replaced = signers.clone();
+        let dummy = Arc::new(DummySigner { number: 1 });
+        let previous = replaced.add_external(id.clone(), SignerOrdering::default(), dummy);
+        assert!(Arc::ptr_eq(&previous.unwrap(), &last));
+        assert_eq!(replaced.signers().len(), 1);
+
+        let removed = signers.remove(id, SignerOrdering::default()).unwrap();
+        assert!(Arc::ptr_eq(&removed, &last));
+        assert!(signers.signers().is_empty());
     }
 
     #[test]
