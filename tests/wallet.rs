@@ -3858,3 +3858,51 @@ fn test_extract_policy_timelock_boundaries() {
         vec![1]
     );
 }
+
+#[test]
+fn test_extract_policy_tr_full_key_satisfaction() {
+    use bdk_wallet::descriptor::policy::Satisfaction;
+
+    let policy_satisfaction = |descriptor: &str| {
+        let (mut wallet, _) = get_funded_wallet_single(descriptor);
+        let addr = wallet.next_unused_address(KeychainKind::External);
+        let mut builder = wallet.build_tx();
+        builder.add_recipient(addr.script_pubkey(), Amount::from_sat(25_000));
+        let mut psbt = builder.finish().unwrap();
+        let signers = signers_from_descriptor(&wallet, descriptor);
+        wallet
+            .sign_with_signers(
+                &mut psbt,
+                &[&signers],
+                SignOptions {
+                    try_finalize: false,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        wallet
+            .public_descriptor(KeychainKind::External)
+            .extract_policy(
+                &SignersContainer::default(),
+                BuildSatisfaction::Psbt(&psbt),
+                wallet.secp_ctx(),
+            )
+            .unwrap()
+            .unwrap()
+            .satisfaction
+    };
+
+    assert_eq!(
+        policy_satisfaction(get_test_tr_single_sig()),
+        Satisfaction::Complete {
+            condition: Default::default()
+        }
+    );
+    // Leaf 1 has an odd-Y (`03`) key, leaf 2 has no signer.
+    assert_matches!(
+        policy_satisfaction(
+            "tr(b511bd5771e47ee27558b1765e87b541668304ec567721c7b880edc0a010da55,{pk(cVpPVruEDdmutPzisEsYvtST1usBR3ntr8pXSyt6D2YYqXRyPcFW),pk(02fcba7ecf41bc7e1be4ee122d9d22e3333671eb0a3a87b5cdf099d59874e1940f)})"
+        ),
+        Satisfaction::PartialComplete { n: 3, m: 1, items, .. } if items == vec![1]
+    );
+}

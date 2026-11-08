@@ -880,14 +880,14 @@ impl<T: ScriptContext + 'static> SigExt for T {
                 secp,
                 |input, pk| {
                     let pk = match pk {
-                        SinglePubKey::XOnly(pk) => pk,
-                        _ => return false,
+                        SinglePubKey::XOnly(pk) => *pk,
+                        SinglePubKey::FullKey(pk) => XOnlyPublicKey::from(pk.inner),
                     };
 
-                    if input.tap_internal_key == Some(*pk) && input.tap_key_sig.is_some() {
+                    if input.tap_internal_key == Some(pk) && input.tap_key_sig.is_some() {
                         true
                     } else {
-                        input.tap_script_sigs.keys().any(|(sk, _)| sk == pk)
+                        input.tap_script_sigs.keys().any(|(sk, _)| *sk == pk)
                     }
                 },
                 |input, fing| {
