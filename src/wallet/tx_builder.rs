@@ -54,6 +54,7 @@ use super::utils::shuffle_slice;
 use super::{CreateTxError, Wallet};
 use crate::collections::{BTreeMap, HashMap, HashSet};
 use crate::descriptor::Condition;
+use crate::psbt::validated_non_witness_prevout;
 use crate::{KeychainKind, LocalOutput, Utxo, WeightedUtxo};
 
 /// A transaction builder
@@ -465,9 +466,11 @@ impl<'a, Cs> TxBuilder<'a, Cs> {
     ///
     /// This is an **EXPERIMENTAL** feature, API and other major changes are expected.
     ///
-    /// In order to use [`Wallet::calculate_fee`] or [`Wallet::calculate_fee_rate`] for a
-    /// transaction created with foreign UTXO(s) you must manually insert the corresponding
-    /// TxOut(s) into the tx graph using the [`Wallet::insert_txout`] function.
+    /// This method adds data to the builder, not to the wallet's transaction graph. To use
+    /// [`Wallet::calculate_fee`] or [`Wallet::calculate_fee_rate`] on the resulting transaction,
+    /// also insert the foreign output with [`Wallet::insert_txout`] or its full parent transaction
+    /// with [`Wallet::apply_update`]. For fee bumping, see the foreign-input requirements on
+    /// [`Wallet::build_fee_bump`].
     ///
     /// # Errors
     ///
@@ -502,7 +505,7 @@ impl<'a, Cs> TxBuilder<'a, Cs> {
     pub fn add_foreign_utxo_with_sequence(
         &mut self,
         outpoint: OutPoint,
-        psbt_input: psbt::Input,
+        mut psbt_input: psbt::Input,
         satisfaction_weight: Weight,
         sequence: Sequence,
     ) -> Result<&mut Self, AddForeignUtxoError> {
@@ -514,8 +517,11 @@ impl<'a, Cs> TxBuilder<'a, Cs> {
                     foreign_utxo: outpoint,
                 });
             }
-            if tx.output.len() <= outpoint.vout as usize {
-                return Err(AddForeignUtxoError::InvalidOutpoint(outpoint));
+            let prevout = validated_non_witness_prevout(&psbt_input, outpoint)
+                .ok_or(AddForeignUtxoError::InvalidOutpoint(outpoint))?;
+            // Set the existing witness UTXO to the verified prevout.
+            if psbt_input.witness_utxo.is_some() {
+                psbt_input.witness_utxo = Some(prevout.clone());
             }
         } else if psbt_input.witness_utxo.is_none() {
             return Err(AddForeignUtxoError::MissingUtxo);

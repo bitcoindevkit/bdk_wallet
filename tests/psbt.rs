@@ -1,8 +1,10 @@
 use bdk_wallet::bitcoin::bip32::Xpriv;
 use bdk_wallet::bitcoin::psbt::SigningKeys;
+use bdk_wallet::psbt::PsbtUtils;
+use bdk_wallet::signer::SignerError;
 use bdk_wallet::test_utils::*;
 use bdk_wallet::{KeychainKind, SignOptions, psbt};
-use bitcoin::{Amount, FeeRate, Psbt, TxIn, Witness};
+use bitcoin::{Amount, FeeRate, Psbt, Script, TxIn, Witness};
 use core::str::FromStr;
 use miniscript::descriptor::KeyMapWrapper;
 use miniscript::psbt::PsbtExt;
@@ -113,6 +115,188 @@ fn test_psbt_sign_with_finalized() {
             SignOptions::default(),
         )
         .unwrap();
+}
+
+/// Rejects mismatched witness_utxo and non_witness_utxo fields.
+#[test]
+fn test_sign_with_signers_rejects_mismatched_utxo() {
+    let descriptor = get_test_wpkh();
+    let (mut wallet, _) = get_funded_wallet_single(descriptor);
+    receive_output_in_latest_block(&mut wallet, Amount::from_sat(50_000));
+    let recipient = wallet.next_unused_address(KeychainKind::External);
+    let mut builder = wallet.build_tx();
+    builder.drain_to(recipient.script_pubkey()).drain_wallet();
+    let psbt = builder.finish().unwrap();
+    assert_eq!(psbt.inputs.len(), 2);
+
+    let signers = signers_from_descriptor(&wallet, descriptor);
+    for index in 0..psbt.inputs.len() {
+        let mut mismatched = psbt.clone();
+        mismatched.inputs[index]
+            .witness_utxo
+            .as_mut()
+            .unwrap()
+            .value -= Amount::from_sat(20_000);
+        assert_eq!(mismatched.fee_amount(), None);
+        let result = wallet.sign_with_signers(&mut mismatched, &[&signers], SignOptions::default());
+        assert!(matches!(result, Err(SignerError::InvalidNonWitnessUtxo)));
+        assert!(
+            mismatched
+                .inputs
+                .iter()
+                .all(|input| input.partial_sigs.is_empty()
+                    && input.final_script_sig.is_none()
+                    && input.final_script_witness.is_none())
+        );
+    }
+}
+
+/// Signing mixed inputs rejects missing or incorrect prevout data.
+#[test]
+fn test_psbt_sign_mixed_taproot_and_segwit_v0() {
+    let (_, xpriv_change) = get_test_wpkh_and_change_desc();
+    for (descriptor, change_descriptor) in [
+        (get_test_tr_single_sig_xprv(), xpriv_change),
+        (get_test_tr_single_sig(), get_test_wpkh()),
+    ] {
+        let (mut wallet, _) = get_funded_wallet(descriptor, change_descriptor);
+        let change_address = wallet.next_unused_address(KeychainKind::Internal).address;
+        receive_output_to_address(
+            &mut wallet,
+            change_address,
+            Amount::from_sat(30_000),
+            ReceiveTo::Mempool(0),
+        );
+        let recipient = wallet.next_unused_address(KeychainKind::External);
+        let mut builder = wallet.build_tx();
+        builder.drain_to(recipient.script_pubkey()).drain_wallet();
+        let psbt = builder.finish().unwrap();
+        assert_eq!(psbt.inputs.len(), 2);
+        let input_index = |is_type: fn(&Script) -> bool| {
+            psbt.inputs
+                .iter()
+                .position(|input| is_type(&input.witness_utxo.as_ref().unwrap().script_pubkey))
+                .unwrap()
+        };
+        let taproot_index = input_index(Script::is_p2tr);
+        let segwit_v0_index = input_index(Script::is_p2wpkh);
+        // The wallet only adds the full parent transaction to the segwit v0 input.
+        assert!(psbt.inputs[taproot_index].non_witness_utxo.is_none());
+        assert!(psbt.inputs[segwit_v0_index].non_witness_utxo.is_some());
+
+        let external = signers_from_descriptor(&wallet, descriptor);
+        let internal = signers_from_descriptor(&wallet, change_descriptor);
+        let signers = [&external, &internal];
+
+        let mut missing = psbt.clone();
+        missing.inputs[segwit_v0_index].non_witness_utxo = None;
+        assert!(matches!(
+            wallet.sign_with_signers(&mut missing, &signers, SignOptions::default()),
+            Err(SignerError::MissingNonWitnessUtxo)
+        ));
+        assert!(
+            missing
+                .inputs
+                .iter()
+                .all(|input| input.partial_sigs.is_empty() && input.tap_key_sig.is_none())
+        );
+
+        let mut understated = psbt.clone();
+        understated.inputs[taproot_index]
+            .witness_utxo
+            .as_mut()
+            .unwrap()
+            .value -= Amount::from_sat(20_000);
+        assert!(matches!(
+            wallet.sign_with_signers(&mut understated, &signers, SignOptions::default()),
+            Err(SignerError::InvalidNonWitnessUtxo)
+        ));
+        assert!(
+            understated
+                .inputs
+                .iter()
+                .all(|input| input.partial_sigs.is_empty() && input.tap_key_sig.is_none())
+        );
+
+        // A floating txout cannot authenticate the amount without its full transaction.
+        let (mut unknown, _) = get_funded_wallet_single(get_test_pkh());
+        unknown.insert_txout(
+            psbt.unsigned_tx.input[taproot_index].previous_output,
+            psbt.inputs[taproot_index].witness_utxo.clone().unwrap(),
+        );
+        let mut floating = psbt.clone();
+        assert!(matches!(
+            unknown.sign_with_signers(&mut floating, &signers, SignOptions::default()),
+            Err(SignerError::MissingNonWitnessUtxo)
+        ));
+        assert!(
+            floating
+                .inputs
+                .iter()
+                .all(|input| input.partial_sigs.is_empty() && input.tap_key_sig.is_none())
+        );
+
+        let mut signed = psbt;
+        assert!(
+            wallet
+                .sign_with_signers(&mut signed, &signers, SignOptions::default())
+                .unwrap()
+        );
+    }
+}
+
+/// Taproot ANYONECANPAY signing verifies all input amounts before producing signatures.
+#[test]
+fn test_psbt_taproot_anyone_can_pay_authenticates_amounts() {
+    use bitcoin::sighash::TapSighashType;
+
+    let descriptor = get_test_tr_single_sig_xprv();
+    let (mut wallet, _) = get_funded_wallet_single(descriptor);
+    receive_output_in_latest_block(&mut wallet, Amount::from_sat(30_000));
+    let recipient = wallet.next_unused_address(KeychainKind::External);
+    let mut builder = wallet.build_tx();
+    builder
+        .drain_to(recipient.script_pubkey())
+        .drain_wallet()
+        .sighash(TapSighashType::AllPlusAnyoneCanPay.into());
+    let psbt = builder.finish().unwrap();
+    assert_eq!(psbt.inputs.len(), 2);
+    assert!(
+        psbt.inputs
+            .iter()
+            .all(|input| input.non_witness_utxo.is_none())
+    );
+    let signers = signers_from_descriptor(&wallet, descriptor);
+    let options = SignOptions {
+        allow_all_sighashes: true,
+        ..Default::default()
+    };
+
+    for index in 0..psbt.inputs.len() {
+        let mut understated = psbt.clone();
+        understated.inputs[index]
+            .witness_utxo
+            .as_mut()
+            .unwrap()
+            .value -= Amount::from_sat(20_000);
+        assert!(matches!(
+            wallet.sign_with_signers(&mut understated, &[&signers], options.clone()),
+            Err(SignerError::InvalidNonWitnessUtxo)
+        ));
+        assert!(
+            understated
+                .inputs
+                .iter()
+                .all(|input| input.tap_key_sig.is_none())
+        );
+    }
+
+    let mut signed = psbt;
+    assert!(
+        wallet
+            .sign_with_signers(&mut signed, &[&signers], options)
+            .unwrap()
+    );
 }
 
 #[test]

@@ -4,7 +4,7 @@ use assert_matches::assert_matches;
 use bdk_chain::{ChainPosition, ConfirmationBlockTime};
 use bdk_wallet::KeychainKind;
 use bdk_wallet::coin_selection::LargestFirstCoinSelection;
-use bdk_wallet::error::CreateTxError;
+use bdk_wallet::error::{BuildFeeBumpError, CreateTxError};
 use bdk_wallet::psbt::PsbtUtils;
 use bdk_wallet::test_utils::*;
 use bitcoin::{
@@ -943,6 +943,66 @@ fn test_legacy_bump_fee_absolute_add_input() {
     );
 
     assert_eq!(fee, Amount::from_sat(6_000));
+}
+
+/// Rejects a legacy foreign fee bump if full parent is not registered.
+#[test]
+fn test_bump_fee_legacy_foreign_utxo_requires_parent_tx() {
+    let (mut wallet, _) = get_funded_wallet_wpkh();
+    let (foreign_wallet, parent_txid) =
+        get_funded_wallet_single("pkh(cVbZ8ovhye9AoAHFsqobCf7LxbXDAECy9Kb8TZdfsDYMZGBUyCnm)");
+    let utxo = foreign_wallet.list_unspent().next().unwrap();
+    let parent = foreign_wallet.get_tx(parent_txid).unwrap().tx_node.tx;
+    let satisfaction_weight = foreign_wallet
+        .public_descriptor(KeychainKind::External)
+        .max_weight_to_satisfy()
+        .unwrap();
+    wallet.insert_txout(utxo.outpoint, utxo.txout.clone());
+
+    let addr = Address::from_str("2N1Ffz3WaNzbeLFBb51xyFMHYSEUXcbiSoX")
+        .unwrap()
+        .assume_checked();
+    let mut builder = wallet.build_tx();
+    builder
+        .add_recipient(addr.script_pubkey(), Amount::from_sat(60_000))
+        .fee_absolute(Amount::from_sat(500))
+        .add_foreign_utxo(
+            utxo.outpoint,
+            psbt::Input {
+                non_witness_utxo: Some(parent.as_ref().clone()),
+                ..Default::default()
+            },
+            satisfaction_weight,
+        )
+        .unwrap();
+    let tx = builder.finish().unwrap().extract_tx().unwrap();
+    let txid = tx.compute_txid();
+    insert_tx(&mut wallet, tx);
+
+    assert!(wallet.tx_graph().get_txout(utxo.outpoint).is_some());
+    assert!(wallet.tx_graph().get_tx(parent_txid).is_none());
+    assert!(matches!(
+        wallet.build_fee_bump(txid),
+        Err(BuildFeeBumpError::TransactionNotFound(missing_txid)) if missing_txid == parent_txid
+    ));
+
+    // Registering the full parent through apply_update restores fee bumping.
+    insert_tx(&mut wallet, parent.as_ref().clone());
+    let mut builder = wallet.build_fee_bump(txid).unwrap();
+    builder.fee_absolute(Amount::from_sat(1_000));
+    let psbt = builder.finish().unwrap();
+    let index = psbt
+        .unsigned_tx
+        .input
+        .iter()
+        .position(|input| input.previous_output == utxo.outpoint)
+        .unwrap();
+    assert!(psbt.inputs[index].witness_utxo.is_none());
+    assert_eq!(
+        psbt.inputs[index].non_witness_utxo.as_ref(),
+        Some(parent.as_ref())
+    );
+    assert_eq!(check_fee!(wallet, psbt), Amount::from_sat(1_000));
 }
 
 // Test that we can fee-bump a tx containing a foreign (p2a) utxo.
