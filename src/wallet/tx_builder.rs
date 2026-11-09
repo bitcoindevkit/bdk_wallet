@@ -60,7 +60,6 @@ use super::utils::shuffle_slice;
 use super::{CreateTxError, Wallet};
 use crate::collections::{HashMap, HashSet};
 use crate::descriptor::ExtendedDescriptor;
-use crate::descriptor::policy::PolicyError;
 use crate::psbt::validated_non_witness_prevout;
 use crate::{KeychainKind, LocalOutput, Utxo, WeightedUtxo};
 
@@ -76,13 +75,27 @@ pub struct Condition {
     pub timelock: Option<absolute::LockTime>,
 }
 
+/// Cannot merge block-based and time-based requirements for the same timelock type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MixedTimelockUnits;
+
+impl fmt::Display for MixedTimelockUnits {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(
+            "Cannot merge block-based and time-based requirements for the same timelock type",
+        )
+    }
+}
+
+impl core::error::Error for MixedTimelockUnits {}
+
 impl Condition {
     fn merge_nlocktime(
         a: absolute::LockTime,
         b: absolute::LockTime,
-    ) -> Result<absolute::LockTime, PolicyError> {
+    ) -> Result<absolute::LockTime, MixedTimelockUnits> {
         if !a.is_same_unit(b) {
-            Err(PolicyError::MixedTimelockUnits)
+            Err(MixedTimelockUnits)
         } else if a > b {
             Ok(a)
         } else {
@@ -90,9 +103,9 @@ impl Condition {
         }
     }
 
-    fn merge_nsequence(a: Sequence, b: Sequence) -> Result<Sequence, PolicyError> {
+    fn merge_nsequence(a: Sequence, b: Sequence) -> Result<Sequence, MixedTimelockUnits> {
         if a.is_time_locked() != b.is_time_locked() {
-            Err(PolicyError::MixedTimelockUnits)
+            Err(MixedTimelockUnits)
         } else {
             Ok(max(a, b))
         }
@@ -102,7 +115,7 @@ impl Condition {
     ///
     /// Useful when combining external and internal keychain requirements into one `Condition`
     /// before passing it to the transaction builder.
-    pub fn merge(mut self, other: &Condition) -> Result<Self, PolicyError> {
+    pub fn merge(mut self, other: &Condition) -> Result<Self, MixedTimelockUnits> {
         match (self.csv, other.csv) {
             (Some(a), Some(b)) => self.csv = Some(Self::merge_nsequence(a, b)?),
             (None, any) => self.csv = any,
@@ -328,9 +341,8 @@ impl<'a, Cs> TxBuilder<'a, Cs> {
     /// Without an explicit condition, building a transaction for such a descriptor fails with
     /// [`CreateTxError::SpendingPolicyRequired`].
     ///
-    /// Obtain a [`Condition`] by picking a path on the spending policy tree and calling
-    /// [`Policy::get_condition`](crate::descriptor::Policy::get_condition), or construct one
-    /// directly when you already know the CSV / CLTV values (e.g. a single fixed `older(N)`).
+    /// Construct a [`Condition`] with the CSV and CLTV requirements of the spending path you intend
+    /// to satisfy.
     ///
     /// For wallets with separate external and internal descriptors, merge the conditions for every
     /// keychain from which inputs may be selected using [`Condition::merge`].
@@ -338,10 +350,7 @@ impl<'a, Cs> TxBuilder<'a, Cs> {
     /// ## Example
     ///
     /// ```
-    /// # use std::collections::BTreeMap;
     /// # use bdk_wallet::*;
-    /// # use bdk_wallet::descriptor::{ExtractPolicy, policy::BuildSatisfaction};
-    /// # use bdk_wallet::signer::SignersContainer;
     /// # use bitcoin::{Network, Sequence};
     /// # let descriptor = concat!(
     /// #     "wsh(thresh(2,",
@@ -354,23 +363,11 @@ impl<'a, Cs> TxBuilder<'a, Cs> {
     /// # let mut wallet = Wallet::create_single(descriptor)
     /// #     .network(Network::Regtest)
     /// #     .create_wallet_no_persist()?;
-    /// let policy = wallet
-    ///     .public_descriptor(KeychainKind::External)
-    ///     .extract_policy(
-    ///         // Signers only affect the `contribution` and `satisfaction` fields, which
-    ///         // `get_condition` ignores, so an empty container is enough here.
-    ///         &SignersContainer::default(),
-    ///         BuildSatisfaction::None,
-    ///         wallet.secp_ctx(),
-    ///     )?
-    ///     .expect("descriptor has a spending policy");
-    ///
     /// // Choose pk(A) + and(pk(B), older(6)) from the thresh() root.
-    /// let mut path = BTreeMap::new();
-    /// path.insert(policy.id.clone(), vec![0, 1]);
-    /// let condition = policy.get_condition(&path)?;
-    /// assert_eq!(condition.csv, Some(Sequence(6)));
-    /// assert_eq!(condition.timelock, None);
+    /// let condition = Condition {
+    ///     csv: Some(Sequence(6)),
+    ///     timelock: None,
+    /// };
     ///
     /// // Inputs of the resulting transaction will carry nSequence = 6.
     /// let mut builder = wallet.build_tx();
@@ -1061,6 +1058,107 @@ mod test {
     use bitcoin::hex::FromHex;
 
     use super::*;
+
+    #[test]
+    fn test_condition_merge_empty() {
+        let empty = Condition::default();
+        assert_eq!(empty.merge(&empty), Ok(empty));
+
+        for condition in [
+            Condition {
+                csv: Some(Sequence::from_height(6)),
+                timelock: None,
+            },
+            Condition {
+                csv: None,
+                timelock: Some(absolute::LockTime::from_height(100).unwrap()),
+            },
+            Condition {
+                csv: Some(Sequence::from_height(6)),
+                timelock: Some(absolute::LockTime::from_height(100).unwrap()),
+            },
+        ] {
+            assert_eq!(empty.merge(&condition), Ok(condition));
+            assert_eq!(condition.merge(&empty), Ok(condition));
+        }
+    }
+
+    #[test]
+    fn test_condition_merge_same_units() {
+        for (a, b) in [
+            (
+                Condition {
+                    csv: Some(Sequence::from_height(6)),
+                    timelock: Some(absolute::LockTime::from_height(100).unwrap()),
+                },
+                Condition {
+                    csv: Some(Sequence::from_height(10)),
+                    timelock: Some(absolute::LockTime::from_height(200).unwrap()),
+                },
+            ),
+            (
+                Condition {
+                    csv: Some(Sequence::from_512_second_intervals(6)),
+                    timelock: Some(absolute::LockTime::from_time(500_000_100).unwrap()),
+                },
+                Condition {
+                    csv: Some(Sequence::from_512_second_intervals(10)),
+                    timelock: Some(absolute::LockTime::from_time(500_000_200).unwrap()),
+                },
+            ),
+        ] {
+            assert_eq!(a.merge(&b), Ok(b));
+            assert_eq!(b.merge(&a), Ok(b));
+            assert_eq!(a.merge(&a), Ok(a));
+        }
+    }
+
+    #[test]
+    fn test_condition_merge_csv_and_cltv() {
+        let csv = Condition {
+            csv: Some(Sequence::from_height(6)),
+            timelock: None,
+        };
+        // CSV and CLTV can use different units: they are independent requirements.
+        let cltv = Condition {
+            csv: None,
+            timelock: Some(absolute::LockTime::from_time(500_000_100).unwrap()),
+        };
+        let combined = Condition {
+            csv: csv.csv,
+            timelock: cltv.timelock,
+        };
+        assert_eq!(csv.merge(&cltv), Ok(combined));
+        assert_eq!(cltv.merge(&csv), Ok(combined));
+    }
+
+    #[test]
+    fn test_condition_merge_mixed_csv_units() {
+        let blocks = Condition {
+            csv: Some(Sequence::from_height(6)),
+            timelock: None,
+        };
+        let time = Condition {
+            csv: Some(Sequence::from_512_second_intervals(1)),
+            timelock: None,
+        };
+        assert_eq!(blocks.merge(&time), Err(MixedTimelockUnits));
+        assert_eq!(time.merge(&blocks), Err(MixedTimelockUnits));
+    }
+
+    #[test]
+    fn test_condition_merge_mixed_cltv_units() {
+        let blocks = Condition {
+            csv: None,
+            timelock: Some(absolute::LockTime::from_height(100).unwrap()),
+        };
+        let time = Condition {
+            csv: None,
+            timelock: Some(absolute::LockTime::from_time(500_000_001).unwrap()),
+        };
+        assert_eq!(blocks.merge(&time), Err(MixedTimelockUnits));
+        assert_eq!(time.merge(&blocks), Err(MixedTimelockUnits));
+    }
 
     #[test]
     fn test_timelock_condition_multisig() {
