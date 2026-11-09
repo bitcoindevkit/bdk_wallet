@@ -22,6 +22,7 @@ fn test_psbt_malformed_psbt_input_legacy() {
     let send_to = wallet.peek_address(KeychainKind::External, 0);
     let mut builder = wallet.build_tx();
     builder.add_recipient(send_to.script_pubkey(), Amount::from_sat(10_000));
+    builder.allow_self_payment();
     let mut psbt = builder.finish().unwrap();
     psbt.inputs.push(psbt_bip.inputs[0].clone());
     let options = SignOptions {
@@ -43,6 +44,8 @@ fn test_psbt_malformed_psbt_input_segwit() {
     let send_to = wallet.peek_address(KeychainKind::External, 0);
     let mut builder = wallet.build_tx();
     builder.add_recipient(send_to.script_pubkey(), Amount::from_sat(10_000));
+    builder.allow_self_payment();
+    builder.allow_self_payment();
     let mut psbt = builder.finish().unwrap();
     psbt.inputs.push(psbt_bip.inputs[1].clone());
     let options = SignOptions {
@@ -63,6 +66,7 @@ fn test_psbt_malformed_tx_input() {
     let send_to = wallet.peek_address(KeychainKind::External, 0);
     let mut builder = wallet.build_tx();
     builder.add_recipient(send_to.script_pubkey(), Amount::from_sat(10_000));
+    builder.allow_self_payment();
     let mut psbt = builder.finish().unwrap();
     psbt.unsigned_tx.input.push(TxIn::default());
     let options = SignOptions {
@@ -83,6 +87,7 @@ fn test_psbt_sign_with_finalized() {
     let send_to = wallet.peek_address(KeychainKind::External, 0);
     let mut builder = wallet.build_tx();
     builder.add_recipient(send_to.script_pubkey(), Amount::from_sat(10_000));
+    builder.allow_self_payment();
     let mut psbt = builder.finish().unwrap();
 
     let foreign_utxo = foreign.list_unspent().next().unwrap();
