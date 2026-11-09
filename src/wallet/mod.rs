@@ -1915,27 +1915,17 @@ impl Wallet {
         self.update_psbt_with_descriptor(psbt)
             .map_err(SignerError::MiniscriptPsbt)?;
 
+        // Taproot signatures without ANYONECANPAY commit to all input amounts (BIP341).
+        // Otherwise, verify every input amount before signing.
         if !sign_options.trust_witness_utxo {
             let inputs = psbt.inputs.iter().zip(psbt.unsigned_tx.input.iter());
-            let all_taproot = inputs
-                .clone()
-                .all(|(input, txin)| self.is_verified_taproot_input(input, txin.previous_output));
-
-            if !all_taproot {
+            let all_amounts_committed = inputs.clone().all(|(input, txin)| {
+                input.sighash_type.is_none_or(|t| t.to_u32() & 0x80 == 0) // ANYONECANPAY flag
+                    && self.is_verified_taproot_input(input, txin.previous_output)
+            });
+            if !all_amounts_committed {
                 for (input, txin) in inputs {
-                    if input.non_witness_utxo.is_none() {
-                        return Err(SignerError::MissingNonWitnessUtxo);
-                    }
-                    let prevout = validated_non_witness_prevout(input, txin.previous_output)
-                        .ok_or(SignerError::InvalidNonWitnessUtxo)?;
-                    if input
-                        .witness_utxo
-                        .as_ref()
-                        .is_some_and(|witness| witness != prevout)
-                    {
-                        // Ideally InvalidWitnessUtxo; reuse this error for API compatibility.
-                        return Err(SignerError::InvalidNonWitnessUtxo);
-                    }
+                    self.check_input_amount(input, txin.previous_output)?;
                 }
             }
         }
@@ -1963,6 +1953,46 @@ impl Wallet {
         } else {
             Ok(false)
         }
+    }
+
+    /// Check this input's amount against its parent transaction.
+    ///
+    /// Validate `non_witness_utxo` if supplied. Otherwise, Taproot inputs may use the full parent
+    /// transaction stored in the wallet. Any supplied `witness_utxo` must match the parent's output.
+    /// Non-Taproot inputs require `non_witness_utxo`.
+    fn check_input_amount(
+        &self,
+        input: &psbt::Input,
+        outpoint: OutPoint,
+    ) -> Result<(), SignerError> {
+        if input.non_witness_utxo.is_some() {
+            let prevout = validated_non_witness_prevout(input, outpoint)
+                .ok_or(SignerError::InvalidNonWitnessUtxo)?;
+            if input
+                .witness_utxo
+                .as_ref()
+                .is_some_and(|witness| witness != prevout)
+            {
+                // Ideally InvalidWitnessUtxo; reuse this error for API compatibility.
+                return Err(SignerError::InvalidNonWitnessUtxo);
+            }
+            return Ok(());
+        }
+
+        // Without non_witness_utxo, verify Taproot inputs using the parent stored in the wallet.
+        if let Some(prev_tx) = self.tx_graph.graph().get_tx(outpoint.txid) {
+            if let Some(prevout) = prev_tx
+                .output
+                .get(outpoint.vout as usize)
+                .filter(|prevout| prevout.script_pubkey.is_p2tr())
+            {
+                return match input.witness_utxo.as_ref() {
+                    Some(witness) if witness != prevout => Err(SignerError::InvalidNonWitnessUtxo),
+                    _ => Ok(()),
+                };
+            }
+        }
+        Err(SignerError::MissingNonWitnessUtxo)
     }
 
     /// Whether this outpoint is a verified p2tr.

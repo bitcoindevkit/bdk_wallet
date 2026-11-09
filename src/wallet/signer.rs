@@ -488,17 +488,18 @@ impl InputSigner for SignerWrapper<PrivateKey> {
                 // Ideally InvalidWitnessUtxo; reuse this error for API compatibility.
                 return Err(SignerError::InvalidNonWitnessUtxo);
             }
-        } else if !sign_options.trust_witness_utxo && input.witness_utxo.is_some() {
-            let all_inputs_p2tr =
-                psbt.inputs
-                    .iter()
-                    .zip(psbt.unsigned_tx.input.iter())
-                    .all(|(inp, txin)| {
-                        validated_non_witness_prevout(inp, txin.previous_output)
-                            .or(inp.witness_utxo.as_ref())
-                            .is_some_and(|txout| txout.script_pubkey.is_p2tr())
-                    });
-            if !all_inputs_p2tr {
+        }
+        if !matches!(self.ctx, SignerContext::Tap { .. }) {
+            if psbt
+                .spend_utxo(input_index)
+                .is_ok_and(|prevout| prevout.script_pubkey.is_p2tr())
+            {
+                return Ok(());
+            }
+            if !sign_options.trust_witness_utxo
+                && input.witness_utxo.is_some()
+                && input.non_witness_utxo.is_none()
+            {
                 return Err(SignerError::MissingNonWitnessUtxo);
             }
         }
