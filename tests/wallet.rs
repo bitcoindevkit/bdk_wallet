@@ -6,12 +6,10 @@ use bdk_chain::{BlockId, CanonicalizationParams, ConfirmationBlockTime};
 use bdk_wallet::KeychainKind;
 use bdk_wallet::coin_selection;
 use bdk_wallet::coin_selection::InsufficientFunds;
-use bdk_wallet::descriptor::{
-    Condition, DescriptorError, ExtractPolicy, calc_checksum, policy::BuildSatisfaction,
-};
+use bdk_wallet::descriptor::{Condition, DescriptorError, calc_checksum};
 use bdk_wallet::error::CreateTxError;
 use bdk_wallet::psbt::PsbtUtils;
-use bdk_wallet::signer::{SignOptions, SignerError, SignersContainer};
+use bdk_wallet::signer::{SignOptions, SignerError};
 use bdk_wallet::test_utils::*;
 use bdk_wallet::{
     AddressInfo, Balance, FinalizeInputOutcome, IndexOutOfBoundsError, PersistedWallet, Update,
@@ -3690,40 +3688,26 @@ fn test_finalize_psbt_unconfirmed_tx_with_older_branch() {
     assert!(finalized);
 }
 
-/// `extract_policy` with `PsbtTimelocks` treats `after` and `older` as satisfied from their lock
-/// height on.
 #[test]
-fn test_extract_policy_timelock_boundaries() {
-    use bdk_wallet::descriptor::policy::Satisfaction;
-
-    // Satisfied items of `and_v(v:pk(..),<timelock>)`, where the timelock is item 1.
-    let satisfied_items = |descriptor: &str, current_height: u32| {
-        let (mut wallet, _) = get_funded_wallet_single(descriptor);
-        let addr = wallet.next_unused_address(KeychainKind::External);
-        let mut builder = wallet.build_tx();
-        builder.add_recipient(addr.script_pubkey(), Amount::from_sat(25_000));
-        let psbt = builder.finish().unwrap();
-        let build_sat = BuildSatisfaction::PsbtTimelocks {
-            psbt: &psbt,
-            current_height,
-            input_max_height: 2_000,
-        };
-        let policy = wallet
-            .public_descriptor(KeychainKind::External)
-            .extract_policy(&SignersContainer::default(), build_sat, wallet.secp_ctx())
-            .unwrap()
+fn test_create_tx_mixed_timelock_units_across_keychains() {
+    for (external_timelock, internal_timelock) in [
+        ("older(6)", "older(4194305)"),
+        ("after(100)", "after(500000001)"),
+    ] {
+        let external = format!(
+            "wsh(and_v(v:pk(cVpPVruEDdmutPzisEsYvtST1usBR3ntr8pXSyt6D2YYqXRyPcFW),{external_timelock}))"
+        );
+        let internal = format!(
+            "wsh(and_v(v:pk(cRjo6jqfVNP33HhSS76UhXETZsGTZYx8FMFvR9kpbtCSV1PmdZdu),{internal_timelock}))"
+        );
+        let mut wallet = Wallet::create(external, internal)
+            .network(Network::Regtest)
+            .create_wallet_no_persist()
             .unwrap();
-        match policy.satisfaction {
-            Satisfaction::Partial { items, .. } => items,
-            other => panic!("unexpected satisfaction {other:?}"),
-        }
-    };
+        let address = wallet.next_unused_address(KeychainKind::External);
+        let mut builder = wallet.build_tx();
+        builder.add_recipient(address.script_pubkey(), Amount::from_sat(1_000));
 
-    assert!(satisfied_items(get_test_single_sig_csv(), 2_005).is_empty());
-    assert_eq!(satisfied_items(get_test_single_sig_csv(), 2_006), vec![1]);
-    assert!(satisfied_items(get_test_single_sig_cltv(), 99_999).is_empty());
-    assert_eq!(
-        satisfied_items(get_test_single_sig_cltv(), 100_000),
-        vec![1]
-    );
+        assert_matches!(builder.finish(), Err(CreateTxError::MixedTimelockUnits));
+    }
 }

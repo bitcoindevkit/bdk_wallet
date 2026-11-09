@@ -35,22 +35,18 @@ pub use miniscript::{
 };
 use miniscript::{ForEachKey, MiniscriptKey, TranslatePk};
 
-use crate::descriptor::policy::BuildSatisfaction;
-
 pub mod checksum;
 #[doc(hidden)]
 pub mod dsl;
 pub mod error;
-pub mod policy;
 pub mod template;
 
 pub use self::checksum::calc_checksum;
 pub use self::error::Error as DescriptorError;
-pub use self::policy::Policy;
 use self::template::DescriptorTemplateOut;
 use crate::keys::{IntoDescriptorKey, KeyError};
 pub use crate::wallet::tx_builder::Condition;
-use crate::wallet::{signer::SignersContainer, utils::SecpCtx};
+use crate::wallet::utils::SecpCtx;
 
 /// Alias for a [`Descriptor`] that can contain extended keys using [`DescriptorPublicKey`]
 pub type ExtendedDescriptor = Descriptor<DescriptorPublicKey>;
@@ -357,17 +353,6 @@ impl<Ctx: miniscript::ScriptContext, Pk: miniscript::MiniscriptKey> CheckMiniscr
 
         Ok(())
     }
-}
-
-/// Trait implemented on [`Descriptor`]s to add a method to extract the spending [`policy`].
-pub trait ExtractPolicy {
-    /// Extract the spending [`policy`]
-    fn extract_policy(
-        &self,
-        signers: &SignersContainer,
-        psbt: BuildSatisfaction,
-        secp: &SecpCtx,
-    ) -> Result<Option<Policy>, DescriptorError>;
 }
 
 pub(crate) trait XKeyUtils {
