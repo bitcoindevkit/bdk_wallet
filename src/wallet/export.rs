@@ -331,6 +331,8 @@ impl<'de> Deserialize<'de> for CaravanExtendedPublicKey {
             Bip32Path,
             Xpub,
             Xfp,
+            #[serde(other)]
+            Ignore,
         }
 
         struct CaravanKeyVisitor;
@@ -383,6 +385,9 @@ impl<'de> Deserialize<'de> for CaravanExtendedPublicKey {
                             let xfp_str: String = map.next_value()?;
                             xfp = Some(Fingerprint::from_str(&xfp_str).map_err(de::Error::custom)?);
                         }
+                        Field::Ignore => {
+                            map.next_value::<de::IgnoredAny>()?;
+                        }
                     }
                 }
 
@@ -420,7 +425,8 @@ pub enum CaravanAddressType {
 pub enum CaravanNetwork {
     /// mainnet
     Mainnet,
-    /// testnet
+    /// Any test network (testnet, signet or regtest)
+    #[serde(alias = "regtest", alias = "signet")]
     Testnet,
 }
 
@@ -941,6 +947,16 @@ mod test {
     }
 
     #[test]
+    fn test_caravan_network_regtest_and_signet() {
+        for network in ["\"regtest\"", "\"signet\""] {
+            assert_eq!(
+                serde_json::from_str::<CaravanNetwork>(network).unwrap(),
+                CaravanNetwork::Testnet
+            );
+        }
+    }
+
+    #[test]
     fn test_caravan_import() {
         let json = r#"{
             "name": "Test Wallet",
@@ -987,6 +1003,53 @@ mod test {
         // Check that the change descriptor is correctly generated
         assert!(internal.contains("/1/*"));
         assert!(external.contains("/0/*"));
+    }
+
+    #[test]
+    fn test_caravan_import_ignores_unknown_key_fields() {
+        let json = r#"{
+            "name": "Test Wallet",
+            "addressType": "P2WSH",
+            "network": "testnet",
+            "client": {
+                "type": "public"
+            },
+            "quorum": {
+                "requiredSigners": 2,
+                "totalSigners": 2
+            },
+            "extendedPublicKeys": [
+                {
+                    "name": "key1",
+                    "bip32Path": "m/48'/1'/0'/2'",
+                    "xpub": "tpubDCKxNyM3bLgbEX13Mcd8mYxbVg9ajDkWXMh29hMWBurKfVmBfWAM96QVP3zaUcN51HvkZ3ar4VwP82kC8JZhhux8vFQoJintSpVBwpFvyU3",
+                    "xfp": "73756c7f",
+                    "method": "trezor"
+                },
+                {
+                    "name": "key2",
+                    "bip32Path": "m/48'/1'/0'/2'",
+                    "xpub": "tpubDDp3ZSH1yCwusRppH7zgSxq2t1VEUyXSeEp8E5aFS8m43MknUjiF1bSLo3CGWAxbDyhF1XowA5ukPzyJZjznYk3kYi6oe7QxtX2euvKWsk4",
+                    "xfp": "f9f62194",
+                    "method": "coldcard"
+                }
+            ],
+            "startingAddressIndex": 0
+        }"#;
+
+        let (external, internal) = CaravanExport::from_str(json)
+            .unwrap()
+            .to_descriptors()
+            .unwrap();
+
+        assert_eq!(
+            external,
+            "wsh(sortedmulti(2,[73756c7f/48'/1'/0'/2']tpubDCKxNyM3bLgbEX13Mcd8mYxbVg9ajDkWXMh29hMWBurKfVmBfWAM96QVP3zaUcN51HvkZ3ar4VwP82kC8JZhhux8vFQoJintSpVBwpFvyU3/0/*,[f9f62194/48'/1'/0'/2']tpubDDp3ZSH1yCwusRppH7zgSxq2t1VEUyXSeEp8E5aFS8m43MknUjiF1bSLo3CGWAxbDyhF1XowA5ukPzyJZjznYk3kYi6oe7QxtX2euvKWsk4/0/*))#tujxdvcs"
+        );
+        assert_eq!(
+            internal,
+            "wsh(sortedmulti(2,[73756c7f/48'/1'/0'/2']tpubDCKxNyM3bLgbEX13Mcd8mYxbVg9ajDkWXMh29hMWBurKfVmBfWAM96QVP3zaUcN51HvkZ3ar4VwP82kC8JZhhux8vFQoJintSpVBwpFvyU3/1/*,[f9f62194/48'/1'/0'/2']tpubDDp3ZSH1yCwusRppH7zgSxq2t1VEUyXSeEp8E5aFS8m43MknUjiF1bSLo3CGWAxbDyhF1XowA5ukPzyJZjznYk3kYi6oe7QxtX2euvKWsk4/1/*))#j0pzrld9"
+        );
     }
 
     #[test]
