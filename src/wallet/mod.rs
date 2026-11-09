@@ -65,9 +65,8 @@ pub(crate) mod utils;
 
 use crate::collections::{BTreeMap, HashMap, HashSet};
 use crate::descriptor::{
-    DerivedDescriptor, DescriptorMeta, ExtendedDescriptor, ExtractPolicy, IntoWalletDescriptor,
-    Policy, XKeyUtils, calc_checksum, check_wallet_descriptor, error::Error as DescriptorError,
-    policy::BuildSatisfaction,
+    DerivedDescriptor, DescriptorMeta, ExtendedDescriptor, IntoWalletDescriptor, XKeyUtils,
+    calc_checksum, check_wallet_descriptor, error::Error as DescriptorError,
 };
 use crate::psbt::{PsbtUtils, validated_non_witness_prevout};
 use crate::types::*;
@@ -75,7 +74,7 @@ use crate::wallet::{
     coin_selection::{DefaultCoinSelectionAlgorithm, Excess, InsufficientFunds},
     error::{BuildFeeBumpError, CreateTxError, MiniscriptPsbtError},
     signer::{SignOptions, SignerError, SignerOrdering, SignersContainer, TransactionSigner},
-    tx_builder::{FeePolicy, TxBuilder, TxParams},
+    tx_builder::{Condition, FeePolicy, TxBuilder, TxParams, timelock_condition},
     utils::{SecpCtx, check_nsequence_rbf},
 };
 // Unstable bdk-tx imports — only active with --cfg bdk_wallet_unstable and feature = "bdk-tx".
@@ -1289,74 +1288,19 @@ impl Wallet {
     ) -> Result<Psbt, CreateTxError> {
         let requirements = match params.condition {
             Some(condition) => condition,
-            // Fall back to deriving the condition from the deprecated policy paths, to be removed
-            // along with `TxBuilder::policy_path`. The wallet-owned signers are required here:
-            // policy node ids depend on them, so the paths only match policies extracted with the
-            // very same signers as `Wallet::policies` uses.
             None => {
                 let keychains: BTreeMap<_, _> = self.tx_graph.index.keychains().collect();
-                let external_descriptor =
-                    keychains.get(&KeychainKind::External).expect("must exist");
-                let internal_descriptor = keychains.get(&KeychainKind::Internal);
+                let mut requirements = Condition::default();
 
-                let external_policy = external_descriptor
-                    .extract_policy(&self.signers, BuildSatisfaction::None, &self.secp)?
-                    .unwrap();
-                let internal_policy = internal_descriptor
-                    .map(|desc| {
-                        Ok::<_, CreateTxError>(
-                            desc.extract_policy(
-                                &self.change_signers,
-                                BuildSatisfaction::None,
-                                &self.secp,
-                            )?
-                            .unwrap(),
-                        )
-                    })
-                    .transpose()?;
-
-                // The policy allows spending external outputs, but it requires a policy path that
-                // hasn't been provided
-                if params.change_policy != tx_builder::ChangeSpendPolicy::OnlyChange
-                    && external_policy.requires_path()
-                    && params.external_policy_path.is_none()
-                {
-                    return Err(CreateTxError::SpendingPolicyRequired(
-                        KeychainKind::External,
-                    ));
+                for keychain in [KeychainKind::External, KeychainKind::Internal] {
+                    let Some(descriptor) = keychains.get(&keychain) else {
+                        continue;
+                    };
+                    let condition = timelock_condition(descriptor)
+                        .ok_or(CreateTxError::SpendingPolicyRequired(keychain))?;
+                    requirements = requirements.merge(&condition)?;
                 }
-                // Same for the internal_policy path
-                if let Some(internal_policy) = &internal_policy {
-                    if params.change_policy != tx_builder::ChangeSpendPolicy::ChangeForbidden
-                        && internal_policy.requires_path()
-                        && params.internal_policy_path.is_none()
-                    {
-                        return Err(CreateTxError::SpendingPolicyRequired(
-                            KeychainKind::Internal,
-                        ));
-                    }
-                }
-
-                let external_requirements = external_policy.get_condition(
-                    params
-                        .external_policy_path
-                        .as_ref()
-                        .unwrap_or(&BTreeMap::new()),
-                )?;
-                let internal_requirements = internal_policy
-                    .map(|policy| {
-                        Ok::<_, CreateTxError>(
-                            policy.get_condition(
-                                params
-                                    .internal_policy_path
-                                    .as_ref()
-                                    .unwrap_or(&BTreeMap::new()),
-                            )?,
-                        )
-                    })
-                    .transpose()?;
-
-                external_requirements.merge(&internal_requirements.unwrap_or_default())?
+                requirements
             }
         };
 
@@ -2011,29 +1955,6 @@ impl Wallet {
         }
         validated_non_witness_prevout(input, outpoint)
             .is_some_and(|prevout| prevout.script_pubkey.is_p2tr())
-    }
-
-    /// Return the spending policies for the wallet's descriptor.
-    ///
-    /// Use `wallet.public_descriptor(keychain).extract_policy(signers, BuildSatisfaction::None,
-    /// wallet.secp_ctx())` with caller-owned signers instead. For transaction building, derive a
-    /// [`Condition`](crate::descriptor::Condition) via [`Policy::get_condition`] and pass it to
-    /// [`TxBuilder::set_condition`](tx_builder::TxBuilder::set_condition).
-    #[deprecated(
-        since = "3.2.0",
-        note = "use wallet.public_descriptor(keychain).extract_policy(signers, BuildSatisfaction::None, wallet.secp_ctx()) with caller-owned signers; for tx building, Policy::get_condition then TxBuilder::set_condition"
-    )]
-    pub fn policies(&self, keychain: KeychainKind) -> Result<Option<Policy>, DescriptorError> {
-        let signers = match keychain {
-            KeychainKind::External => &self.signers,
-            KeychainKind::Internal => &self.change_signers,
-        };
-
-        self.public_descriptor(keychain).extract_policy(
-            signers,
-            BuildSatisfaction::None,
-            &self.secp,
-        )
     }
 
     /// Returns the descriptor used to create addresses for a particular `keychain`.

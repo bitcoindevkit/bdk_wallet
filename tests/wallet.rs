@@ -7,7 +7,7 @@ use bdk_wallet::KeychainKind;
 use bdk_wallet::coin_selection;
 use bdk_wallet::coin_selection::InsufficientFunds;
 use bdk_wallet::descriptor::{
-    DescriptorError, ExtractPolicy, calc_checksum, policy::BuildSatisfaction,
+    Condition, DescriptorError, ExtractPolicy, calc_checksum, policy::BuildSatisfaction,
 };
 use bdk_wallet::error::CreateTxError;
 use bdk_wallet::psbt::PsbtUtils;
@@ -1076,91 +1076,6 @@ fn test_create_tx_policy_path_required() {
 }
 
 #[test]
-fn test_create_tx_policy_path_no_csv() {
-    #![allow(deprecated)]
-    let (descriptor, change_descriptor) = get_test_wpkh_and_change_desc();
-    let mut wallet = Wallet::create(descriptor, change_descriptor)
-        .network(Network::Regtest)
-        .create_wallet_no_persist()
-        .expect("wallet");
-
-    let tx = Transaction {
-        version: transaction::Version::non_standard(0),
-        lock_time: absolute::LockTime::ZERO,
-        input: vec![],
-        output: vec![TxOut {
-            script_pubkey: wallet
-                .next_unused_address(KeychainKind::External)
-                .script_pubkey(),
-            value: Amount::from_sat(50_000),
-        }],
-    };
-    insert_tx(&mut wallet, tx);
-
-    let external_policy = wallet.policies(KeychainKind::External).unwrap().unwrap();
-    let root_id = external_policy.id;
-    // child #0 is just the key "A"
-    let path = vec![(root_id, vec![0])].into_iter().collect();
-
-    let addr = Address::from_str("2N1Ffz3WaNzbeLFBb51xyFMHYSEUXcbiSoX")
-        .unwrap()
-        .assume_checked();
-    let mut builder = wallet.build_tx();
-    builder
-        .add_recipient(addr.script_pubkey(), Amount::from_sat(30_000))
-        .policy_path(path, KeychainKind::External);
-    let psbt = builder.finish().unwrap();
-
-    assert_eq!(psbt.unsigned_tx.input[0].sequence, Sequence(0xFFFFFFFD));
-}
-
-#[test]
-fn test_create_tx_policy_path_use_csv() {
-    #![allow(deprecated)]
-    let (mut wallet, _) = get_funded_wallet_single(get_test_a_or_b_plus_csv());
-
-    let external_policy = wallet.policies(KeychainKind::External).unwrap().unwrap();
-    let root_id = external_policy.id;
-    // child #1 is or(pk(B),older(144))
-    let path = vec![(root_id, vec![1])].into_iter().collect();
-
-    let addr = Address::from_str("2N1Ffz3WaNzbeLFBb51xyFMHYSEUXcbiSoX")
-        .unwrap()
-        .assume_checked();
-    let mut builder = wallet.build_tx();
-    builder
-        .add_recipient(addr.script_pubkey(), Amount::from_sat(30_000))
-        .policy_path(path, KeychainKind::External);
-    let psbt = builder.finish().unwrap();
-
-    assert_eq!(psbt.unsigned_tx.input[0].sequence, Sequence(144));
-}
-
-#[test]
-fn test_create_tx_policy_path_ignored_subtree_with_csv() {
-    #![allow(deprecated)]
-    let (mut wallet, _) = get_funded_wallet_single(
-        "wsh(or_d(pk(cRjo6jqfVNP33HhSS76UhXETZsGTZYx8FMFvR9kpbtCSV1PmdZdu),or_i(and_v(v:pkh(cVpPVruEDdmutPzisEsYvtST1usBR3ntr8pXSyt6D2YYqXRyPcFW),older(30)),and_v(v:pkh(cMnkdebixpXMPfkcNEjjGin7s94hiehAH4mLbYkZoh9KSiNNmqC8),older(90)))))",
-    );
-
-    let external_policy = wallet.policies(KeychainKind::External).unwrap().unwrap();
-    let root_id = external_policy.id;
-    // child #0 is pk(cRjo6jqfVNP33HhSS76UhXETZsGTZYx8FMFvR9kpbtCSV1PmdZdu)
-    let path = vec![(root_id, vec![0])].into_iter().collect();
-
-    let addr = Address::from_str("2N1Ffz3WaNzbeLFBb51xyFMHYSEUXcbiSoX")
-        .unwrap()
-        .assume_checked();
-    let mut builder = wallet.build_tx();
-    builder
-        .add_recipient(addr.script_pubkey(), Amount::from_sat(30_000))
-        .policy_path(path, KeychainKind::External);
-    let psbt = builder.finish().unwrap();
-
-    assert_eq!(psbt.unsigned_tx.input[0].sequence, Sequence(0xFFFFFFFD));
-}
-
-#[test]
 fn test_create_tx_condition_no_csv() {
     let (descriptor, change_descriptor) = get_test_wpkh_and_change_desc();
     let mut wallet = Wallet::create(descriptor, change_descriptor)
@@ -1181,19 +1096,7 @@ fn test_create_tx_condition_no_csv() {
     };
     insert_tx(&mut wallet, tx);
 
-    // `get_condition` ignores the signer-dependent parts of the policy, so no signers are needed.
-    let policy = wallet
-        .public_descriptor(KeychainKind::External)
-        .extract_policy(
-            &SignersContainer::default(),
-            BuildSatisfaction::None,
-            wallet.secp_ctx(),
-        )
-        .unwrap()
-        .expect("descriptor has a spending policy");
-    // child #0 is just the key "A"
-    let path = vec![(policy.id.clone(), vec![0])].into_iter().collect();
-    let condition = policy.get_condition(&path).unwrap();
+    let condition = Condition::default();
 
     let addr = Address::from_str("2N1Ffz3WaNzbeLFBb51xyFMHYSEUXcbiSoX")
         .unwrap()
@@ -1211,19 +1114,11 @@ fn test_create_tx_condition_no_csv() {
 fn test_create_tx_condition_use_csv() {
     let (mut wallet, _) = get_funded_wallet_single(get_test_a_or_b_plus_csv());
 
-    // `get_condition` ignores the signer-dependent parts of the policy, so no signers are needed.
-    let policy = wallet
-        .public_descriptor(KeychainKind::External)
-        .extract_policy(
-            &SignersContainer::default(),
-            BuildSatisfaction::None,
-            wallet.secp_ctx(),
-        )
-        .unwrap()
-        .expect("descriptor has a spending policy");
-    // child #1 is and(pk(B),older(144))
-    let path = vec![(policy.id.clone(), vec![1])].into_iter().collect();
-    let condition = policy.get_condition(&path).unwrap();
+    // Spend through and(pk(B),older(144)).
+    let condition = Condition {
+        csv: Some(Sequence(144)),
+        timelock: None,
+    };
 
     let addr = Address::from_str("2N1Ffz3WaNzbeLFBb51xyFMHYSEUXcbiSoX")
         .unwrap()
@@ -1243,19 +1138,8 @@ fn test_create_tx_condition_ignored_subtree_with_csv() {
         "wsh(or_d(pk(cRjo6jqfVNP33HhSS76UhXETZsGTZYx8FMFvR9kpbtCSV1PmdZdu),or_i(and_v(v:pkh(cVpPVruEDdmutPzisEsYvtST1usBR3ntr8pXSyt6D2YYqXRyPcFW),older(30)),and_v(v:pkh(cMnkdebixpXMPfkcNEjjGin7s94hiehAH4mLbYkZoh9KSiNNmqC8),older(90)))))",
     );
 
-    // `get_condition` ignores the signer-dependent parts of the policy, so no signers are needed.
-    let policy = wallet
-        .public_descriptor(KeychainKind::External)
-        .extract_policy(
-            &SignersContainer::default(),
-            BuildSatisfaction::None,
-            wallet.secp_ctx(),
-        )
-        .unwrap()
-        .expect("descriptor has a spending policy");
-    // child #0 is pk(cRjo6jqfVNP33HhSS76UhXETZsGTZYx8FMFvR9kpbtCSV1PmdZdu)
-    let path = vec![(policy.id.clone(), vec![0])].into_iter().collect();
-    let condition = policy.get_condition(&path).unwrap();
+    // Spend through the first key, ignoring the timelocked alternatives.
+    let condition = Condition::default();
 
     let addr = Address::from_str("2N1Ffz3WaNzbeLFBb51xyFMHYSEUXcbiSoX")
         .unwrap()
@@ -2473,19 +2357,14 @@ fn test_taproot_psbt_populate_tap_key_origins() {
 
 #[test]
 fn test_taproot_psbt_populate_tap_key_origins_repeated_key() {
-    #![allow(deprecated)]
     let (mut wallet, _) = get_funded_wallet(get_test_tr_repeated_key(), get_test_tr_single_sig());
     let addr = wallet.reveal_next_address(KeychainKind::External);
-
-    let path = vec![("rn4nre9c".to_string(), vec![0])]
-        .into_iter()
-        .collect();
 
     let mut builder = wallet.build_tx();
     builder
         .drain_to(addr.script_pubkey())
         .drain_wallet()
-        .policy_path(path, KeychainKind::External);
+        .set_condition(Condition::default());
     let psbt = builder.finish().unwrap();
 
     let mut input_key_origins = psbt.inputs[0]
@@ -3794,17 +3673,7 @@ fn test_finalize_psbt_unconfirmed_tx_with_older_branch() {
     };
     insert_tx(&mut wallet, funding_tx);
 
-    let policy = wallet
-        .public_descriptor(KeychainKind::External)
-        .extract_policy(
-            &SignersContainer::default(),
-            BuildSatisfaction::None,
-            wallet.secp_ctx(),
-        )
-        .unwrap()
-        .unwrap();
-    let path = [(policy.id.clone(), vec![0])].into_iter().collect();
-    let condition = policy.get_condition(&path).unwrap();
+    let condition = Condition::default();
 
     let mut builder = wallet.build_tx();
     builder
