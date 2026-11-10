@@ -5,7 +5,7 @@ use bdk_wallet::psbt::PsbtUtils;
 use bdk_wallet::signer::SignOptions;
 use bdk_wallet::test_utils::*;
 use bdk_wallet::tx_builder::AddForeignUtxoError;
-use bitcoin::{Address, Amount, psbt};
+use bitcoin::{Address, Amount, TxOut, psbt};
 
 mod common;
 use common::signers_from_descriptor;
@@ -181,6 +181,79 @@ fn test_add_foreign_utxo_where_outpoint_doesnt_match_psbt_input() {
             .is_ok(),
         "should be ok when outpoint does match psbt_input"
     );
+}
+
+/// Checks that witness_utxo is overridden by verified non_witness_utxo in case of mismatch.
+#[test]
+fn test_add_foreign_utxo_mismatched_witness_utxo() {
+    let (mut wallet, _) = get_funded_wallet_wpkh();
+    let (foreign_wallet, txid) =
+        get_funded_wallet_single("wpkh(cVbZ8ovhye9AoAHFsqobCf7LxbXDAECy9Kb8TZdfsDYMZGBUyCnm)");
+    let utxo = foreign_wallet.list_unspent().next().unwrap();
+    let parent = foreign_wallet.get_tx(txid).unwrap().tx_node.tx;
+    let weight = foreign_wallet
+        .public_descriptor(KeychainKind::External)
+        .max_weight_to_satisfy()
+        .unwrap();
+    let recipient = Address::from_str("2N1Ffz3WaNzbeLFBb51xyFMHYSEUXcbiSoX")
+        .unwrap()
+        .assume_checked();
+    let fee = Amount::from_sat(500);
+    let deflated = TxOut {
+        value: utxo.txout.value - Amount::from_sat(20_000),
+        script_pubkey: utxo.txout.script_pubkey.clone(),
+    };
+
+    let mut builder = wallet.build_tx();
+    builder
+        .add_recipient(recipient.script_pubkey(), Amount::from_sat(60_000))
+        .fee_absolute(fee)
+        .add_foreign_utxo(
+            utxo.outpoint,
+            psbt::Input {
+                non_witness_utxo: Some(parent.as_ref().clone()),
+                witness_utxo: Some(deflated),
+                ..Default::default()
+            },
+            weight,
+        )
+        .unwrap();
+    let psbt = builder.finish().unwrap();
+    let index = psbt
+        .unsigned_tx
+        .input
+        .iter()
+        .position(|input| input.previous_output == utxo.outpoint)
+        .unwrap();
+    assert_eq!(psbt.inputs[index].witness_utxo, Some(utxo.txout.clone()));
+    assert_eq!(
+        psbt.inputs[index].non_witness_utxo.as_ref(),
+        Some(parent.as_ref())
+    );
+    wallet.insert_txout(utxo.outpoint, utxo.txout.clone());
+    assert_eq!(check_fee!(wallet, psbt), fee);
+
+    let mut builder = wallet.build_tx();
+    builder
+        .add_recipient(recipient.script_pubkey(), Amount::from_sat(60_000))
+        .fee_absolute(fee)
+        .add_foreign_utxo(
+            utxo.outpoint,
+            psbt::Input {
+                non_witness_utxo: Some(parent.as_ref().clone()),
+                ..Default::default()
+            },
+            weight,
+        )
+        .unwrap();
+    let psbt = builder.finish().unwrap();
+    let index = psbt
+        .unsigned_tx
+        .input
+        .iter()
+        .position(|input| input.previous_output == utxo.outpoint)
+        .unwrap();
+    assert!(psbt.inputs[index].witness_utxo.is_none());
 }
 
 #[test]

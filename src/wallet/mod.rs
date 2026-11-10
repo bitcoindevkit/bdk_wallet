@@ -76,7 +76,7 @@ use crate::wallet::{
     error::{BuildFeeBumpError, CreateTxError, MiniscriptPsbtError},
     signer::{SignOptions, SignerError, SignerOrdering, SignersContainer, TransactionSigner},
     tx_builder::{FeePolicy, TxBuilder, TxParams},
-    utils::{After, Older, SecpCtx, check_nsequence_rbf},
+    utils::{SecpCtx, check_nsequence_rbf},
 };
 // Unstable bdk-tx imports — only active with --cfg bdk_wallet_unstable and feature = "bdk-tx".
 #[cfg(all(bdk_wallet_unstable, feature = "bdk-tx", feature = "std"))]
@@ -749,7 +749,9 @@ impl Wallet {
     ///
     /// Returns whether the given index was present and then removed from the unused set.
     pub fn mark_used(&mut self, keychain: KeychainKind, index: u32) -> bool {
-        self.tx_graph.index.mark_used(keychain, index)
+        self.tx_graph
+            .index
+            .mark_used(self.map_keychain(keychain), index)
     }
 
     /// Undoes the effect of [`mark_used`] and returns whether the `index` was inserted
@@ -761,7 +763,9 @@ impl Wallet {
     ///
     /// [`mark_used`]: Self::mark_used
     pub fn unmark_used(&mut self, keychain: KeychainKind, index: u32) -> bool {
-        self.tx_graph.index.unmark_used(keychain, index)
+        self.tx_graph
+            .index
+            .unmark_used(self.map_keychain(keychain), index)
     }
 
     /// List addresses that are revealed but unused.
@@ -945,8 +949,9 @@ impl Wallet {
     /// Calculates the fee of a given transaction. Returns [`Amount::ZERO`] if `tx` is a coinbase
     /// transaction.
     ///
-    /// To calculate the fee for a [`Transaction`] with inputs not owned by this wallet you must
-    /// manually insert the TxOut(s) into the tx graph using the [`insert_txout`] function.
+    /// To calculate the fee for a [`Transaction`] with inputs not owned by this wallet, register
+    /// any missing prevouts with [`insert_txout`] or their full parent transactions with
+    /// [`apply_update`](Self::apply_update).
     ///
     /// Note `tx` does not have to be in the graph for this to work.
     ///
@@ -976,8 +981,8 @@ impl Wallet {
 
     /// Calculate the [`FeeRate`] for a given transaction.
     ///
-    /// To calculate the fee rate for a [`Transaction`] with inputs not owned by this wallet you
-    /// must manually insert the TxOut(s) into the tx graph using the [`insert_txout`] function.
+    /// To calculate the fee rate for a [`Transaction`] with inputs not owned by this wallet,
+    /// register any missing prevouts as described in [`calculate_fee`](Self::calculate_fee).
     ///
     /// Note `tx` does not have to be in the graph for this to work.
     ///
@@ -1000,7 +1005,6 @@ impl Wallet {
     /// let tx = &psbt.clone().extract_tx().expect("tx");
     /// let fee_rate = wallet.calculate_fee_rate(tx).expect("fee rate");
     /// ```
-    /// [`insert_txout`]: Self::insert_txout
     pub fn calculate_fee_rate(&self, tx: &Transaction) -> Result<FeeRate, CalculateFeeError> {
         self.calculate_fee(tx).map(|fee| fee / tx.weight())
     }
@@ -1633,10 +1637,25 @@ impl Wallet {
     /// *replace by fee* (RBF). If the transaction can be fee bumped then it returns a [`TxBuilder`]
     /// pre-populated with the inputs and outputs of the original transaction.
     ///
-    /// ## Example
+    /// # Foreign inputs
     ///
-    /// ```no_run
-    /// # // TODO: remove norun -- bumping fee seems to need the tx in the wallet database first.
+    /// This method reconstructs foreign PSBT inputs from the wallet's transaction graph. Data
+    /// passed to [`TxBuilder::add_foreign_utxo`](tx_builder::TxBuilder::add_foreign_utxo) when
+    /// building the original transaction is not stored in that graph automatically.
+    /// Before calling this method, register each foreign output with [`Self::insert_txout`] or
+    /// its full parent transaction with [`Self::apply_update`]:
+    ///
+    /// - Legacy and P2SH inputs require the full parent transaction. With only the output
+    ///   registered, this method returns [`BuildFeeBumpError::TransactionNotFound`].
+    /// - Native segwit inputs, including Taproot, need only the output to construct the builder.
+    ///   However, for non-Taproot inputs, [`TxBuilder::finish`](tx_builder::TxBuilder::finish)
+    ///   returns [`CreateTxError::MissingNonWitnessUtxo`] unless the full parent was also
+    ///   registered or [`TxBuilder::only_witness_utxo`](tx_builder::TxBuilder::only_witness_utxo)
+    ///   is set on the returned builder.
+    ///
+    /// # Example
+    ///
+    /// ```
     /// # use std::str::FromStr;
     /// # use bitcoin::*;
     /// # use bdk_wallet::*;
@@ -1660,6 +1679,7 @@ impl Wallet {
     /// psbt.sign(&signer, wallet.secp_ctx()).map_err(|(_, e)| Error::msg(format!("{e:?}")))?;
     /// wallet.finalize_psbt(&mut psbt, SignOptions::default())?;
     /// let tx = psbt.clone().extract_tx().expect("tx");
+    /// # bdk_wallet::test_utils::insert_tx(&mut wallet, tx.clone());
     /// // broadcast tx but it's taking too long to confirm so we want to bump the fee
     /// let mut psbt =  {
     ///     let mut builder = wallet.build_fee_bump(tx.compute_txid())?;
@@ -1748,25 +1768,32 @@ impl Wallet {
                             }),
                         })
                     }
-                    None => Ok(WeightedUtxo {
-                        satisfaction_weight: Weight::from_wu_usize(
-                            serialize(&txin.script_sig).len() * 4 + serialize(&txin.witness).len(),
-                        ),
-                        utxo: Utxo::Foreign {
-                            outpoint,
-                            sequence: txin.sequence,
-                            psbt_input: Box::new(psbt::Input {
-                                witness_utxo: prev_txout
-                                    .script_pubkey
-                                    .witness_version()
-                                    .map(|_| prev_txout),
-                                non_witness_utxo: tx_graph
-                                    .get_tx(outpoint.txid)
-                                    .map(|tx| tx.as_ref().clone()),
-                                ..Default::default()
-                            }),
-                        },
-                    }),
+                    None => {
+                        let witness_utxo = prev_txout
+                            .script_pubkey
+                            .witness_version()
+                            .map(|_| prev_txout);
+                        let non_witness_utxo =
+                            tx_graph.get_tx(outpoint.txid).map(|tx| tx.as_ref().clone());
+                        if witness_utxo.is_none() && non_witness_utxo.is_none() {
+                            return Err(BuildFeeBumpError::TransactionNotFound(outpoint.txid));
+                        }
+                        Ok(WeightedUtxo {
+                            satisfaction_weight: Weight::from_wu_usize(
+                                serialize(&txin.script_sig).len() * 4
+                                    + serialize(&txin.witness).len(),
+                            ),
+                            utxo: Utxo::Foreign {
+                                outpoint,
+                                sequence: txin.sequence,
+                                psbt_input: Box::new(psbt::Input {
+                                    witness_utxo,
+                                    non_witness_utxo,
+                                    ..Default::default()
+                                }),
+                            },
+                        })
+                    }
                 }
             })
             .collect::<Result<_, _>>()?;
@@ -1916,7 +1943,14 @@ impl Wallet {
                     if input.non_witness_utxo.is_none() {
                         return Err(SignerError::MissingNonWitnessUtxo);
                     }
-                    if validated_non_witness_prevout(input, txin.previous_output).is_none() {
+                    let prevout = validated_non_witness_prevout(input, txin.previous_output)
+                        .ok_or(SignerError::InvalidNonWitnessUtxo)?;
+                    if input
+                        .witness_utxo
+                        .as_ref()
+                        .is_some_and(|witness| witness != prevout)
+                    {
+                        // Ideally InvalidWitnessUtxo; reuse this error for API compatibility.
                         return Err(SignerError::InvalidNonWitnessUtxo);
                     }
                 }
@@ -2005,52 +2039,14 @@ impl Wallet {
     ///
     /// Returns `true` if the PSBT could be finalized, and `false` otherwise.
     ///
-    /// The [`SignOptions`] can be used to tweak the behavior of the finalizer.
+    /// Timelocks are checked against the PSBT's `nLockTime` and `nSequence`. The [`SignOptions`]
+    /// are currently unused.
     pub fn finalize_psbt(
         &self,
         psbt: &mut Psbt,
-        sign_options: SignOptions,
+        _sign_options: SignOptions,
     ) -> Result<bool, SignerError> {
-        let tx = &psbt.unsigned_tx;
-        let chain_tip = self.chain.tip().block_id();
-        let prev_txids = tx
-            .input
-            .iter()
-            .map(|txin| txin.previous_output.txid)
-            .collect::<HashSet<Txid>>();
-        let confirmation_heights = self
-            .tx_graph
-            .graph()
-            .list_canonical_txs(&self.chain, chain_tip, CanonicalizationParams::default())
-            .filter(|canon_tx| prev_txids.contains(&canon_tx.tx_node.txid))
-            // This is for a small performance gain. Although `.filter` filters out excess txs, it
-            // will still consume the internal `CanonicalIter` entirely. Having a `.take` here
-            // allows us to stop further unnecessary canonicalization.
-            .take(prev_txids.len())
-            .map(|canon_tx| {
-                let txid = canon_tx.tx_node.txid;
-                match canon_tx.chain_position {
-                    ChainPosition::Confirmed { anchor, .. } => (txid, anchor.block_id.height),
-                    ChainPosition::Unconfirmed { .. } => (txid, u32::MAX),
-                }
-            })
-            .collect::<HashMap<Txid, u32>>();
-        let current_height = sign_options
-            .assume_height
-            .unwrap_or_else(|| self.chain.tip().height());
-
-        Ok(self
-            .try_finalize_psbt_with(
-                psbt,
-                Some(current_height),
-                |_, input| {
-                    confirmation_heights
-                        .get(&input.previous_output.txid)
-                        .copied()
-                },
-                true,
-            )?
-            .is_finalized())
+        Ok(self.try_finalize_psbt_with(psbt, true)?.is_finalized())
     }
 
     /// Attempt to finalize each input of a PSBT and return per-input finalization results.
@@ -2068,19 +2064,14 @@ impl Wallet {
         &self,
         psbt: &mut Psbt,
     ) -> Result<FinalizePsbtOutcome, IndexOutOfBoundsError> {
-        self.try_finalize_psbt_with(psbt, None, |_, _| None, false)
+        self.try_finalize_psbt_with(psbt, false)
     }
 
-    fn try_finalize_psbt_with<F>(
+    fn try_finalize_psbt_with(
         &self,
         psbt: &mut Psbt,
-        current_height: Option<u32>,
-        mut confirmation_height_for_input: F,
         clear_output_derivations: bool,
-    ) -> Result<FinalizePsbtOutcome, IndexOutOfBoundsError>
-    where
-        F: FnMut(usize, &bitcoin::TxIn) -> Option<u32>,
-    {
+    ) -> Result<FinalizePsbtOutcome, IndexOutOfBoundsError> {
         let tx = &psbt.unsigned_tx;
         if psbt.inputs.len() < tx.input.len() {
             return Err(IndexOutOfBoundsError::new(
@@ -2091,7 +2082,7 @@ impl Wallet {
 
         let mut outcomes = BTreeMap::new();
 
-        for (n, input) in tx.input.iter().enumerate() {
+        for n in 0..tx.input.len() {
             let psbt_input = &psbt
                 .inputs
                 .get(n)
@@ -2119,19 +2110,8 @@ impl Wallet {
             match desc {
                 Some(desc) => {
                     let mut tmp_input = bitcoin::TxIn::default();
-                    let satisfy_result = if let Some(current_height) = current_height {
-                        let confirmation_height = confirmation_height_for_input(n, input);
-                        desc.satisfy(
-                            &mut tmp_input,
-                            (
-                                PsbtInputSatisfier::new(psbt, n),
-                                After::new(Some(current_height), false),
-                                Older::new(Some(current_height), confirmation_height, false),
-                            ),
-                        )
-                    } else {
-                        desc.satisfy(&mut tmp_input, PsbtInputSatisfier::new(psbt, n))
-                    };
+                    let satisfy_result =
+                        desc.satisfy(&mut tmp_input, PsbtInputSatisfier::new(psbt, n));
 
                     match satisfy_result {
                         Ok(_) => {

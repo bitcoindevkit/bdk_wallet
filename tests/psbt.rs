@@ -1,10 +1,13 @@
 use bdk_wallet::bitcoin::bip32::Xpriv;
 use bdk_wallet::bitcoin::psbt::SigningKeys;
+use bdk_wallet::psbt::PsbtUtils;
+use bdk_wallet::signer::SignerError;
 use bdk_wallet::test_utils::*;
 use bdk_wallet::{KeychainKind, SignOptions, psbt};
 use bitcoin::{Amount, FeeRate, Psbt, TxIn, Witness};
 use core::str::FromStr;
 use miniscript::descriptor::KeyMapWrapper;
+use miniscript::psbt::PsbtExt;
 
 mod common;
 use common::{keymap_from_descriptor, signers_from_descriptor};
@@ -112,6 +115,40 @@ fn test_psbt_sign_with_finalized() {
             SignOptions::default(),
         )
         .unwrap();
+}
+
+/// Rejects mismatched witness_utxo and non_witness_utxo fields.
+#[test]
+fn test_sign_with_signers_rejects_mismatched_utxo() {
+    let descriptor = get_test_wpkh();
+    let (mut wallet, _) = get_funded_wallet_single(descriptor);
+    receive_output_in_latest_block(&mut wallet, Amount::from_sat(50_000));
+    let recipient = wallet.next_unused_address(KeychainKind::External);
+    let mut builder = wallet.build_tx();
+    builder.drain_to(recipient.script_pubkey()).drain_wallet();
+    let psbt = builder.finish().unwrap();
+    assert_eq!(psbt.inputs.len(), 2);
+
+    let signers = signers_from_descriptor(&wallet, descriptor);
+    for index in 0..psbt.inputs.len() {
+        let mut mismatched = psbt.clone();
+        mismatched.inputs[index]
+            .witness_utxo
+            .as_mut()
+            .unwrap()
+            .value -= Amount::from_sat(20_000);
+        assert_eq!(mismatched.fee_amount(), None);
+        let result = wallet.sign_with_signers(&mut mismatched, &[&signers], SignOptions::default());
+        assert!(matches!(result, Err(SignerError::InvalidNonWitnessUtxo)));
+        assert!(
+            mismatched
+                .inputs
+                .iter()
+                .all(|input| input.partial_sigs.is_empty()
+                    && input.final_script_sig.is_none()
+                    && input.final_script_witness.is_none())
+        );
+    }
 }
 
 #[test]
@@ -351,4 +388,20 @@ fn test_psbt_sign_with_descriptor_keymap() {
         !signing_keys.is_empty(),
         "expected at least one input to be signed using descriptor keymap"
     );
+}
+
+// Signing with an account-level xprv must derive `xprv/0/0`, not `xprv/86h/1h/0h/0/0`.
+#[test]
+fn test_psbt_sign_with_descriptor_keymap_key_origin() {
+    let descriptor = "tr([5159c173/86h/1h/0h]tprv8gfBCLYgHZLJLhg1DUSY6NN6eNAee3aqt3SE3M1hywpAiFWYGsm6U6B17VDKh8W1SQnatRpZujU5xseJ84nYZmkxPGCngNhmBMVRY2sAZhY/0/*)";
+    let (mut wallet, _) = get_funded_wallet_single(descriptor);
+    let addr = wallet.peek_address(KeychainKind::External, 0);
+    let mut builder = wallet.build_tx();
+    builder.drain_to(addr.script_pubkey()).drain_wallet();
+    let mut psbt = builder.finish().unwrap();
+
+    let signer = KeyMapWrapper::from(keymap_from_descriptor(&wallet, descriptor));
+    psbt.sign(&signer, wallet.secp_ctx()).unwrap();
+    psbt.finalize_mut(wallet.secp_ctx())
+        .expect("signature must be valid");
 }
