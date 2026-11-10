@@ -2972,6 +2972,125 @@ impl Wallet {
             ))
     }
 
+    /// Create a partial sync request at `start_time`, omitting settled internal scripts.
+    ///
+    /// All revealed external scripts are included. A revealed internal script is omitted only
+    /// when it has canonical receiving transactions, all of their outputs have canonical spends,
+    /// and every relevant receiving and spending transaction has at least `confirmations`
+    /// confirmations. Scripts with no canonical history or incomplete history remain included.
+    /// `None` selects six confirmations; `Some(0)` is treated as one confirmation, so unconfirmed
+    /// transactions are never considered settled. The policy is recalculated on every call from
+    /// the current chain and canonical transaction graph, including after reorgs or replacements.
+    ///
+    /// This is an opt-in optimization for wallets that do not reuse internal addresses. Once a
+    /// script is omitted, a new payment to that script cannot be discovered by this request.
+    /// Use [`Wallet::start_sync_with_revealed_spks_at`] or a full scan to discover such payments.
+    /// A payment learned through another update causes its script to be reconsidered. Reorgs
+    /// must likewise be learned before constructing a request that reconsiders affected scripts.
+    /// This reduces remote script-history queries, but still scans local transaction history.
+    ///
+    /// Expected transaction IDs are retained for eviction detection. `start_time` has the same
+    /// meaning as in [`Wallet::start_sync_with_revealed_spks_at`].
+    pub fn start_sync_with_pending_spks_at(
+        &self,
+        start_time: u64,
+        confirmations: Option<u32>,
+    ) -> SyncRequestBuilder<(KeychainKind, u32)> {
+        let confirmations = confirmations.unwrap_or(6).max(1);
+        let tip = self.chain.tip();
+        // Compare outpoints rather than transaction counts: one transaction may receive or
+        // spend multiple outputs to the same script, and partial history must not look settled.
+        #[derive(Default)]
+        struct InternalHistory {
+            received: HashSet<OutPoint>,
+            spent: HashSet<OutPoint>,
+            pending: bool,
+        }
+        let mut history = BTreeMap::<(KeychainKind, u32), InternalHistory>::new();
+        for canonical_tx in self.tx_graph.graph().list_canonical_txs(
+            &self.chain,
+            tip.block_id(),
+            CanonicalizationParams::default(),
+        ) {
+            let settled = canonical_tx
+                .chain_position
+                .confirmation_height_upper_bound()
+                .is_some_and(|height| {
+                    height <= tip.height()
+                        && tip.height().saturating_sub(height).saturating_add(1) >= confirmations
+                });
+            let tx = &canonical_tx.tx_node.tx;
+            for (key, _) in self.tx_graph.index.inner().relevant_spks_of_tx(tx) {
+                if key.0 == KeychainKind::Internal {
+                    history.entry(key).or_default().pending |= !settled;
+                }
+            }
+            for (vout, output) in tx.output.iter().enumerate() {
+                if let Some(&key @ (KeychainKind::Internal, _)) = self
+                    .tx_graph
+                    .index
+                    .index_of_spk(output.script_pubkey.clone())
+                {
+                    history.entry(key).or_default().received.insert(OutPoint {
+                        txid: canonical_tx.tx_node.txid,
+                        vout: vout as u32,
+                    });
+                }
+            }
+            for input in &tx.input {
+                if let Some((key @ (KeychainKind::Internal, _), _)) =
+                    self.tx_graph.index.txout(input.previous_output)
+                {
+                    history
+                        .entry(key)
+                        .or_default()
+                        .spent
+                        .insert(input.previous_output);
+                }
+            }
+        }
+        // A floating output has no full parent transaction, so canonical transaction
+        // iteration alone cannot establish that this script's entire history is settled.
+        for (key, (outpoint, _)) in self.tx_graph.index.txouts() {
+            if key.0 == KeychainKind::Internal
+                && self.tx_graph.graph().get_tx(outpoint.txid).is_none()
+            {
+                history.entry(key).or_default().pending = true;
+            }
+        }
+        let spks = self.tx_graph.index.revealed_spks(..).filter(|(key, _)| {
+            key.0 == KeychainKind::External
+                || history.get(key).is_none_or(|state| {
+                    state.pending || state.received.is_empty() || state.received != state.spent
+                })
+        });
+        SyncRequest::builder_at(start_time)
+            .chain_tip(tip)
+            .spks_with_indexes(spks)
+            .expected_spk_txids(self.tx_graph.list_expected_spk_txids(
+                &self.chain,
+                self.chain.tip().block_id(),
+                ..,
+            ))
+    }
+
+    /// Create a partial sync request omitting settled internal scripts, using the current time.
+    ///
+    /// See [`Wallet::start_sync_with_pending_spks_at`] for the opt-in policy, the confirmation
+    /// threshold (six when `None`), and the internal address reuse limitation.
+    #[cfg_attr(docsrs, doc(cfg(feature = "std")))]
+    #[cfg(feature = "std")]
+    pub fn start_sync_with_pending_spks(
+        &self,
+        confirmations: Option<u32>,
+    ) -> SyncRequestBuilder<(KeychainKind, u32)> {
+        let start_time = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time must be after the Unix epoch")
+            .as_secs();
+        self.start_sync_with_pending_spks_at(start_time, confirmations)
+    }
+
     /// Create a [`FullScanRequest] for this wallet.
     ///
     /// This is the first step when performing a spk-based wallet full scan, the returned
