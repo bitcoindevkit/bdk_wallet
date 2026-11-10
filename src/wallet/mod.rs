@@ -749,7 +749,9 @@ impl Wallet {
     ///
     /// Returns whether the given index was present and then removed from the unused set.
     pub fn mark_used(&mut self, keychain: KeychainKind, index: u32) -> bool {
-        self.tx_graph.index.mark_used(keychain, index)
+        self.tx_graph
+            .index
+            .mark_used(self.map_keychain(keychain), index)
     }
 
     /// Undoes the effect of [`mark_used`] and returns whether the `index` was inserted
@@ -761,7 +763,9 @@ impl Wallet {
     ///
     /// [`mark_used`]: Self::mark_used
     pub fn unmark_used(&mut self, keychain: KeychainKind, index: u32) -> bool {
-        self.tx_graph.index.unmark_used(keychain, index)
+        self.tx_graph
+            .index
+            .unmark_used(self.map_keychain(keychain), index)
     }
 
     /// List addresses that are revealed but unused.
