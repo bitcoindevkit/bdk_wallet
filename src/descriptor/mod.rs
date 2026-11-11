@@ -27,8 +27,8 @@ use bitcoin::{
     psbt, secp256k1, taproot,
 };
 use miniscript::descriptor::{
-    DefiniteDescriptorKey, DescriptorMultiXKey, DescriptorSecretKey, DescriptorType,
-    DescriptorXKey, InnerXKey, KeyMap, SinglePubKey, Wildcard,
+    DefiniteDescriptorKey, DescriptorSecretKey, DescriptorType, DescriptorXKey, InnerXKey, KeyMap,
+    SinglePubKey, Wildcard,
 };
 pub use miniscript::{
     Descriptor, DescriptorPublicKey, Legacy, Miniscript, ScriptContext, Segwitv0,
@@ -357,18 +357,6 @@ impl<Ctx: miniscript::ScriptContext, Pk: miniscript::MiniscriptKey> CheckMiniscr
 
 pub(crate) trait XKeyUtils {
     fn root_fingerprint(&self, secp: &SecpCtx) -> Fingerprint;
-}
-
-impl<T> XKeyUtils for DescriptorMultiXKey<T>
-where
-    T: InnerXKey,
-{
-    fn root_fingerprint(&self, secp: &SecpCtx) -> Fingerprint {
-        match self.origin {
-            Some((fingerprint, _)) => fingerprint,
-            None => self.xkey.xkey_fingerprint(secp),
-        }
-    }
 }
 
 impl<T> XKeyUtils for DescriptorXKey<T>

@@ -40,7 +40,6 @@ use bitcoin::{
     constants::genesis_block,
     psbt,
     secp256k1::Secp256k1,
-    sighash::{EcdsaSighashType, TapSighashType},
     transaction::{self, Version},
 };
 use miniscript::psbt::{PsbtExt, PsbtInputExt, PsbtInputSatisfier};
@@ -56,7 +55,6 @@ pub mod locked_outpoints;
 pub mod migration;
 mod params;
 mod persisted;
-pub mod signer;
 pub mod tx_builder;
 pub(crate) mod utils;
 
@@ -65,12 +63,11 @@ use crate::descriptor::{
     DerivedDescriptor, DescriptorMeta, ExtendedDescriptor, IntoWalletDescriptor, XKeyUtils,
     calc_checksum, check_wallet_descriptor, error::Error as DescriptorError,
 };
-use crate::psbt::{PsbtUtils, validated_non_witness_prevout};
+use crate::psbt::PsbtUtils;
 use crate::types::*;
 use crate::wallet::{
     coin_selection::{DefaultCoinSelectionAlgorithm, Excess, InsufficientFunds},
     error::{BuildFeeBumpError, CreateTxError, MiniscriptPsbtError},
-    signer::{SignOptions, SignerError, SignersContainer},
     tx_builder::{Condition, FeePolicy, TxBuilder, TxParams, timelock_condition},
     utils::{SecpCtx, check_nsequence_rbf},
 };
@@ -126,7 +123,6 @@ type IndexedTxOut = ((KeychainKind, u32), FullTxOut<ConfirmationBlockTime>);
 /// The `Wallet` descriptor (external) and change descriptor (internal) must not derive the same
 /// script pubkeys. See [`KeychainTxOutIndex::insert_descriptor()`] for more details.
 ///
-/// [`signer`]: crate::signer
 /// [`take_staged`]: Wallet::take_staged
 #[derive(Debug)]
 pub struct Wallet {
@@ -1482,7 +1478,7 @@ impl Wallet {
     ///     builder.finish()?
     /// };
     /// psbt.sign(&signer, wallet.secp_ctx()).map_err(|(_, e)| Error::msg(format!("{e:?}")))?;
-    /// wallet.finalize_psbt(&mut psbt, SignOptions::default())?;
+    /// wallet.finalize_psbt(&mut psbt)?;
     /// let tx = psbt.clone().extract_tx().expect("tx");
     /// # bdk_wallet::test_utils::insert_tx(&mut wallet, tx.clone());
     /// // broadcast tx but it's taking too long to confirm so we want to bump the fee
@@ -1494,7 +1490,7 @@ impl Wallet {
     /// };
     ///
     /// psbt.sign(&signer, wallet.secp_ctx()).map_err(|(_, e)| Error::msg(format!("{e:?}")))?;
-    /// wallet.finalize_psbt(&mut psbt, SignOptions::default())?;
+    /// wallet.finalize_psbt(&mut psbt)?;
     /// let fee_bumped_tx = psbt.extract_tx();
     /// // broadcast fee_bumped_tx to replace original
     /// # Ok::<(), anyhow::Error>(())
@@ -1642,158 +1638,6 @@ impl Wallet {
         })
     }
 
-    /// Sign a transaction with the provided signer containers.
-    ///
-    /// Signer containers are processed in the order provided. Signers inside each container are
-    /// processed according to their [`SignerOrdering`](signer::SignerOrdering).
-    ///
-    /// The [`SignOptions`] can be used to tweak the behavior of the software signers, and the way
-    /// the transaction is finalized at the end. Note that it can't be guaranteed that *every*
-    /// signer will follow the options, but the "software signers" (WIF keys and `xprv`) defined
-    /// in this library will.
-    ///
-    /// Returns true if the PSBT was finalized, or false otherwise.
-    ///
-    /// ## Example
-    ///
-    /// ```
-    /// # use bdk_wallet::*;
-    /// # use bdk_wallet::bitcoin::*;
-    /// # use bdk_wallet::bitcoin::{NetworkKind, secp256k1::Secp256k1};
-    /// # use bdk_wallet::descriptor::IntoWalletDescriptor;
-    /// # use bdk_wallet::signer::SignersContainer;
-    /// # let mut wallet = doctest_wallet!();
-    /// let signer_descriptor = "tr([73c5da0a/86'/0'/0']tprv8fMn4hSKPRC1oaCPqxDb1JWtgkpeiQvZhsr8W2xuy3GEMkzoArcAWTfJxYb6Wj8XNNDWEjfYKK4wGQXh3ZUXhDF2NcnsALpWTeSwarJt7Vc/0/*)";
-    /// let secp = Secp256k1::new();
-    /// let (_, keymap) = signer_descriptor
-    ///     .into_wallet_descriptor(&secp, NetworkKind::Test)
-    ///     .unwrap();
-    /// let external_signers = SignersContainer::build(
-    ///     keymap,
-    ///     wallet.public_descriptor(KeychainKind::External),
-    ///     wallet.secp_ctx(),
-    /// );
-    ///
-    /// let to_address = wallet.next_unused_address(KeychainKind::External).address;
-    /// let mut psbt = {
-    ///     let mut builder = wallet.build_tx();
-    ///     builder.drain_to(to_address.script_pubkey()).drain_wallet();
-    ///     builder.finish()?
-    /// };
-    ///
-    /// let finalized = wallet.sign_with_signers(
-    ///     &mut psbt,
-    ///     &[&external_signers],
-    ///     SignOptions::default(),
-    /// )?;
-    /// assert!(finalized);
-    /// # Ok::<(), anyhow::Error>(())
-    /// ```
-    pub fn sign_with_signers(
-        &self,
-        psbt: &mut Psbt,
-        signers: &[&SignersContainer],
-        sign_options: SignOptions,
-    ) -> Result<bool, SignerError> {
-        // This adds all the PSBT metadata for the inputs, which will help us later figure out how
-        // to derive our keys.
-        self.update_psbt_with_descriptor(psbt)
-            .map_err(SignerError::MiniscriptPsbt)?;
-
-        // Taproot signatures without ANYONECANPAY commit to all input amounts (BIP341).
-        // Otherwise, verify every input amount before signing.
-        if !sign_options.trust_witness_utxo {
-            let inputs = psbt.inputs.iter().zip(psbt.unsigned_tx.input.iter());
-            let all_amounts_committed = inputs.clone().all(|(input, txin)| {
-                input.sighash_type.is_none_or(|t| t.to_u32() & 0x80 == 0) // ANYONECANPAY flag
-                    && self.is_verified_taproot_input(input, txin.previous_output)
-            });
-            if !all_amounts_committed {
-                for (input, txin) in inputs {
-                    self.check_input_amount(input, txin.previous_output)?;
-                }
-            }
-        }
-
-        // If the user hasn't explicitly opted-in, refuse to sign the transaction unless every input
-        // is using `SIGHASH_ALL` or `SIGHASH_DEFAULT` for Taproot.
-        if !sign_options.allow_all_sighashes
-            && !psbt.inputs.iter().all(|i| {
-                i.sighash_type.is_none()
-                    || i.sighash_type == Some(EcdsaSighashType::All.into())
-                    || i.sighash_type == Some(TapSighashType::All.into())
-                    || i.sighash_type == Some(TapSighashType::Default.into())
-            })
-        {
-            return Err(SignerError::NonStandardSighash);
-        }
-
-        for signer in signers.iter().flat_map(|container| container.signers()) {
-            signer.sign_transaction(psbt, &sign_options, &self.secp)?;
-        }
-
-        // Attempt to finalize.
-        if sign_options.try_finalize {
-            self.finalize_psbt(psbt, sign_options)
-        } else {
-            Ok(false)
-        }
-    }
-
-    /// Check this input's amount against its parent transaction.
-    ///
-    /// Validate `non_witness_utxo` if supplied. Otherwise, Taproot inputs may use the full parent
-    /// transaction stored in the wallet. Any supplied `witness_utxo` must match the parent's output.
-    /// Non-Taproot inputs require `non_witness_utxo`.
-    fn check_input_amount(
-        &self,
-        input: &psbt::Input,
-        outpoint: OutPoint,
-    ) -> Result<(), SignerError> {
-        if input.non_witness_utxo.is_some() {
-            let prevout = validated_non_witness_prevout(input, outpoint)
-                .ok_or(SignerError::InvalidNonWitnessUtxo)?;
-            if input
-                .witness_utxo
-                .as_ref()
-                .is_some_and(|witness| witness != prevout)
-            {
-                // Ideally InvalidWitnessUtxo; reuse this error for API compatibility.
-                return Err(SignerError::InvalidNonWitnessUtxo);
-            }
-            return Ok(());
-        }
-
-        // Without non_witness_utxo, verify Taproot inputs using the parent stored in the wallet.
-        if let Some(prev_tx) = self.tx_graph.graph().get_tx(outpoint.txid) {
-            if let Some(prevout) = prev_tx
-                .output
-                .get(outpoint.vout as usize)
-                .filter(|prevout| prevout.script_pubkey.is_p2tr())
-            {
-                return match input.witness_utxo.as_ref() {
-                    Some(witness) if witness != prevout => Err(SignerError::InvalidNonWitnessUtxo),
-                    _ => Ok(()),
-                };
-            }
-        }
-        Err(SignerError::MissingNonWitnessUtxo)
-    }
-
-    /// Whether this outpoint is a verified p2tr.
-    ///
-    /// `witness_utxo` scriptPubKey is unauthenticated; trusting it would skip the prev-tx check.
-    fn is_verified_taproot_input(&self, input: &psbt::Input, outpoint: OutPoint) -> bool {
-        if let Some(prev_tx) = self.tx_graph.graph().get_tx(outpoint.txid) {
-            return prev_tx
-                .output
-                .get(outpoint.vout as usize)
-                .is_some_and(|prevout| prevout.script_pubkey.is_p2tr());
-        }
-        validated_non_witness_prevout(input, outpoint)
-            .is_some_and(|prevout| prevout.script_pubkey.is_p2tr())
-    }
-
     /// Returns the descriptor used to create addresses for a particular `keychain`.
     ///
     /// It's the "public" version of the wallet's descriptor, meaning a new descriptor that has
@@ -1814,13 +1658,8 @@ impl Wallet {
     ///
     /// Returns `true` if the PSBT could be finalized, and `false` otherwise.
     ///
-    /// Timelocks are checked against the PSBT's `nLockTime` and `nSequence`. The [`SignOptions`]
-    /// are currently unused.
-    pub fn finalize_psbt(
-        &self,
-        psbt: &mut Psbt,
-        _sign_options: SignOptions,
-    ) -> Result<bool, SignerError> {
+    /// Timelocks are checked against the PSBT's `nLockTime` and `nSequence`.
+    pub fn finalize_psbt(&self, psbt: &mut Psbt) -> Result<bool, IndexOutOfBoundsError> {
         Ok(self.try_finalize_psbt_with(psbt, true)?.is_finalized())
     }
 

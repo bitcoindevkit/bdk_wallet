@@ -1,7 +1,7 @@
 use bdk_esplora::{EsploraExt, esplora_client};
 use bdk_wallet::rusqlite::Connection;
 use bdk_wallet::{
-    KeychainKind, SignOptions, Wallet,
+    KeychainKind, Wallet,
     bitcoin::{Amount, FeeRate, Network, secp256k1::Secp256k1},
     descriptor::IntoWalletDescriptor,
     miniscript::descriptor::KeyMapWrapper,
@@ -88,7 +88,7 @@ fn main() -> Result<(), anyhow::Error> {
     let mut psbt = tx_builder.finish()?;
     psbt.sign(&signer, wallet.secp_ctx())
         .map_err(|(_, e)| anyhow::anyhow!("{e:?}"))?;
-    let finalized = wallet.finalize_psbt(&mut psbt, SignOptions::default())?;
+    let finalized = wallet.finalize_psbt(&mut psbt)?;
     assert!(finalized);
     let original_fee = psbt.fee_amount().unwrap();
     let tx_feerate = psbt.fee_rate().unwrap();
@@ -126,7 +126,7 @@ fn main() -> Result<(), anyhow::Error> {
     new_psbt
         .sign(&signer, wallet.secp_ctx())
         .map_err(|(_, e)| anyhow::anyhow!("{e:?}"))?;
-    let finalize_tx = wallet.finalize_psbt(&mut new_psbt, SignOptions::default())?;
+    let finalize_tx = wallet.finalize_psbt(&mut new_psbt)?;
     assert!(finalize_tx);
     let new_fee = new_psbt.fee_amount().unwrap();
     let bumped_tx = new_psbt.extract_tx()?;
