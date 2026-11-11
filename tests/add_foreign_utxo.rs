@@ -2,13 +2,13 @@ use std::str::FromStr;
 
 use bdk_wallet::KeychainKind;
 use bdk_wallet::psbt::PsbtUtils;
-use bdk_wallet::signer::SignOptions;
 use bdk_wallet::test_utils::*;
 use bdk_wallet::tx_builder::AddForeignUtxoError;
 use bitcoin::{Address, Amount, TxOut, psbt};
+use miniscript::descriptor::KeyMapWrapper;
 
 mod common;
-use common::signers_from_descriptor;
+use common::keymap_from_descriptor;
 
 #[test]
 fn test_add_foreign_utxo() {
@@ -26,10 +26,7 @@ fn test_add_foreign_utxo() {
         .max_weight_to_satisfy()
         .unwrap();
 
-    let psbt_input = psbt::Input {
-        witness_utxo: Some(utxo.txout.clone()),
-        ..Default::default()
-    };
+    let psbt_input = wallet2.get_psbt_input(utxo.clone(), None, true).unwrap();
 
     let mut builder = wallet1.build_tx();
     builder
@@ -57,35 +54,20 @@ fn test_add_foreign_utxo() {
         "foreign_utxo should be in there"
     );
 
-    let wallet1_external_signers = signers_from_descriptor(&wallet1, wallet1_descriptor);
-    let wallet1_internal_signers = signers_from_descriptor(&wallet1, wallet1_change_descriptor);
-    let finished = wallet1
-        .sign_with_signers(
-            &mut psbt,
-            &[&wallet1_external_signers, &wallet1_internal_signers],
-            SignOptions {
-                trust_witness_utxo: true,
-                ..Default::default()
-            },
-        )
-        .unwrap();
+    let mut wallet1_keymap = keymap_from_descriptor(&wallet1, wallet1_descriptor);
+    wallet1_keymap.extend(keymap_from_descriptor(&wallet1, wallet1_change_descriptor));
+    let wallet1_signer = KeyMapWrapper::from(wallet1_keymap);
+    psbt.sign(&wallet1_signer, wallet1.secp_ctx()).unwrap();
+    let finished = wallet1.finalize_psbt(&mut psbt).unwrap();
 
     assert!(
         !finished,
         "only one of the inputs should have been signed so far"
     );
 
-    let wallet2_signers = signers_from_descriptor(&wallet2, wallet2_descriptor);
-    let finished = wallet2
-        .sign_with_signers(
-            &mut psbt,
-            &[&wallet2_signers],
-            SignOptions {
-                trust_witness_utxo: true,
-                ..Default::default()
-            },
-        )
-        .unwrap();
+    let wallet2_signer = KeyMapWrapper::from(keymap_from_descriptor(&wallet2, wallet2_descriptor));
+    psbt.sign(&wallet2_signer, wallet2.secp_ctx()).unwrap();
+    let finished = wallet2.finalize_psbt(&mut psbt).unwrap();
     assert!(finished, "all the inputs should have been signed now");
 }
 
