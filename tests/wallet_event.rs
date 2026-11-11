@@ -1,10 +1,16 @@
 use bdk_chain::{BlockId, CheckPoint, ConfirmationBlockTime};
+use bdk_wallet::KeychainKind;
 use bdk_wallet::Update;
 use bdk_wallet::WalletEvent;
-use bdk_wallet::test_utils::{get_test_wpkh_and_change_desc, new_wallet_and_funding_update};
+use bdk_wallet::test_utils::{
+    get_test_wpkh_and_change_desc, new_tx, new_wallet_and_funding_update,
+};
 use bitcoin::block::Header;
 use bitcoin::hashes::Hash;
-use bitcoin::{Address, Amount, Block, BlockHash, FeeRate, Transaction, TxMerkleNode};
+use bitcoin::{
+    Address, Amount, Block, BlockHash, FeeRate, OutPoint, Transaction, TxIn, TxMerkleNode, TxOut,
+    Txid,
+};
 use core::str::FromStr;
 use std::sync::Arc;
 
@@ -126,6 +132,129 @@ fn test_tx_replaced_event() {
     assert!(
         matches!(&events[1], WalletEvent::TxReplaced {txid, conflicts, ..} if *txid == orig_txid && conflicts.len() == 1 &&
             conflicts.contains(&(0, rbf_txid)))
+    );
+}
+
+#[test]
+fn test_tx_replaced_event_only_lists_canonical_conflicts() {
+    let (desc, change_desc) = get_test_wpkh_and_change_desc();
+    let (mut wallet, _, update) = new_wallet_and_funding_update(desc, Some(change_desc));
+    let _events = wallet.apply_update_events(update).unwrap();
+
+    let mut builder = wallet.build_tx();
+    builder.add_recipient(
+        Address::from_str("tb1q6yn66vajcctph75pvylgkksgpp6nq04ppwct9a")
+            .unwrap()
+            .assume_checked(),
+        Amount::from_sat(10_000),
+    );
+    let tx_a = Arc::new(builder.finish().unwrap().extract_tx().unwrap());
+    let txid_a = tx_a.compute_txid();
+    let mut update = Update::default();
+    update.tx_update.txs = vec![tx_a];
+    update.tx_update.seen_ats = [(txid_a, 210)].into();
+    wallet.apply_update(update).unwrap();
+
+    let mut builder = wallet.build_fee_bump(txid_a).unwrap();
+    builder.fee_rate(FeeRate::from_sat_per_vb(10).unwrap());
+    let tx_b = Arc::new(builder.finish().unwrap().extract_tx().unwrap());
+    let txid_b = tx_b.compute_txid();
+    let mut update = Update::default();
+    update.tx_update.txs = vec![tx_b.clone()];
+    update.tx_update.evicted_ats = [(txid_a, 220)].into();
+    update.tx_update.seen_ats = [(txid_b, 220)].into();
+    wallet.apply_update(update).unwrap();
+
+    let mut builder = wallet.build_fee_bump(txid_b).unwrap();
+    builder.fee_rate(FeeRate::from_sat_per_vb(20).unwrap());
+    let tx_c = Arc::new(builder.finish().unwrap().extract_tx().unwrap());
+    let txid_c = tx_c.compute_txid();
+    let mut update = Update::default();
+    update.tx_update.txs = vec![tx_c.clone()];
+    update.tx_update.evicted_ats = [(txid_b, 230)].into();
+    update.tx_update.seen_ats = [(txid_c, 230)].into();
+    let events = wallet.apply_update_events(update).unwrap();
+    assert_eq!(
+        events,
+        vec![
+            WalletEvent::TxUnconfirmed {
+                txid: txid_c,
+                tx: tx_c.clone(),
+                old_block_time: None,
+            },
+            WalletEvent::TxReplaced {
+                txid: txid_b,
+                tx: tx_b,
+                conflicts: vec![(0, txid_c)],
+            },
+        ]
+    );
+
+    let mut update = Update::default();
+    update.tx_update.evicted_ats = [(txid_c, 240)].into();
+    let events = wallet.apply_update_events(update).unwrap();
+    assert_eq!(
+        events,
+        vec![WalletEvent::TxDropped {
+            txid: txid_c,
+            tx: tx_c,
+        }]
+    );
+}
+
+#[test]
+fn test_tx_replaced_event_with_non_wallet_conflict() {
+    let (desc, change_desc) = get_test_wpkh_and_change_desc();
+    let (mut wallet, _, update) = new_wallet_and_funding_update(desc, Some(change_desc));
+    let _events = wallet.apply_update_events(update).unwrap();
+
+    let external_spk = Address::from_str("tb1q6yn66vajcctph75pvylgkksgpp6nq04ppwct9a")
+        .unwrap()
+        .assume_checked()
+        .script_pubkey();
+    let spend_external = |vouts: &[u32], script_pubkey| {
+        Arc::new(Transaction {
+            input: vouts
+                .iter()
+                .map(|&vout| TxIn {
+                    previous_output: OutPoint::new(Txid::from_byte_array([1; 32]), vout),
+                    ..Default::default()
+                })
+                .collect(),
+            output: vec![TxOut {
+                value: Amount::from_sat(10_000),
+                script_pubkey,
+            }],
+            ..new_tx(0)
+        })
+    };
+    let receive_spk = wallet
+        .peek_address(KeychainKind::External, 0)
+        .script_pubkey();
+    let tx_in = spend_external(&[0, 1], receive_spk);
+    let tx_stale = spend_external(&[0], external_spk.clone());
+    let tx_cfl = spend_external(&[1], external_spk);
+    let txid_in = tx_in.compute_txid();
+    let txid_stale = tx_stale.compute_txid();
+    let txid_cfl = tx_cfl.compute_txid();
+
+    let mut update = Update::default();
+    update.tx_update.txs = vec![tx_in.clone(), tx_stale];
+    update.tx_update.seen_ats = [(txid_stale, 290), (txid_in, 300)].into();
+    update.tx_update.evicted_ats = [(txid_stale, 295)].into();
+    wallet.apply_update(update).unwrap();
+
+    let mut update = Update::default();
+    update.tx_update.txs = vec![tx_cfl];
+    update.tx_update.seen_ats = [(txid_cfl, 310)].into();
+    let events = wallet.apply_update_events(update).unwrap();
+    assert_eq!(
+        events,
+        vec![WalletEvent::TxReplaced {
+            txid: txid_in,
+            tx: tx_in,
+            conflicts: vec![(1, txid_cfl)],
+        }]
     );
 }
 
