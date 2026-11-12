@@ -692,3 +692,56 @@ fn concurrent_create_with_different_networks_does_not_corrupt_store() {
         (get_test_wpkh(), Network::Signet),
     );
 }
+
+/// `persist_if_empty` on a `rusqlite::Connection` must wait for a concurrent writer to commit and
+/// then report the data it wrote, instead of reading the store before that writer commits.
+#[test]
+fn rusqlite_persist_if_empty_waits_for_concurrent_writer() {
+    use bdk_chain::rusqlite::Connection;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let db_path = temp_dir.path().join("wallet.db");
+
+    let first_changeset = Wallet::create_single(get_test_tr_single_sig_xprv())
+        .network(Network::Testnet)
+        .create_wallet_no_persist()
+        .unwrap()
+        .staged()
+        .unwrap()
+        .clone();
+    let second_changeset = Wallet::create_single(get_test_wpkh())
+        .network(Network::Testnet)
+        .create_wallet_no_persist()
+        .unwrap()
+        .staged()
+        .unwrap()
+        .clone();
+
+    let mut writer = Connection::open(&db_path).unwrap();
+    <Connection as WalletPersister>::initialize(&mut writer).unwrap();
+
+    // Hold the write lock with the first wallet written but not yet committed.
+    let db_tx = writer.transaction().unwrap();
+    first_changeset.persist_to_sqlite(&db_tx).unwrap();
+
+    let (started_tx, started_rx) = mpsc::channel();
+    let second = std::thread::spawn(move || {
+        let mut conn = Connection::open(&db_path).unwrap();
+        started_tx.send(()).unwrap();
+        <Connection as WalletPersister>::persist_if_empty(&mut conn, &second_changeset)
+    });
+
+    started_rx.recv().unwrap();
+    // Give the second connection time to reach the lock before the first one commits.
+    std::thread::sleep(Duration::from_millis(200));
+    db_tx.commit().unwrap();
+
+    let existing = second
+        .join()
+        .unwrap()
+        .expect("must wait for the lock instead of failing")
+        .expect("store is no longer empty");
+    assert_eq!(existing.descriptor, first_changeset.descriptor);
+}
