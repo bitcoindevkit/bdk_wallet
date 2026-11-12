@@ -1,12 +1,12 @@
 //! User facing wallet events.
 
 use crate::Wallet;
-use crate::collections::BTreeMap;
+use crate::collections::{BTreeMap, BTreeSet};
 use crate::wallet::ChainPosition::{Confirmed, Unconfirmed};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use bitcoin::{Transaction, Txid};
-use chain::{BlockId, ChainPosition, ConfirmationBlockTime};
+use chain::{BlockId, CanonicalizationParams, ChainPosition, ConfirmationBlockTime};
 
 /// Events representing changes to wallet transactions.
 ///
@@ -59,8 +59,8 @@ pub enum WalletEvent {
     /// This can happen after an RBF is broadcast or if a third party double spends an input of
     /// a received payment transaction before it is confirmed.
     ///
-    /// The conflicts field contains the txid and vin (in which it conflicts) of the conflicting
-    /// transactions.
+    /// The conflicts field contains the txid and vin (in which it conflicts) of the canonical
+    /// conflicting transactions.
     TxReplaced {
         /// Transaction id.
         txid: Txid,
@@ -164,9 +164,25 @@ pub(crate) fn wallet_events(
     });
 
     // find tx that are no longer canonical
+    let mut canonical_txids = None;
     wallet_txs1.iter().for_each(|(txid1, (tx1, _))| {
         if !wallet_txs2.contains_key(txid1) {
-            let conflicts = wallet.tx_graph().direct_conflicts(tx1).collect::<Vec<_>>();
+            let canonical_txids = canonical_txids.get_or_insert_with(|| {
+                wallet
+                    .tx_graph()
+                    .list_canonical_txs(
+                        wallet.local_chain(),
+                        chain_tip2,
+                        CanonicalizationParams::default(),
+                    )
+                    .map(|c_tx| c_tx.tx_node.txid)
+                    .collect::<BTreeSet<_>>()
+            });
+            let conflicts = wallet
+                .tx_graph()
+                .direct_conflicts(tx1)
+                .filter(|(_, txid)| canonical_txids.contains(txid))
+                .collect::<Vec<_>>();
             if !conflicts.is_empty() {
                 events.push(WalletEvent::TxReplaced {
                     txid: *txid1,
