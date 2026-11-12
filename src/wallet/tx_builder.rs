@@ -36,7 +36,8 @@
 //! # Ok::<(), anyhow::Error>(())
 //! ```
 
-use alloc::{boxed::Box, string::String, vec::Vec};
+use alloc::{boxed::Box, vec::Vec};
+use core::cmp::max;
 use core::fmt;
 
 use alloc::sync::Arc;
@@ -47,15 +48,135 @@ use bitcoin::{
     Amount, FeeRate, OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Txid, Weight,
     absolute, transaction::Version,
 };
+use miniscript::{
+    DescriptorPublicKey,
+    policy::{Liftable, semantic},
+};
 use rand_core::RngCore;
+use serde::Serialize;
 
 use super::coin_selection::CoinSelectionAlgorithm;
 use super::utils::shuffle_slice;
 use super::{CreateTxError, Wallet};
-use crate::collections::{BTreeMap, HashMap, HashSet};
-use crate::descriptor::Condition;
+use crate::collections::{HashMap, HashSet};
+use crate::descriptor::ExtendedDescriptor;
 use crate::psbt::validated_non_witness_prevout;
 use crate::{KeychainKind, LocalOutput, Utxo, WeightedUtxo};
+
+/// An extra condition that must be satisfied but that is out of control of the user
+/// TODO: use `bitcoin::LockTime` and `bitcoin::Sequence`
+#[derive(Hash, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Default, Serialize)]
+pub struct Condition {
+    /// Optional CheckSequenceVerify condition
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub csv: Option<Sequence>,
+    /// Optional timelock condition
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timelock: Option<absolute::LockTime>,
+}
+
+/// Cannot merge block-based and time-based requirements for the same timelock type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MixedTimelockUnits;
+
+impl fmt::Display for MixedTimelockUnits {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(
+            "Cannot merge block-based and time-based requirements for the same timelock type",
+        )
+    }
+}
+
+impl core::error::Error for MixedTimelockUnits {}
+
+impl Condition {
+    fn merge_nlocktime(
+        a: absolute::LockTime,
+        b: absolute::LockTime,
+    ) -> Result<absolute::LockTime, MixedTimelockUnits> {
+        if !a.is_same_unit(b) {
+            Err(MixedTimelockUnits)
+        } else if a > b {
+            Ok(a)
+        } else {
+            Ok(b)
+        }
+    }
+
+    fn merge_nsequence(a: Sequence, b: Sequence) -> Result<Sequence, MixedTimelockUnits> {
+        if a.is_time_locked() != b.is_time_locked() {
+            Err(MixedTimelockUnits)
+        } else {
+            Ok(max(a, b))
+        }
+    }
+
+    /// Merge two [`Condition`]s into the strictest combined CSV / CLTV requirements.
+    ///
+    /// Useful when combining external and internal keychain requirements into one `Condition`
+    /// before passing it to the transaction builder.
+    pub fn merge(mut self, other: &Condition) -> Result<Self, MixedTimelockUnits> {
+        match (self.csv, other.csv) {
+            (Some(a), Some(b)) => self.csv = Some(Self::merge_nsequence(a, b)?),
+            (None, any) => self.csv = any,
+            _ => {}
+        }
+
+        match (self.timelock, other.timelock) {
+            (Some(a), Some(b)) => self.timelock = Some(Self::merge_nlocktime(a, b)?),
+            (None, any) => self.timelock = any,
+            _ => {}
+        }
+
+        Ok(self)
+    }
+
+    /// Returns `true` if there are no extra conditions to verify
+    pub fn is_null(&self) -> bool {
+        self.csv.is_none() && self.timelock.is_none()
+    }
+}
+
+/// Derives a condition using the default spending-policy rule. Returns `None` if lifting fails,
+/// timelocks require explicit path selection, or conditions cannot be merged.
+pub(crate) fn timelock_condition(descriptor: &ExtendedDescriptor) -> Option<Condition> {
+    fn required_condition(policy: &semantic::Policy<DescriptorPublicKey>) -> Option<Condition> {
+        match policy {
+            semantic::Policy::Older(t) => Some(Condition {
+                csv: Some((*t).into()),
+                timelock: None,
+            }),
+            semantic::Policy::After(t) => Some(Condition {
+                csv: None,
+                timelock: Some((*t).into()),
+            }),
+            semantic::Policy::Thresh(thresh) => {
+                let mut conditions = thresh.iter().map(|sub| required_condition(sub));
+                if thresh.is_and() {
+                    conditions.try_fold(Condition::default(), |requirements, condition| {
+                        let condition = condition?;
+                        requirements.merge(&condition).ok()
+                    })
+                } else if conditions
+                    .all(|condition| condition.is_some_and(|condition| condition.is_null()))
+                {
+                    Some(Condition::default())
+                } else {
+                    None
+                }
+            }
+            semantic::Policy::Unsatisfiable
+            | semantic::Policy::Trivial
+            | semantic::Policy::Key(_)
+            | semantic::Policy::Sha256(_)
+            | semantic::Policy::Hash256(_)
+            | semantic::Policy::Ripemd160(_)
+            | semantic::Policy::Hash160(_) => Some(Condition::default()),
+        }
+    }
+
+    required_condition(&descriptor.lift().ok()?)
+}
 
 /// A transaction builder
 ///
@@ -126,8 +247,6 @@ pub(crate) struct TxParams {
     pub(crate) drain_wallet: bool,
     pub(crate) drain_to: Option<ScriptBuf>,
     pub(crate) fee_policy: Option<FeePolicy>,
-    pub(crate) internal_policy_path: Option<BTreeMap<String, Vec<usize>>>,
-    pub(crate) external_policy_path: Option<BTreeMap<String, Vec<usize>>>,
     pub(crate) condition: Option<Condition>,
     pub(crate) utxos: Vec<WeightedUtxo>,
     pub(crate) unspendable: HashSet<OutPoint>,
@@ -196,8 +315,7 @@ impl<'a, Cs> TxBuilder<'a, Cs> {
 
     /// Set the CSV / CLTV requirements for the intended spending path.
     ///
-    /// This replaces [`Self::policy_path`] as the transaction builder's policy interface. Derive
-    /// the [`Condition`] before building the transaction, using caller-owned policy information.
+    /// Derive the [`Condition`] before building the transaction, using caller-owned policy information.
     ///
     /// It is needed when different ways of satisfying the descriptor imply different `nSequence` /
     /// `nLockTime` values. An example is the following descriptor:
@@ -220,12 +338,11 @@ impl<'a, Cs> TxBuilder<'a, Cs> {
     ///   `OP_CLTV` branch.
     /// * If fragments `2` and `3` are used, the transaction needs both.
     ///
-    /// Without an explicit condition (or the deprecated [`Self::policy_path`]), building a
-    /// transaction for such a descriptor fails with [`CreateTxError::SpendingPolicyRequired`].
+    /// Without an explicit condition, building a transaction for such a descriptor fails with
+    /// [`CreateTxError::SpendingPolicyRequired`].
     ///
-    /// Obtain a [`Condition`] by picking a path on the spending policy tree and calling
-    /// [`Policy::get_condition`](crate::descriptor::Policy::get_condition), or construct one
-    /// directly when you already know the CSV / CLTV values (e.g. a single fixed `older(N)`).
+    /// Construct a [`Condition`] with the CSV and CLTV requirements of the spending path you intend
+    /// to satisfy.
     ///
     /// For wallets with separate external and internal descriptors, merge the conditions for every
     /// keychain from which inputs may be selected using [`Condition::merge`].
@@ -233,10 +350,7 @@ impl<'a, Cs> TxBuilder<'a, Cs> {
     /// ## Example
     ///
     /// ```
-    /// # use std::collections::BTreeMap;
     /// # use bdk_wallet::*;
-    /// # use bdk_wallet::descriptor::{ExtractPolicy, policy::BuildSatisfaction};
-    /// # use bdk_wallet::signer::SignersContainer;
     /// # use bitcoin::{Network, Sequence};
     /// # let descriptor = concat!(
     /// #     "wsh(thresh(2,",
@@ -249,23 +363,11 @@ impl<'a, Cs> TxBuilder<'a, Cs> {
     /// # let mut wallet = Wallet::create_single(descriptor)
     /// #     .network(Network::Regtest)
     /// #     .create_wallet_no_persist()?;
-    /// let policy = wallet
-    ///     .public_descriptor(KeychainKind::External)
-    ///     .extract_policy(
-    ///         // Signers only affect the `contribution` and `satisfaction` fields, which
-    ///         // `get_condition` ignores, so an empty container is enough here.
-    ///         &SignersContainer::default(),
-    ///         BuildSatisfaction::None,
-    ///         wallet.secp_ctx(),
-    ///     )?
-    ///     .expect("descriptor has a spending policy");
-    ///
     /// // Choose pk(A) + and(pk(B), older(6)) from the thresh() root.
-    /// let mut path = BTreeMap::new();
-    /// path.insert(policy.id.clone(), vec![0, 1]);
-    /// let condition = policy.get_condition(&path)?;
-    /// assert_eq!(condition.csv, Some(Sequence(6)));
-    /// assert_eq!(condition.timelock, None);
+    /// let condition = Condition {
+    ///     csv: Some(Sequence(6)),
+    ///     timelock: None,
+    /// };
     ///
     /// // Inputs of the resulting transaction will carry nSequence = 6.
     /// let mut builder = wallet.build_tx();
@@ -275,88 +377,6 @@ impl<'a, Cs> TxBuilder<'a, Cs> {
     /// ```
     pub fn set_condition(&mut self, condition: Condition) -> &mut Self {
         self.params.condition = Some(condition);
-        self
-    }
-
-    /// Set the policy path to use while creating the transaction for a given keychain.
-    ///
-    /// Use [`Self::set_condition`] instead. If both this and [`Self::set_condition`] are set, the
-    /// condition overrides the path.
-    ///
-    /// This method accepts a map where the key is the policy node id (see
-    /// [`Policy::id`](crate::descriptor::Policy::id)) and the value is the list of the indexes of
-    /// the items that are intended to be satisfied from the policy node (see
-    /// [`SatisfiableItem::Thresh::items`](crate::descriptor::policy::SatisfiableItem::Thresh::items)).
-    ///
-    /// ## Example
-    ///
-    /// An example of when the policy path is needed is the following descriptor:
-    /// `wsh(thresh(2,pk(A),sj:and_v(v:pk(B),n:older(6)),snj:and_v(v:pk(C),after(630000))))`,
-    /// derived from the miniscript policy
-    /// `thresh(2,pk(A),and(pk(B),older(6)),and(pk(C),after(630000)))`. It declares three
-    /// descriptor fragments, and at the top level it uses `thresh()` to ensure that at least
-    /// two of them are satisfied. The individual fragments are:
-    ///
-    /// 1. `pk(A)`
-    /// 2. `and(pk(B),older(6))`
-    /// 3. `and(pk(C),after(630000))`
-    ///
-    /// When those conditions are combined in pairs, it's clear that the transaction needs to be
-    /// created differently depending on how the user intends to satisfy the policy afterwards:
-    ///
-    /// * If fragments `1` and `2` are used, the transaction will need to use a specific
-    ///   `n_sequence` in order to spend an `OP_CSV` branch.
-    /// * If fragments `1` and `3` are used, the transaction will need to use a specific `locktime`
-    ///   in order to spend an `OP_CLTV` branch.
-    /// * If fragments `2` and `3` are used, the transaction will need both.
-    ///
-    /// When the spending policy is represented as a tree (see
-    /// [`Wallet::policies`](super::Wallet::policies)), every node
-    /// is assigned a unique identifier that can be used in the policy path to specify which of
-    /// the node's children the user intends to satisfy: for instance, assuming the `thresh()`
-    /// root node of this example has an id of `aabbccdd`, the policy path map would look like:
-    ///
-    /// `{ "aabbccdd" => [0, 1] }`
-    ///
-    /// where the key is the node's id, and the value is a list of the children that should be
-    /// used, in no particular order.
-    ///
-    /// If a particularly complex descriptor has multiple ambiguous thresholds in its structure,
-    /// multiple entries can be added to the map, one for each node that requires an explicit path.
-    ///
-    /// ```
-    /// # #![allow(deprecated)]
-    /// # use std::str::FromStr;
-    /// # use std::collections::BTreeMap;
-    /// # use bitcoin::*;
-    /// # use bdk_wallet::*;
-    /// # let to_address =
-    /// Address::from_str("2N4eQYCbKUHCCTUjBJeHcJp9ok6J2GZsTDt")
-    ///     .unwrap()
-    ///     .assume_checked();
-    /// # let mut wallet = doctest_wallet!();
-    /// let mut path = BTreeMap::new();
-    /// path.insert("aabbccdd".to_string(), vec![0, 1]);
-    ///
-    /// let builder = wallet
-    ///     .build_tx()
-    ///     .add_recipient(to_address.script_pubkey(), Amount::from_sat(50_000))
-    ///     .policy_path(path, KeychainKind::External);
-    ///
-    /// # Ok::<(), anyhow::Error>(())
-    /// ```
-    #[deprecated(since = "3.2.0", note = "use set_condition instead")]
-    pub fn policy_path(
-        &mut self,
-        policy_path: BTreeMap<String, Vec<usize>>,
-        keychain: KeychainKind,
-    ) -> &mut Self {
-        let to_update = match keychain {
-            KeychainKind::Internal => &mut self.params.internal_policy_path,
-            KeychainKind::External => &mut self.params.external_policy_path,
-        };
-
-        *to_update = Some(policy_path);
         self
     }
 
@@ -1038,6 +1058,157 @@ mod test {
     use bitcoin::hex::FromHex;
 
     use super::*;
+
+    #[test]
+    fn test_condition_merge_empty() {
+        let empty = Condition::default();
+        assert_eq!(empty.merge(&empty), Ok(empty));
+
+        for condition in [
+            Condition {
+                csv: Some(Sequence::from_height(6)),
+                timelock: None,
+            },
+            Condition {
+                csv: None,
+                timelock: Some(absolute::LockTime::from_height(100).unwrap()),
+            },
+            Condition {
+                csv: Some(Sequence::from_height(6)),
+                timelock: Some(absolute::LockTime::from_height(100).unwrap()),
+            },
+        ] {
+            assert_eq!(empty.merge(&condition), Ok(condition));
+            assert_eq!(condition.merge(&empty), Ok(condition));
+        }
+    }
+
+    #[test]
+    fn test_condition_merge_same_units() {
+        for (a, b) in [
+            (
+                Condition {
+                    csv: Some(Sequence::from_height(6)),
+                    timelock: Some(absolute::LockTime::from_height(100).unwrap()),
+                },
+                Condition {
+                    csv: Some(Sequence::from_height(10)),
+                    timelock: Some(absolute::LockTime::from_height(200).unwrap()),
+                },
+            ),
+            (
+                Condition {
+                    csv: Some(Sequence::from_512_second_intervals(6)),
+                    timelock: Some(absolute::LockTime::from_time(500_000_100).unwrap()),
+                },
+                Condition {
+                    csv: Some(Sequence::from_512_second_intervals(10)),
+                    timelock: Some(absolute::LockTime::from_time(500_000_200).unwrap()),
+                },
+            ),
+        ] {
+            assert_eq!(a.merge(&b), Ok(b));
+            assert_eq!(b.merge(&a), Ok(b));
+            assert_eq!(a.merge(&a), Ok(a));
+        }
+    }
+
+    #[test]
+    fn test_condition_merge_csv_and_cltv() {
+        let csv = Condition {
+            csv: Some(Sequence::from_height(6)),
+            timelock: None,
+        };
+        // CSV and CLTV can use different units: they are independent requirements.
+        let cltv = Condition {
+            csv: None,
+            timelock: Some(absolute::LockTime::from_time(500_000_100).unwrap()),
+        };
+        let combined = Condition {
+            csv: csv.csv,
+            timelock: cltv.timelock,
+        };
+        assert_eq!(csv.merge(&cltv), Ok(combined));
+        assert_eq!(cltv.merge(&csv), Ok(combined));
+    }
+
+    #[test]
+    fn test_condition_merge_mixed_csv_units() {
+        let blocks = Condition {
+            csv: Some(Sequence::from_height(6)),
+            timelock: None,
+        };
+        let time = Condition {
+            csv: Some(Sequence::from_512_second_intervals(1)),
+            timelock: None,
+        };
+        assert_eq!(blocks.merge(&time), Err(MixedTimelockUnits));
+        assert_eq!(time.merge(&blocks), Err(MixedTimelockUnits));
+    }
+
+    #[test]
+    fn test_condition_merge_mixed_cltv_units() {
+        let blocks = Condition {
+            csv: None,
+            timelock: Some(absolute::LockTime::from_height(100).unwrap()),
+        };
+        let time = Condition {
+            csv: None,
+            timelock: Some(absolute::LockTime::from_time(500_000_001).unwrap()),
+        };
+        assert_eq!(blocks.merge(&time), Err(MixedTimelockUnits));
+        assert_eq!(time.merge(&blocks), Err(MixedTimelockUnits));
+    }
+
+    #[test]
+    fn test_timelock_condition_multisig() {
+        let descriptor: ExtendedDescriptor = concat!(
+            "wsh(multi(1,",
+            "031b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f,",
+            "024d4b6cd1361032ca9bd2aeb9d900aa4d45d9ead80ac9423374c451a7254d0766))",
+        )
+        .parse()
+        .unwrap();
+
+        assert_eq!(timelock_condition(&descriptor), Some(Condition::default()));
+    }
+
+    #[test]
+    fn test_timelock_condition_multiple_height_timelocks() {
+        let descriptor: ExtendedDescriptor = concat!(
+            "sh(and_v(v:pk(",
+            "031b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f",
+            "),and_v(v:after(100),after(200))))",
+        )
+        .parse()
+        .unwrap();
+
+        let condition = timelock_condition(&descriptor).unwrap();
+        assert_eq!(
+            condition.timelock,
+            Some(absolute::LockTime::from_height(200).unwrap())
+        );
+        assert_eq!(condition.csv, None);
+    }
+
+    #[test]
+    fn test_timelock_condition_multiple_timestamp_timelocks() {
+        let descriptor: ExtendedDescriptor = concat!(
+            "sh(and_v(v:pk(",
+            "024d4b6cd1361032ca9bd2aeb9d900aa4d45d9ead80ac9423374c451a7254d0766",
+            "),and_v(v:after(500000100),after(500000200))))",
+        )
+        .parse()
+        .unwrap();
+
+        let condition = timelock_condition(&descriptor).unwrap();
+        assert_eq!(
+            condition.timelock,
+            Some(absolute::LockTime::from_time(500000200).unwrap())
+        );
+        assert_eq!(condition.csv, None);
+    }
+
     #[test]
     fn test_output_ordering_untouched() {
         let original_tx = ordering_test_tx!();

@@ -1,81 +1,14 @@
 use bdk_wallet::bitcoin::bip32::Xpriv;
 use bdk_wallet::bitcoin::psbt::SigningKeys;
-use bdk_wallet::psbt::PsbtUtils;
-use bdk_wallet::signer::SignerError;
 use bdk_wallet::test_utils::*;
-use bdk_wallet::{KeychainKind, SignOptions, psbt};
-use bitcoin::{Amount, FeeRate, Psbt, Script, TxIn, Witness};
+use bdk_wallet::{KeychainKind, psbt};
+use bitcoin::{Amount, FeeRate, Psbt, TxIn, Witness};
 use core::str::FromStr;
 use miniscript::descriptor::KeyMapWrapper;
 use miniscript::psbt::PsbtExt;
 
 mod common;
-use common::{keymap_from_descriptor, signers_from_descriptor};
-
-// from bip 174
-const PSBT_STR: &str = "cHNidP8BAKACAAAAAqsJSaCMWvfEm4IS9Bfi8Vqz9cM9zxU4IagTn4d6W3vkAAAAAAD+////qwlJoIxa98SbghL0F+LxWrP1wz3PFTghqBOfh3pbe+QBAAAAAP7///8CYDvqCwAAAAAZdqkUdopAu9dAy+gdmI5x3ipNXHE5ax2IrI4kAAAAAAAAGXapFG9GILVT+glechue4O/p+gOcykWXiKwAAAAAAAEHakcwRAIgR1lmF5fAGwNrJZKJSGhiGDR9iYZLcZ4ff89X0eURZYcCIFMJ6r9Wqk2Ikf/REf3xM286KdqGbX+EhtdVRs7tr5MZASEDXNxh/HupccC1AaZGoqg7ECy0OIEhfKaC3Ibi1z+ogpIAAQEgAOH1BQAAAAAXqRQ1RebjO4MsRwUPJNPuuTycA5SLx4cBBBYAFIXRNTfy4mVAWjTbr6nj3aAfuCMIAAAA";
-
-#[test]
-#[should_panic(expected = "InputIndexOutOfRange")]
-fn test_psbt_malformed_psbt_input_legacy() {
-    let psbt_bip = Psbt::from_str(PSBT_STR).unwrap();
-    let desc = get_test_wpkh();
-    let (mut wallet, _) = get_funded_wallet_single(desc);
-    let send_to = wallet.peek_address(KeychainKind::External, 0);
-    let mut builder = wallet.build_tx();
-    builder.add_recipient(send_to.script_pubkey(), Amount::from_sat(10_000));
-    let mut psbt = builder.finish().unwrap();
-    psbt.inputs.push(psbt_bip.inputs[0].clone());
-    let options = SignOptions {
-        trust_witness_utxo: true,
-        ..Default::default()
-    };
-    let signers = signers_from_descriptor(&wallet, desc);
-    let _ = wallet
-        .sign_with_signers(&mut psbt, &[&signers], options)
-        .unwrap();
-}
-
-#[test]
-#[should_panic(expected = "InputIndexOutOfRange")]
-fn test_psbt_malformed_psbt_input_segwit() {
-    let psbt_bip = Psbt::from_str(PSBT_STR).unwrap();
-    let descriptor = get_test_wpkh();
-    let (mut wallet, _) = get_funded_wallet_single(descriptor);
-    let send_to = wallet.peek_address(KeychainKind::External, 0);
-    let mut builder = wallet.build_tx();
-    builder.add_recipient(send_to.script_pubkey(), Amount::from_sat(10_000));
-    let mut psbt = builder.finish().unwrap();
-    psbt.inputs.push(psbt_bip.inputs[1].clone());
-    let options = SignOptions {
-        trust_witness_utxo: true,
-        ..Default::default()
-    };
-    let signers = signers_from_descriptor(&wallet, descriptor);
-    let _ = wallet
-        .sign_with_signers(&mut psbt, &[&signers], options)
-        .unwrap();
-}
-
-#[test]
-#[should_panic(expected = "InputIndexOutOfRange")]
-fn test_psbt_malformed_tx_input() {
-    let descriptor = get_test_wpkh();
-    let (mut wallet, _) = get_funded_wallet_single(descriptor);
-    let send_to = wallet.peek_address(KeychainKind::External, 0);
-    let mut builder = wallet.build_tx();
-    builder.add_recipient(send_to.script_pubkey(), Amount::from_sat(10_000));
-    let mut psbt = builder.finish().unwrap();
-    psbt.unsigned_tx.input.push(TxIn::default());
-    let options = SignOptions {
-        trust_witness_utxo: true,
-        ..Default::default()
-    };
-    let signers = signers_from_descriptor(&wallet, descriptor);
-    let _ = wallet
-        .sign_with_signers(&mut psbt, &[&signers], options)
-        .unwrap();
-}
+use common::keymap_from_descriptor;
 
 #[test]
 fn test_psbt_sign_with_finalized() {
@@ -106,197 +39,21 @@ fn test_psbt_sign_with_finalized() {
         ..Default::default()
     });
 
-    let external_signers = signers_from_descriptor(&wallet, descriptor);
-    let internal_signers = signers_from_descriptor(&wallet, change_descriptor);
-    let _ = wallet
-        .sign_with_signers(
-            &mut psbt,
-            &[&external_signers, &internal_signers],
-            SignOptions::default(),
-        )
-        .unwrap();
-}
+    let mut keymap = keymap_from_descriptor(&wallet, descriptor);
+    keymap.extend(keymap_from_descriptor(&wallet, change_descriptor));
+    let signer = KeyMapWrapper::from(keymap);
+    let foreign_index = psbt.inputs.len() - 1;
+    let foreign_input_before = psbt.inputs[foreign_index].clone();
 
-/// Rejects mismatched witness_utxo and non_witness_utxo fields.
-#[test]
-fn test_sign_with_signers_rejects_mismatched_utxo() {
-    let descriptor = get_test_wpkh();
-    let (mut wallet, _) = get_funded_wallet_single(descriptor);
-    receive_output_in_latest_block(&mut wallet, Amount::from_sat(50_000));
-    let recipient = wallet.next_unused_address(KeychainKind::External);
-    let mut builder = wallet.build_tx();
-    builder.drain_to(recipient.script_pubkey()).drain_wallet();
-    let psbt = builder.finish().unwrap();
-    assert_eq!(psbt.inputs.len(), 2);
+    psbt.sign(&signer, wallet.secp_ctx()).unwrap();
 
-    let signers = signers_from_descriptor(&wallet, descriptor);
-    for index in 0..psbt.inputs.len() {
-        let mut mismatched = psbt.clone();
-        mismatched.inputs[index]
-            .witness_utxo
-            .as_mut()
-            .unwrap()
-            .value -= Amount::from_sat(20_000);
-        assert_eq!(mismatched.fee_amount(), None);
-        let result = wallet.sign_with_signers(&mut mismatched, &[&signers], SignOptions::default());
-        assert!(matches!(result, Err(SignerError::InvalidNonWitnessUtxo)));
-        assert!(
-            mismatched
-                .inputs
-                .iter()
-                .all(|input| input.partial_sigs.is_empty()
-                    && input.final_script_sig.is_none()
-                    && input.final_script_witness.is_none())
-        );
-    }
-}
-
-/// Signing mixed inputs rejects missing or incorrect prevout data.
-#[test]
-fn test_psbt_sign_mixed_taproot_and_segwit_v0() {
-    let (_, xpriv_change) = get_test_wpkh_and_change_desc();
-    for (descriptor, change_descriptor) in [
-        (get_test_tr_single_sig_xprv(), xpriv_change),
-        (get_test_tr_single_sig(), get_test_wpkh()),
-    ] {
-        let (mut wallet, _) = get_funded_wallet(descriptor, change_descriptor);
-        let change_address = wallet.next_unused_address(KeychainKind::Internal).address;
-        receive_output_to_address(
-            &mut wallet,
-            change_address,
-            Amount::from_sat(30_000),
-            ReceiveTo::Mempool(0),
-        );
-        let recipient = wallet.next_unused_address(KeychainKind::External);
-        let mut builder = wallet.build_tx();
-        builder.drain_to(recipient.script_pubkey()).drain_wallet();
-        let psbt = builder.finish().unwrap();
-        assert_eq!(psbt.inputs.len(), 2);
-        let input_index = |is_type: fn(&Script) -> bool| {
-            psbt.inputs
-                .iter()
-                .position(|input| is_type(&input.witness_utxo.as_ref().unwrap().script_pubkey))
-                .unwrap()
-        };
-        let taproot_index = input_index(Script::is_p2tr);
-        let segwit_v0_index = input_index(Script::is_p2wpkh);
-        // The wallet only adds the full parent transaction to the segwit v0 input.
-        assert!(psbt.inputs[taproot_index].non_witness_utxo.is_none());
-        assert!(psbt.inputs[segwit_v0_index].non_witness_utxo.is_some());
-
-        let external = signers_from_descriptor(&wallet, descriptor);
-        let internal = signers_from_descriptor(&wallet, change_descriptor);
-        let signers = [&external, &internal];
-
-        let mut missing = psbt.clone();
-        missing.inputs[segwit_v0_index].non_witness_utxo = None;
-        assert!(matches!(
-            wallet.sign_with_signers(&mut missing, &signers, SignOptions::default()),
-            Err(SignerError::MissingNonWitnessUtxo)
-        ));
-        assert!(
-            missing
-                .inputs
-                .iter()
-                .all(|input| input.partial_sigs.is_empty() && input.tap_key_sig.is_none())
-        );
-
-        let mut understated = psbt.clone();
-        understated.inputs[taproot_index]
-            .witness_utxo
-            .as_mut()
-            .unwrap()
-            .value -= Amount::from_sat(20_000);
-        assert!(matches!(
-            wallet.sign_with_signers(&mut understated, &signers, SignOptions::default()),
-            Err(SignerError::InvalidNonWitnessUtxo)
-        ));
-        assert!(
-            understated
-                .inputs
-                .iter()
-                .all(|input| input.partial_sigs.is_empty() && input.tap_key_sig.is_none())
-        );
-
-        // A floating txout cannot authenticate the amount without its full transaction.
-        let (mut unknown, _) = get_funded_wallet_single(get_test_pkh());
-        unknown.insert_txout(
-            psbt.unsigned_tx.input[taproot_index].previous_output,
-            psbt.inputs[taproot_index].witness_utxo.clone().unwrap(),
-        );
-        let mut floating = psbt.clone();
-        assert!(matches!(
-            unknown.sign_with_signers(&mut floating, &signers, SignOptions::default()),
-            Err(SignerError::MissingNonWitnessUtxo)
-        ));
-        assert!(
-            floating
-                .inputs
-                .iter()
-                .all(|input| input.partial_sigs.is_empty() && input.tap_key_sig.is_none())
-        );
-
-        let mut signed = psbt;
-        assert!(
-            wallet
-                .sign_with_signers(&mut signed, &signers, SignOptions::default())
-                .unwrap()
-        );
-    }
-}
-
-/// Taproot ANYONECANPAY signing verifies all input amounts before producing signatures.
-#[test]
-fn test_psbt_taproot_anyone_can_pay_authenticates_amounts() {
-    use bitcoin::sighash::TapSighashType;
-
-    let descriptor = get_test_tr_single_sig_xprv();
-    let (mut wallet, _) = get_funded_wallet_single(descriptor);
-    receive_output_in_latest_block(&mut wallet, Amount::from_sat(30_000));
-    let recipient = wallet.next_unused_address(KeychainKind::External);
-    let mut builder = wallet.build_tx();
-    builder
-        .drain_to(recipient.script_pubkey())
-        .drain_wallet()
-        .sighash(TapSighashType::AllPlusAnyoneCanPay.into());
-    let psbt = builder.finish().unwrap();
-    assert_eq!(psbt.inputs.len(), 2);
     assert!(
-        psbt.inputs
+        psbt.inputs[..foreign_index]
             .iter()
-            .all(|input| input.non_witness_utxo.is_none())
+            .all(|input| !input.partial_sigs.is_empty())
     );
-    let signers = signers_from_descriptor(&wallet, descriptor);
-    let options = SignOptions {
-        allow_all_sighashes: true,
-        ..Default::default()
-    };
-
-    for index in 0..psbt.inputs.len() {
-        let mut understated = psbt.clone();
-        understated.inputs[index]
-            .witness_utxo
-            .as_mut()
-            .unwrap()
-            .value -= Amount::from_sat(20_000);
-        assert!(matches!(
-            wallet.sign_with_signers(&mut understated, &[&signers], options.clone()),
-            Err(SignerError::InvalidNonWitnessUtxo)
-        ));
-        assert!(
-            understated
-                .inputs
-                .iter()
-                .all(|input| input.tap_key_sig.is_none())
-        );
-    }
-
-    let mut signed = psbt;
-    assert!(
-        wallet
-            .sign_with_signers(&mut signed, &[&signers], options)
-            .unwrap()
-    );
+    assert!(wallet.finalize_psbt(&mut psbt).unwrap());
+    assert_eq!(psbt.inputs[foreign_index], foreign_input_before);
 }
 
 #[test]
@@ -319,7 +76,7 @@ fn test_psbt_fee_rate_with_witness_utxo() {
 
     let signer = KeyMapWrapper::from(keymap_from_descriptor(&wallet, descriptor));
     psbt.sign(&signer, wallet.secp_ctx()).unwrap();
-    let finalized = wallet.finalize_psbt(&mut psbt, Default::default()).unwrap();
+    let finalized = wallet.finalize_psbt(&mut psbt).unwrap();
     assert!(finalized);
 
     let finalized_fee_rate = psbt.fee_rate().unwrap();
@@ -346,7 +103,7 @@ fn test_psbt_fee_rate_with_nonwitness_utxo() {
 
     let signer = KeyMapWrapper::from(keymap_from_descriptor(&wallet, descriptor));
     psbt.sign(&signer, wallet.secp_ctx()).unwrap();
-    let finalized = wallet.finalize_psbt(&mut psbt, Default::default()).unwrap();
+    let finalized = wallet.finalize_psbt(&mut psbt).unwrap();
     assert!(finalized);
 
     let finalized_fee_rate = psbt.fee_rate().unwrap();
@@ -386,77 +143,6 @@ fn test_psbt_fee_rate_with_missing_txout() {
     pkh_psbt.inputs[0].non_witness_utxo = None;
     assert!(pkh_psbt.fee_amount().is_none());
     assert!(pkh_psbt.fee_rate().is_none());
-}
-
-#[test]
-fn test_psbt_multiple_internalkey_signers() {
-    use bdk_wallet::KeychainKind;
-    use bdk_wallet::signer::{SignerContext, SignerOrdering, SignerWrapper, TransactionSigner};
-    use bitcoin::key::TapTweak;
-    use bitcoin::secp256k1::{Keypair, Message, Secp256k1, XOnlyPublicKey, schnorr};
-    use bitcoin::sighash::{Prevouts, SighashCache, TapSighashType};
-    use bitcoin::{PrivateKey, TxOut};
-    use std::sync::Arc;
-
-    let secp = Secp256k1::new();
-    let wif = "cNJmN3fH9DDbDt131fQNkVakkpzawJBSeybCUNmP1BovpmGQ45xG";
-    let desc = format!("tr({wif})");
-    let prv = PrivateKey::from_wif(wif).unwrap();
-    let keypair = Keypair::from_secret_key(&secp, &prv.inner);
-
-    let change_desc = "tr(cVpPVruEDdmutPzisEsYvtST1usBR3ntr8pXSyt6D2YYqXRyPcFW)";
-    let (mut wallet, _) = get_funded_wallet(&desc, change_desc);
-    let to_spend = wallet.balance().total();
-    let send_to = wallet.peek_address(KeychainKind::External, 0);
-    let mut builder = wallet.build_tx();
-    builder.drain_to(send_to.script_pubkey()).drain_wallet();
-    let mut psbt = builder.finish().unwrap();
-    let unsigned_tx = psbt.unsigned_tx.clone();
-    let mut signers = signers_from_descriptor(&wallet, desc.as_str());
-
-    // Adds a signer for the wrong internal key, bdk should not use this key to sign
-    let wrong_signer: Arc<dyn TransactionSigner> = Arc::new(SignerWrapper::new(
-        PrivateKey::from_wif("5J5PZqvCe1uThJ3FZeUUFLCh2FuK9pZhtEK4MzhNmugqTmxCdwE").unwrap(),
-        SignerContext::Tap {
-            is_internal_key: true,
-        },
-    ));
-    signers.add_external(
-        wrong_signer.id(wallet.secp_ctx()),
-        // A signer ordering lower than 100, bdk will use this signer first
-        SignerOrdering(0),
-        wrong_signer,
-    );
-    let finalized = wallet
-        .sign_with_signers(&mut psbt, &[&signers], SignOptions::default())
-        .unwrap();
-    assert!(finalized);
-
-    // To verify, we need the signature, message, and pubkey
-    let witness = psbt.inputs[0].final_script_witness.as_ref().unwrap();
-    assert!(!witness.is_empty());
-    let signature = schnorr::Signature::from_slice(witness.iter().next().unwrap()).unwrap();
-
-    // the prevout we're spending
-    let prevouts = &[TxOut {
-        script_pubkey: send_to.script_pubkey(),
-        value: to_spend,
-    }];
-    let prevouts = Prevouts::All(prevouts);
-    let input_index = 0;
-    let mut sighash_cache = SighashCache::new(unsigned_tx);
-    let sighash = sighash_cache
-        .taproot_key_spend_signature_hash(input_index, &prevouts, TapSighashType::Default)
-        .unwrap();
-    let message = Message::from(sighash);
-
-    // add tweak. this was taken from `signer::sign_psbt_schnorr`
-    let keypair = keypair.tap_tweak(&secp, None).to_keypair();
-    let (xonlykey, _parity) = XOnlyPublicKey::from_keypair(&keypair);
-
-    // Must verify if we used the correct key to sign
-    let verify_res = secp.verify_schnorr(&signature, &message, &xonlykey);
-    assert!(verify_res.is_ok(), "The wrong internal key was used");
 }
 
 // wpkh PSBT with bip32_derivation populated, derived from

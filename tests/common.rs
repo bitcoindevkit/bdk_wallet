@@ -2,9 +2,7 @@
 
 use bdk_wallet::Wallet;
 use bdk_wallet::descriptor::IntoWalletDescriptor;
-use bdk_wallet::signer::SignersContainer;
-use bitcoin::secp256k1::Secp256k1;
-use miniscript::{Descriptor, DescriptorPublicKey, descriptor::KeyMap};
+use miniscript::descriptor::KeyMap;
 
 /// The satisfaction size of P2WPKH is 108 WU =
 /// 1 (elements in witness) + 1 (size) + 72 (signature + sighash) + 1 (size) + 33 (pubkey).
@@ -14,21 +12,6 @@ pub const P2WPKH_FAKE_SIG_SIZE: usize = 72;
 /// The satisfaction size of P2PKH is 107 =
 /// 1 (OP_PUSH) + 72 (signature + sighash) + 1 (OP_PUSH) + 33 (pubkey).
 pub const P2PKH_FAKE_SCRIPT_SIG_SIZE: usize = 107;
-
-pub fn parse_descriptor(s: &str) -> (Descriptor<DescriptorPublicKey>, KeyMap) {
-    <Descriptor<DescriptorPublicKey>>::parse_descriptor(&Secp256k1::new(), s)
-        .expect("failed to parse descriptor")
-}
-
-pub fn signers_from_descriptor(
-    wallet: &Wallet,
-    descriptor: impl IntoWalletDescriptor,
-) -> SignersContainer {
-    let (descriptor, keymap) = descriptor
-        .into_wallet_descriptor(wallet.secp_ctx(), wallet.network().into())
-        .expect("failed to parse signing descriptor");
-    SignersContainer::build(keymap, &descriptor, wallet.secp_ctx())
-}
 
 pub fn keymap_from_descriptor(wallet: &Wallet, descriptor: impl IntoWalletDescriptor) -> KeyMap {
     let (_, keymap) = descriptor
