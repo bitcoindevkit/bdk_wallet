@@ -72,6 +72,10 @@ required-features = ["compiler"]
 name = "electrum"
 
 [[example]]
+name = "signing_checks"
+test = true
+
+[[example]]
 name = "esplora_async"
 
 [[example]]
