@@ -12,8 +12,9 @@ use bitcoin::{
 };
 use miniscript::plan::Assets;
 
-use crate::TxOrdering;
 use crate::collections::{HashMap, HashSet};
+use crate::error::CreatePsbtError;
+use crate::{IsDust, TxOrdering};
 
 /// Marker type representing the PSBT creation state.
 #[derive(Debug)]
@@ -33,6 +34,8 @@ pub struct PsbtParams<C> {
     pub(crate) must_spend: Vec<MustSpend>,
     /// List of recipient script/amount pairs.
     pub(crate) recipients: Vec<(ScriptBuf, Amount)>,
+    /// Whether to allow recipient amounts below the dust limit.
+    pub(crate) allow_dust: bool,
     /// Optional script or descriptor designated for change.
     pub(crate) change_script: Option<ChangeScript>,
     /// Optional assets for creating a spend plan.
@@ -84,6 +87,7 @@ impl Default for PsbtParams<CreateTx> {
             must_spend: Default::default(),
             assets: Default::default(),
             recipients: Default::default(),
+            allow_dust: Default::default(),
             change_script: Default::default(),
             fee_rate: FeeRate::BROADCAST_MIN,
             coin_selection: Default::default(),
@@ -227,6 +231,7 @@ impl PsbtParams<CreateTx> {
             must_spend: self.must_spend,
             assets: self.assets,
             recipients: self.recipients,
+            allow_dust: self.allow_dust,
             change_script: self.change_script,
             fee_rate: self.fee_rate,
             coin_selection: self.coin_selection,
@@ -310,6 +315,38 @@ impl<C> PsbtParams<C> {
         self.recipients
             .extend(recipients.into_iter().map(|(s, amt)| (s.into(), amt)));
         self
+    }
+
+    /// Set whether to allow recipient amounts below the dust limit.
+    ///
+    /// By default, creating the PSBT fails with [`CreatePsbtError::OutputBelowDustLimit`] if a
+    /// recipient's amount is below the dust limit of its script, as given by
+    /// [`Script::minimal_non_dust`]. `OP_RETURN` outputs have a dust limit of zero, so they are
+    /// never rejected.
+    ///
+    /// **Note**: by skipping the dust limit check you may end up with a transaction that is
+    /// non-standard.
+    ///
+    /// [`Script::minimal_non_dust`]: bitcoin::Script::minimal_non_dust
+    pub fn allow_dust(&mut self, allow_dust: bool) -> &mut Self {
+        self.allow_dust = allow_dust;
+        self
+    }
+
+    /// Returns [`CreatePsbtError::OutputBelowDustLimit`] with the index of the first recipient
+    /// whose amount is below the dust limit of its script, unless `allow_dust` is set.
+    pub(crate) fn check_recipients(&self) -> Result<(), CreatePsbtError> {
+        if self.allow_dust {
+            return Ok(());
+        }
+        match self
+            .recipients
+            .iter()
+            .position(|(script, value)| value.is_dust(script))
+        {
+            Some(index) => Err(CreatePsbtError::OutputBelowDustLimit(index)),
+            None => Ok(()),
+        }
     }
 
     /// Set the transaction `nLockTime`.

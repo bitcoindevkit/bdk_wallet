@@ -3211,7 +3211,7 @@ impl Wallet {
     /// # let mut wallet = bdk_wallet::doctest_wallet!();
     /// # let outpoint = OutPoint::null();
     /// # let address = Address::from_str("bcrt1q3qtze4ys45tgdvguj66zrk4fu6hq3a3v9pfly5").unwrap().assume_checked();
-    /// # let amount = Amount::ZERO;
+    /// # let amount = Amount::from_sat(50_000);
     /// let mut params = PsbtParams::default();
     /// params
     ///     .add_utxos(&[outpoint])
@@ -3228,6 +3228,7 @@ impl Wallet {
     /// A [`CreatePsbtError`] will be thrown if any of the following occurs
     ///
     /// - A manually selected input is missing from the wallet, or could not be planned
+    /// - A recipient's amount is below the dust limit, unless [`PsbtParams::allow_dust`] is set
     /// - The input value is insufficient to fund the outputs
     /// - Failure to complete coin selection
     /// - Failure to create or update the PSBT.
@@ -3279,6 +3280,7 @@ impl Wallet {
         {
             return Err(CreatePsbtError::NoRecipients);
         }
+        params.check_recipients()?;
         let (change_info, change_script) = params
             .change_script
             .take()
@@ -3470,6 +3472,7 @@ impl Wallet {
     /// - An original transaction is already confirmed
     /// - An original transaction is missing from the wallet
     /// - Failure to calculate the [fee](Wallet::calculate_fee) of an original transaction
+    /// - A recipient's amount is below the dust limit, unless [`PsbtParams::allow_dust`] is set
     /// - Failure to complete coin selection
     /// - Failure to create or update the PSBT.
     ///
@@ -3522,6 +3525,7 @@ impl Wallet {
         {
             return Err(ReplaceByFeeError::CreatePsbt(CreatePsbtError::NoRecipients));
         }
+        params.check_recipients()?;
         let (change_info, change_script) = params
             .change_script
             .take()

@@ -1211,3 +1211,124 @@ fn test_add_planned_psbt_input() -> anyhow::Result<()> {
 
     Ok(())
 }
+// A recipient below the dust limit is rejected by default. An amount equal to the limit is not
+// dust, so the error points at the second recipient, which is one sat below it.
+#[test]
+fn test_create_psbt_dust_recipient_error() {
+    let (mut wallet, _) = get_funded_wallet_wpkh();
+    let spk = wallet
+        .reveal_next_address(KeychainKind::External)
+        .script_pubkey();
+    let limit = spk.minimal_non_dust();
+
+    let mut params = PsbtParams::default();
+    params.add_recipients([(spk.clone(), limit), (spk, limit - Amount::from_sat(1))]);
+    let err = wallet.create_psbt(params).unwrap_err();
+    assert!(
+        matches!(err, CreatePsbtError::OutputBelowDustLimit(1)),
+        "expected OutputBelowDustLimit(1), got {err:?}"
+    );
+}
+
+// A zero-value recipient is rejected by default. With `allow_dust` set, it is kept in the
+// transaction with its amount unchanged.
+#[test]
+fn test_create_psbt_allow_dust() {
+    let (mut wallet, _) = get_funded_wallet_wpkh();
+    let spk = wallet
+        .reveal_next_address(KeychainKind::External)
+        .script_pubkey();
+
+    let mut params = PsbtParams::default();
+    params.add_recipients([(spk.clone(), Amount::ZERO)]);
+    let err = wallet.create_psbt(params).unwrap_err();
+    assert!(
+        matches!(err, CreatePsbtError::OutputBelowDustLimit(0)),
+        "expected OutputBelowDustLimit(0), got {err:?}"
+    );
+
+    let mut params = PsbtParams::default();
+    params
+        .add_recipients([(spk.clone(), Amount::ZERO)])
+        .allow_dust(true);
+    let (psbt, _) = wallet
+        .create_psbt(params)
+        .expect("allow_dust should permit a dust recipient");
+    assert!(
+        psbt.unsigned_tx.output.contains(&TxOut {
+            value: Amount::ZERO,
+            script_pubkey: spk,
+        }),
+        "the zero-value output should be in the transaction"
+    );
+}
+
+// `OP_RETURN` outputs have a dust limit of zero, so a zero-value data output does not need
+// `allow_dust`.
+#[test]
+fn test_create_psbt_op_return_not_dust() {
+    let (mut wallet, _) = get_funded_wallet_wpkh();
+    let spk = wallet
+        .reveal_next_address(KeychainKind::External)
+        .script_pubkey();
+    let op_return = ScriptBuf::new_op_return([0xb1, 0x0c]);
+
+    let mut params = PsbtParams::default();
+    params.add_recipients([
+        (spk, Amount::from_sat(10_000)),
+        (op_return.clone(), Amount::ZERO),
+    ]);
+    let (psbt, _) = wallet
+        .create_psbt(params)
+        .expect("an OP_RETURN output should not be treated as dust");
+    assert!(
+        psbt.unsigned_tx.output.contains(&TxOut {
+            value: Amount::ZERO,
+            script_pubkey: op_return,
+        }),
+        "the OP_RETURN output should be in the transaction"
+    );
+}
+
+// `replace_by_fee` applies the same dust check, and `allow_dust` set before `replace_txs`
+// carries over to the replacement.
+#[test]
+fn test_replace_by_fee_dust_recipient() {
+    use bdk_wallet::error::ReplaceByFeeError;
+
+    let (mut wallet, _) = get_funded_wallet_wpkh();
+    let spk = wallet
+        .reveal_next_address(KeychainKind::External)
+        .script_pubkey();
+    let mut params = PsbtParams::default();
+    params.add_recipients([(spk.clone(), Amount::from_sat(10_000))]);
+    let original_tx = wallet.create_psbt(params).unwrap().0.unsigned_tx;
+    insert_tx(&mut wallet, original_tx.clone());
+    let dust = spk.minimal_non_dust() - Amount::from_sat(1);
+
+    let mut params = PsbtParams::default().replace_txs([original_tx.clone()]);
+    params.add_recipients([(spk.clone(), dust)]);
+    let err = wallet.replace_by_fee(params).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            ReplaceByFeeError::CreatePsbt(CreatePsbtError::OutputBelowDustLimit(0))
+        ),
+        "expected OutputBelowDustLimit(0), got {err:?}"
+    );
+
+    let mut params = PsbtParams::default();
+    params.allow_dust(true);
+    let mut params = params.replace_txs([original_tx]);
+    params.add_recipients([(spk.clone(), dust)]);
+    let (psbt, _) = wallet
+        .replace_by_fee(params)
+        .expect("allow_dust should carry over to the replacement");
+    assert!(
+        psbt.unsigned_tx.output.contains(&TxOut {
+            value: dust,
+            script_pubkey: spk,
+        }),
+        "the dust output should be in the replacement"
+    );
+}
