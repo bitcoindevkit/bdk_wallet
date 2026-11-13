@@ -21,7 +21,7 @@
 //! ### Import from FullyNoded JSON
 //!
 //! ```
-//! # use std::str::FromStr;
+//! # use core::str::FromStr;
 //! # use bitcoin::*;
 //! # use bdk_wallet::export::*;
 //! # use bdk_wallet::*;
@@ -77,7 +77,7 @@
 //!
 //! ### Import from Caravan format
 //! ```
-//! # use std::str::FromStr;
+//! # use core::str::FromStr;
 //! # use bitcoin::*;
 //! # use bdk_wallet::export::*;
 //! # use bdk_wallet::*;

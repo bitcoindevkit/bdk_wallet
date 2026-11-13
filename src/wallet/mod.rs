@@ -1252,7 +1252,7 @@ impl Wallet {
     /// ## Example
     ///
     /// ```
-    /// # use std::str::FromStr;
+    /// # use core::str::FromStr;
     /// # use bitcoin::*;
     /// # use bdk_wallet::*;
     /// # use bdk_wallet::ChangeSet;
@@ -1643,7 +1643,7 @@ impl Wallet {
     /// # Example
     ///
     /// ```
-    /// # use std::str::FromStr;
+    /// # use core::str::FromStr;
     /// # use bitcoin::*;
     /// # use bdk_wallet::*;
     /// # use bdk_wallet::ChangeSet;
@@ -1831,7 +1831,7 @@ impl Wallet {
     /// ## Example
     ///
     /// ```
-    /// # use std::str::FromStr;
+    /// # use core::str::FromStr;
     /// # use bitcoin::*;
     /// # use bdk_wallet::*;
     /// # use bdk_wallet::ChangeSet;
@@ -3205,7 +3205,7 @@ impl Wallet {
     /// # Example
     ///
     /// ```rust,no_run
-    /// # use std::str::FromStr;
+    /// # use core::str::FromStr;
     /// # use bitcoin::{Amount, Address, FeeRate, OutPoint};
     /// # use bdk_wallet::psbt::{PsbtParams, SelectionStrategy};
     /// # let mut wallet = bdk_wallet::doctest_wallet!();

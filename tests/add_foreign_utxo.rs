@@ -1,4 +1,4 @@
-use std::str::FromStr;
+use core::str::FromStr;
 
 use bdk_wallet::KeychainKind;
 use bdk_wallet::psbt::PsbtUtils;

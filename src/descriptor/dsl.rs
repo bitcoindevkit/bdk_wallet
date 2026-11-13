@@ -424,7 +424,7 @@ macro_rules! apply_modifier {
 /// Signature plus timelock descriptor:
 ///
 /// ```
-/// # use std::str::FromStr;
+/// # use core::str::FromStr;
 /// let (my_descriptor, my_keys_map, network_kinds) = bdk_wallet::descriptor!(sh(wsh(and_v(v:pk("cVt4o7BGAig1UXywgGSmARhxMdzP5qvQsxKkSsc1XEkw3tDTQFpy"),older(50)))))?;
 /// # Ok::<(), Box<dyn core::error::Error>>(())
 /// ```
@@ -439,7 +439,7 @@ macro_rules! apply_modifier {
 /// They both produce the descriptor: `wsh(thresh(2,pk(...),s:pk(...),sndv:older(...)))`
 ///
 /// ```
-/// # use std::str::FromStr;
+/// # use core::str::FromStr;
 /// let my_key_1 = bitcoin::PublicKey::from_str(
 ///     "02e96fe52ef0e22d2f131dd425ce1893073a3c6ad20e8cac36726393dfb4856a4c",
 /// )?;
@@ -472,7 +472,7 @@ macro_rules! apply_modifier {
 /// Simple 2-of-2 multi-signature, equivalent to: `wsh(multi(2, ...))`
 ///
 /// ```
-/// # use std::str::FromStr;
+/// # use core::str::FromStr;
 /// let my_key_1 = bitcoin::PublicKey::from_str(
 ///     "02e96fe52ef0e22d2f131dd425ce1893073a3c6ad20e8cac36726393dfb4856a4c",
 /// )?;

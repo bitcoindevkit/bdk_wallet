@@ -24,7 +24,7 @@
 //! ## Example
 //!
 //! ```
-//! # use std::str::FromStr;
+//! # use core::str::FromStr;
 //! # use bitcoin::*;
 //! # use bdk_wallet::{self, ChangeSet, coin_selection::*, coin_selection};
 //! # use bdk_wallet::error::CreateTxError;

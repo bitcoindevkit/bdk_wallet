@@ -14,7 +14,7 @@
 //! ## Example
 //!
 //! ```
-//! # use std::str::FromStr;
+//! # use core::str::FromStr;
 //! # use bitcoin::*;
 //! # use bdk_wallet::*;
 //! # use bdk_wallet::ChangeSet;
@@ -326,7 +326,7 @@ impl<'a, Cs> TxBuilder<'a, Cs> {
     ///
     /// ```
     /// # #![allow(deprecated)]
-    /// # use std::str::FromStr;
+    /// # use core::str::FromStr;
     /// # use std::collections::BTreeMap;
     /// # use bitcoin::*;
     /// # use bdk_wallet::*;
@@ -806,7 +806,7 @@ impl<'a, Cs> TxBuilder<'a, Cs> {
     /// single address.
     ///
     /// ```
-    /// # use std::str::FromStr;
+    /// # use core::str::FromStr;
     /// # use bitcoin::*;
     /// # use bdk_wallet::*;
     /// # use bdk_wallet::ChangeSet;
