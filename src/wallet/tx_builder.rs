@@ -143,6 +143,8 @@ pub(crate) struct TxParams {
     pub(crate) bumping_fee: Option<PreviousFee>,
     pub(crate) current_height: Option<absolute::LockTime>,
     pub(crate) allow_dust: bool,
+    /// Whether to allow sending to an address owned by this wallet.
+    pub(crate) allow_self_payment: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -762,6 +764,18 @@ impl<'a, Cs> TxBuilder<'a, Cs> {
     /// non-standard.
     pub fn allow_dust(&mut self, allow_dust: bool) -> &mut Self {
         self.params.allow_dust = allow_dust;
+        self
+    }
+
+    /// Allow sending to an address owned by this wallet.
+    ///
+    /// By default, `create_tx` returns an error if a recipient output matches an address
+    /// owned by the wallet. This prevents accidental self-payments that could be mishandled
+    /// by `build_fee_bump` (which strips internal-keychain outputs as change). Call this
+    /// method to override that check; the self-payment outputs will be tracked so that
+    /// `build_fee_bump` preserves them.
+    pub fn allow_self_payment(&mut self) -> &mut Self {
+        self.params.allow_self_payment = true;
         self
     }
 
@@ -1450,6 +1464,7 @@ mod test {
             .unwrap()
             .add_recipient(send_to.script_pubkey(), Amount::from_sat(60_000))
             .fee_rate(FeeRate::from_sat_per_vb(1).unwrap())
+            .allow_self_payment()
             .ordering(crate::TxOrdering::Untouched);
         let psbt = tx_builder.finish().unwrap();
 

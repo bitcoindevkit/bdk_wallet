@@ -1,6 +1,7 @@
 //! Utilities for testing custom persistence backends for `bdk_wallet`
 
 use alloc::boxed::Box;
+use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
 use core::fmt;
 use core::str::FromStr;
@@ -358,6 +359,7 @@ fn get_changeset(tx1: Transaction) -> ChangeSet {
         tx_graph: tx_graph_changeset,
         indexer: keychain_txout_changeset,
         locked_outpoints: locked_outpoints_changeset,
+        self_payment_recipients: BTreeMap::new(),
     }
 }
 
@@ -418,6 +420,7 @@ fn get_changeset_two(tx2: Transaction) -> ChangeSet {
         tx_graph: tx_graph_changeset,
         indexer: keychain_txout_changeset,
         locked_outpoints: locked_outpoints_changeset,
+        self_payment_recipients: BTreeMap::new(),
     }
 }
 

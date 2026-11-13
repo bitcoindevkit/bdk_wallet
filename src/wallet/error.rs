@@ -217,6 +217,12 @@ pub enum CreateTxError {
     MissingNonWitnessUtxo(OutPoint),
     /// Miniscript PSBT error
     MiniscriptPsbt(MiniscriptPsbtError),
+    /// A recipient output matches an address owned by the wallet.
+    /// Call `TxBuilder::allow_self_payment()` to proceed.
+    PaymentToOwnAddress {
+        /// Index of the recipient that matches the wallet's own address.
+        index: usize,
+    },
 }
 
 impl fmt::Display for CreateTxError {
@@ -285,6 +291,13 @@ impl fmt::Display for CreateTxError {
             }
             CreateTxError::MiniscriptPsbt(err) => {
                 write!(f, "Miniscript PSBT error: {err}")
+            }
+            CreateTxError::PaymentToOwnAddress { index } => {
+                write!(
+                    f,
+                    "Recipient at index {index} matches an address owned by this wallet. \
+                     Call `TxBuilder::allow_self_payment()` to proceed"
+                )
             }
         }
     }

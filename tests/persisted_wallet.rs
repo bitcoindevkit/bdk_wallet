@@ -544,7 +544,9 @@ fn test_lock_outpoint_persist() -> anyhow::Result<()> {
         // Test: Locked outpoints are excluded from coin selection
         let addr = wallet.next_unused_address(KeychainKind::External).address;
         let mut tx_builder = wallet.build_tx();
-        tx_builder.add_recipient(addr, Amount::from_sat(10_000));
+        tx_builder
+            .add_recipient(addr, Amount::from_sat(10_000))
+            .allow_self_payment();
         let res = tx_builder.finish();
         assert!(
             matches!(

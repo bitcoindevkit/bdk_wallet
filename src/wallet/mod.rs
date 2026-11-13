@@ -63,7 +63,7 @@ pub mod signer;
 pub mod tx_builder;
 pub(crate) mod utils;
 
-use crate::collections::{BTreeMap, HashMap, HashSet};
+use crate::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use crate::descriptor::{
     DerivedDescriptor, DescriptorMeta, ExtendedDescriptor, ExtractPolicy, IntoWalletDescriptor,
     Policy, XKeyUtils, calc_checksum, check_wallet_descriptor, error::Error as DescriptorError,
@@ -142,6 +142,10 @@ pub struct Wallet {
     network: Network,
     secp: SecpCtx,
     locked_outpoints: HashSet<OutPoint>,
+    /// Tracks which transaction outputs were intentionally added as recipients
+    /// (not auto-generated change) when sending to the wallet's own addresses.
+    /// Used by `build_fee_bump` to distinguish self-payment recipients from change.
+    self_payment_recipients: BTreeMap<Txid, BTreeSet<u32>>,
 }
 
 /// An update to [`Wallet`].
@@ -399,6 +403,7 @@ impl Wallet {
             stage,
             secp,
             locked_outpoints,
+            self_payment_recipients: BTreeMap::new(),
         })
     }
 
@@ -601,6 +606,11 @@ impl Wallet {
             network,
             secp,
             locked_outpoints,
+            self_payment_recipients: changeset
+                .self_payment_recipients
+                .into_iter()
+                .filter_map(|(txid, opt)| opt.map(|set| (txid, set)))
+                .collect(),
         }))
     }
 
@@ -1479,6 +1489,19 @@ impl Wallet {
         let recipients = params.recipients.iter().map(|(r, v)| (r, *v));
 
         for (index, (script_pubkey, value)) in recipients.enumerate() {
+            // Check for self-payments — recipients that match the wallet's own addresses.
+            // This prevents accidental self-payments that build_fee_bump can mishandle
+            // by stripping internal-keychain outputs as change.
+            if !params.allow_self_payment
+                && self
+                    .tx_graph
+                    .index
+                    .index_of_spk(script_pubkey.clone())
+                    .is_some()
+            {
+                return Err(CreateTxError::PaymentToOwnAddress { index });
+            }
+
             if !params.allow_dust && value.is_dust(script_pubkey) && !script_pubkey.is_op_return() {
                 return Err(CreateTxError::OutputBelowDustLimit(index));
             }
@@ -1603,7 +1626,44 @@ impl Wallet {
         // Sort inputs/outputs according to the chosen algorithm.
         params.ordering.sort_tx_with_aux_rand(&mut tx, rng);
 
+        // Clone recipients before complete_transaction consumes params
+        let recipients_for_tracking = params.recipients.clone();
+
         let psbt = self.complete_transaction(tx, coin_selection.selected, params)?;
+
+        // Record self-payment recipient output indices for build_fee_bump.
+        // Only track outputs that were explicitly added as recipients (not
+        // auto-generated change) AND belong to the wallet's own keychains.
+        if !recipients_for_tracking.is_empty() {
+            let txid = psbt.unsigned_tx.compute_txid();
+            let mut self_payment_indices = BTreeSet::new();
+            for (output_index, txout) in psbt.unsigned_tx.output.iter().enumerate() {
+                // Check if this output is an explicit recipient (not change)
+                let is_recipient = recipients_for_tracking
+                    .iter()
+                    .any(|(spk, val)| *spk == txout.script_pubkey && *val == txout.value);
+                // Check if this output belongs to the wallet
+                if is_recipient
+                    && self
+                        .tx_graph
+                        .index
+                        .index_of_spk(txout.script_pubkey.clone())
+                        .is_some()
+                {
+                    self_payment_indices.insert(output_index as u32);
+                }
+            }
+            if !self_payment_indices.is_empty() {
+                self.self_payment_recipients
+                    .insert(txid, self_payment_indices.clone());
+                let mut sp_map = BTreeMap::new();
+                sp_map.insert(txid, Some(self_payment_indices));
+                self.stage.merge(ChangeSet {
+                    self_payment_recipients: sp_map,
+                    ..Default::default()
+                });
+            }
+        }
 
         // Recording changes to the change keychain.
         if let (Excess::Change { .. }, Some((keychain, index))) = (excess, drain_index) {
@@ -1786,9 +1846,14 @@ impl Wallet {
             .collect::<Result<_, _>>()?;
 
         if tx.output.len() > 1 {
+            let self_payment_info = self.self_payment_recipients.get(&txid);
+            let change_keychain = self.map_keychain(KeychainKind::Internal);
             let mut change_index = None;
             for (index, txout) in tx.output.iter().enumerate() {
-                let change_keychain = self.map_keychain(KeychainKind::Internal);
+                // Skip outputs tracked as self-payment recipients
+                if self_payment_info.is_some_and(|set| set.contains(&(index as u32))) {
+                    continue;
+                }
                 match txout_index.index_of_spk(txout.script_pubkey.clone()) {
                     Some((keychain, _)) if *keychain == change_keychain => {
                         change_index = Some(index)
@@ -2480,7 +2545,51 @@ impl Wallet {
         changeset.merge(index_changeset.into());
         changeset.merge(self.tx_graph.apply_update(update.tx_update).into());
         self.stage.merge(changeset);
+
+        // Clean up self-payment tracking for confirmed transactions
+        self.cleanup_confirmed_self_payments();
+
         Ok(())
+    }
+
+    /// Remove self-payment tracking entries for transactions that are now confirmed.
+    /// `build_fee_bump` only operates on unconfirmed transactions, so confirmed
+    /// entries are no longer needed.
+    fn cleanup_confirmed_self_payments(&mut self) {
+        if self.self_payment_recipients.is_empty() {
+            return;
+        }
+
+        let chain_tip = self.chain.tip().block_id();
+        let chain_positions: HashMap<Txid, ChainPosition<ConfirmationBlockTime>> = self
+            .tx_graph
+            .graph()
+            .list_canonical_txs(&self.chain, chain_tip, CanonicalizationParams::default())
+            .map(|c| (c.tx_node.txid, c.chain_position))
+            .collect();
+
+        let to_remove: Vec<Txid> = self
+            .self_payment_recipients
+            .keys()
+            .filter_map(|txid| {
+                chain_positions
+                    .get(txid)
+                    .filter(|pos| pos.is_confirmed())
+                    .map(|_| *txid)
+            })
+            .collect();
+
+        if !to_remove.is_empty() {
+            let mut sp_map = BTreeMap::new();
+            for txid in &to_remove {
+                self.self_payment_recipients.remove(txid);
+                sp_map.insert(*txid, None);
+            }
+            self.stage.merge(ChangeSet {
+                self_payment_recipients: sp_map,
+                ..Default::default()
+            });
+        }
     }
 
     /// Applies an update to the wallet, stages the changes, and returns events.
@@ -2824,6 +2933,7 @@ impl Wallet {
     /// [`apply_unconfirmed_txs`]: Wallet::apply_unconfirmed_txs
     /// [`start_sync_with_revealed_spks`]: Wallet::start_sync_with_revealed_spks
     pub fn apply_evicted_txs(&mut self, evicted_txs: impl IntoIterator<Item = (Txid, u64)>) {
+        let evicted_txs: Vec<(Txid, u64)> = evicted_txs.into_iter().collect();
         let chain = &self.chain;
         let canon_txids: Vec<Txid> = self
             .tx_graph
@@ -2838,11 +2948,36 @@ impl Wallet {
 
         let changeset = self.tx_graph.batch_insert_relevant_evicted_at(
             evicted_txs
-                .into_iter()
+                .iter()
+                .cloned()
                 .filter(|(txid, _)| canon_txids.contains(txid)),
         );
 
         self.stage.merge(changeset.into());
+
+        // Clean up self-payment tracking for evicted transactions
+        let to_remove: Vec<Txid> = self
+            .self_payment_recipients
+            .keys()
+            .filter(|txid| {
+                evicted_txs
+                    .iter()
+                    .any(|(evicted_txid, _)| evicted_txid == *txid)
+            })
+            .cloned()
+            .collect();
+
+        if !to_remove.is_empty() {
+            let mut sp_map = BTreeMap::new();
+            for txid in &to_remove {
+                self.self_payment_recipients.remove(txid);
+                sp_map.insert(*txid, None);
+            }
+            self.stage.merge(ChangeSet {
+                self_payment_recipients: sp_map,
+                ..Default::default()
+            });
+        }
     }
 
     /// Apply evictions of the given transaction IDs with their associated timestamps and returns
