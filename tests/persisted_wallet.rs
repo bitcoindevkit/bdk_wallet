@@ -56,14 +56,13 @@ fn wallet_is_persisted() -> anyhow::Result<()> {
         let cache_cmp = cache_cs
             .iter()
             .map(|(did, spks)| {
-                let kind: KeychainKind;
-                if did == &external_did {
-                    kind = KeychainKind::External;
+                let kind: KeychainKind = if did == &external_did {
+                    KeychainKind::External
                 } else if did == &internal_did {
-                    kind = KeychainKind::Internal;
+                    KeychainKind::Internal
                 } else {
                     unreachable!();
-                }
+                };
                 let spk_indices = spks.keys().copied().collect::<BTreeSet<u32>>();
                 (kind, spk_indices)
             })
