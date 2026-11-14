@@ -52,6 +52,7 @@ bdk_electrum = { version = "0.23.2" }
 bdk_esplora = { version = "0.22.1", features = ["async-https", "blocking-https", "tokio"] }
 bdk_tx = { version = "0.2.0" }
 bdk_wallet = { path = ".", features = ["rusqlite", "file_store", "test-utils"] }
+bip329 = "0.6"
 clap = { version = "4.5.60", features = ["derive", "env"] }
 ctrlc = "3.5.2"
 rand = "0.8"
@@ -88,3 +89,5 @@ required-features = ["bdk-tx"]
 name = "replace_by_fee"
 required-features = ["bdk-tx"]
 
+[[example]]
+name = "bip329_labels"
