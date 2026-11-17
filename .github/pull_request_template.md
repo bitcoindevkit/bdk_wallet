@@ -9,11 +9,6 @@
 <!-- In this section you can include notes directed to the reviewers, like explaining why some parts
 of the PR were done in a specific way -->
 
-### Changelog notice
-
-<!-- Notice the release manager should include in the release tag message changelog -->
-<!-- See https://keepachangelog.com/en/1.0.0/ for examples -->
-
 ### Before submitting
 
 - [ ] I followed the [contribution guidelines](https://github.com/bitcoindevkit/bdk_wallet/blob/master/CONTRIBUTING.md)
