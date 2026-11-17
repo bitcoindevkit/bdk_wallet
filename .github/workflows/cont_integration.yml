@@ -28,10 +28,11 @@ jobs:
       # The 'toolchain' argument on this action overrides the Rust compiler version set in rust-toolchain.toml
       # in order to test our MSRV.
       - name: Install Rust toolchain
-        uses: actions-rust-lang/setup-rust-toolchain@v1
+        uses: actions-rust-lang/setup-rust-toolchain@v2
         with:
           toolchain: 1.85 # MSRV
           cache: true
+          rustflags: "-D warnings"
       - name: Pin dependencies for MSRV
         run: ./ci/pin-msrv.sh
       - name: Build (no default features)
@@ -60,9 +61,10 @@ jobs:
       # This action will honor the Rust compiler version set in rust-toolchain.toml. We aim to keep it in sync with
       # Rust stable.
       - name: Install Rust toolchain
-        uses: actions-rust-lang/setup-rust-toolchain@v1
+        uses: actions-rust-lang/setup-rust-toolchain@v2
         with:
           cache: true
+          rustflags: "-D warnings"
       - name: Build (no default features)
         run: |
           cargo build --workspace --no-default-features --features miniscript/no-std,bdk_chain/hashbrown
@@ -83,9 +85,10 @@ jobs:
           persist-credentials: false
       # This action automatically reads and applies rust-toolchain.toml
       - name: Install Rust toolchain
-        uses: actions-rust-lang/setup-rust-toolchain@v1
+        uses: actions-rust-lang/setup-rust-toolchain@v2
         with:
           cache: true
+          rustflags: "-D warnings"
       - name: Check no-std
         # TODO "--target thumbv6m-none-eabi" should work but currently does not
         run: cargo check --no-default-features --features miniscript/no-std,bdk_chain/hashbrown
@@ -105,10 +108,11 @@ jobs:
           persist-credentials: false
       # This action automatically reads and applies rust-toolchain.toml
       - name: Install Rust toolchain
-        uses: actions-rust-lang/setup-rust-toolchain@v1
+        uses: actions-rust-lang/setup-rust-toolchain@v2
         with:
           cache: true
           target: wasm32-unknown-unknown
+          rustflags: "-D warnings"
       - name: Check WASM
         run: |
           rustup target add wasm32-unknown-unknown
@@ -124,7 +128,7 @@ jobs:
           persist-credentials: false
       # This action automatically reads and applies rust-toolchain.toml
       - name: Install Rust toolchain
-        uses: actions-rust-lang/setup-rust-toolchain@v1
+        uses: actions-rust-lang/setup-rust-toolchain@v2
         with:
           cache: true
       - name: Check fmt
@@ -142,9 +146,10 @@ jobs:
           persist-credentials: false
       # This action automatically reads and applies rust-toolchain.toml
       - name: Install Rust toolchain
-        uses: actions-rust-lang/setup-rust-toolchain@v1
+        uses: actions-rust-lang/setup-rust-toolchain@v2
         with:
           cache: true
+          rustflags: "-D warnings"
       - name: Clippy
         env:
           RUSTFLAGS: "-D warnings --cfg bdk_wallet_unstable"
@@ -160,9 +165,10 @@ jobs:
           persist-credentials: false
       # This action automatically reads and applies rust-toolchain.toml
       - name: Install Rust toolchain
-        uses: actions-rust-lang/setup-rust-toolchain@v1
+        uses: actions-rust-lang/setup-rust-toolchain@v2
         with:
           cache: true
+          rustflags: "-D warnings"
       - name: Check docs
         env: 
           RUSTDOCFLAGS: "-D warnings --cfg bdk_wallet_unstable"
