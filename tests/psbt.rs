@@ -299,6 +299,49 @@ fn test_psbt_taproot_anyone_can_pay_authenticates_amounts() {
     );
 }
 
+/// A missing `witness_utxo` on any Taproot ANYONECANPAY input must not leave signatures behind.
+#[test]
+fn test_psbt_taproot_anyone_can_pay_missing_witness_utxo_does_not_sign() {
+    use bitcoin::sighash::TapSighashType;
+
+    let descriptor = get_test_tr_single_sig_xprv();
+    let (mut wallet, _) = get_funded_wallet_single(descriptor);
+    receive_output_in_latest_block(&mut wallet, Amount::from_sat(30_000));
+    let recipient = wallet.next_unused_address(KeychainKind::External);
+    let mut builder = wallet.build_tx();
+    builder
+        .drain_to(recipient.script_pubkey())
+        .drain_wallet()
+        .sighash(TapSighashType::AllPlusAnyoneCanPay.into());
+    let psbt = builder.finish().unwrap();
+    assert_eq!(psbt.inputs.len(), 2);
+    assert!(
+        psbt.inputs
+            .iter()
+            .all(|input| input.non_witness_utxo.is_none())
+    );
+    let signers = signers_from_descriptor(&wallet, descriptor);
+    let options = SignOptions {
+        allow_all_sighashes: true,
+        ..Default::default()
+    };
+
+    for index in 0..psbt.inputs.len() {
+        let mut missing = psbt.clone();
+        missing.inputs[index].witness_utxo = None;
+        assert!(matches!(
+            wallet.sign_with_signers(&mut missing, &[&signers], options.clone()),
+            Err(SignerError::MissingWitnessUtxo)
+        ));
+        assert!(
+            missing
+                .inputs
+                .iter()
+                .all(|input| input.tap_key_sig.is_none() && input.tap_script_sigs.is_empty())
+        );
+    }
+}
+
 #[test]
 fn test_psbt_fee_rate_with_witness_utxo() {
     use psbt::PsbtUtils;
