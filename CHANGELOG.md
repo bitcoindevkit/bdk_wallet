@@ -1,13 +1,13 @@
 # Changelog
 
-All notable changes to this project can be found here and in each release's git tag and can be viewed with `git tag -ln100 "v*"`. See also [DEVELOPMENT_CYCLE.md](DEVELOPMENT_CYCLE.md) for more details.
+All notable changes to this project can be found here and in each release's git tag and can be viewed with `git tag -ln100 "wallet-*"`. See also [DEVELOPMENT_CYCLE.md](DEVELOPMENT_CYCLE.md) for more details.
 
 This file is updated automatically by [release-plz](https://release-plz.dev) from [Conventional Commits](https://www.conventionalcommits.org/). Do not edit it manually.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [v3.2.0]
+## [wallet-3.2.0]
 
 ### Added
 
@@ -40,7 +40,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - build(deps): bump actions/checkout from 6 to 7 [#504](https://github.com/bitcoindevkit/bdk_wallet/pull/504)
 - build(deps): bump codecov/codecov-action from 6.0.0 to 7.0.0 [#498](https://github.com/bitcoindevkit/bdk_wallet/pull/498)
 
-## [v3.1.0]
+## [wallet-3.1.0]
 
 ### Added
 
@@ -72,7 +72,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - chore: allow local justfile overrides [#460](https://github.com/bitcoindevkit/bdk_wallet/pull/460)
 - refactor: Delegate `rusqlite::Connection` persister to transaction persister [#421](https://github.com/bitcoindevkit/bdk_wallet/pull/421)
 
-## [v3.0.0]
+## [wallet-3.0.0]
 
 ### Added
 
@@ -1492,6 +1492,6 @@ final transaction is created by calling `finish` on the builder.
 [wallet-2.1.0]: https://github.com/bitcoindevkit/bdk_wallet/releases/tag/wallet-2.1.0
 [wallet-2.2.0]: https://github.com/bitcoindevkit/bdk_wallet/releases/tag/wallet-2.2.0
 [wallet-2.3.0]: https://github.com/bitcoindevkit/bdk_wallet/releases/tag/wallet-2.3.0
-[v3.0.0]: https://github.com/bitcoindevkit/bdk_wallet/releases/tag/v3.0.0
-[v3.1.0]: https://github.com/bitcoindevkit/bdk_wallet/releases/tag/v3.1.0
-[v3.2.0]: https://github.com/bitcoindevkit/bdk_wallet/releases/tag/v3.2.0
+[wallet-3.0.0]: https://github.com/bitcoindevkit/bdk_wallet/releases/tag/wallet-3.0.0
+[wallet-3.1.0]: https://github.com/bitcoindevkit/bdk_wallet/releases/tag/wallet-3.1.0
+[wallet-3.2.0]: https://github.com/bitcoindevkit/bdk_wallet/releases/tag/wallet-3.2.0
