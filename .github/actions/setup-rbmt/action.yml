@@ -1,0 +1,34 @@
+name: Setup cargo-rbmt
+description: Install the pinned RBMT version and configured Rust toolchains
+runs:
+  using: composite
+  steps:
+    - name: Read cargo-rbmt version
+      id: rbmt-version
+      shell: bash
+      run: |
+        version=$(cargo metadata --no-deps --format-version 1 |
+          jq -er '.packages[] | select(.name == "bdk_wallet") | .metadata.rbmt.version | strings | select(length > 0)')
+        echo "version=$version" >> "$GITHUB_OUTPUT"
+    - name: Restore cargo-rbmt cache
+      id: rbmt-cache
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.cargo/bin/cargo-rbmt
+        key: cargo-rbmt-${{ runner.os }}-${{ runner.arch }}-${{ steps.rbmt-version.outputs.version }}
+    - name: Install cargo-rbmt
+      if: steps.rbmt-cache.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        RBMT_VERSION: ${{ steps.rbmt-version.outputs.version }}
+      run: cargo install --locked "cargo-rbmt@$RBMT_VERSION"
+    - name: Save cargo-rbmt cache
+      if: steps.rbmt-cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.cargo/bin/cargo-rbmt
+        key: ${{ steps.rbmt-cache.outputs.cache-primary-key }}
+    - name: Install Rust toolchains
+      shell: bash
+      # Ensure required components and targets are added to preinstalled toolchains.
+      run: cargo rbmt toolchains --force

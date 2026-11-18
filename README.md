@@ -119,11 +119,13 @@ To report a security issue, please refer to the [security policy](SECURITY.md).
 
 The libraries in this repository maintain a MSRV of 1.85.0.
 
-To build with the MSRV of 1.85.0 you may need to pin dependencies by running the [`pin-msrv.sh`](./ci/pin-msrv.sh) script.
+MSRV builds use a committed `Cargo-minimal.lock` that pins all dependencies to their minimum allowed versions. See [CONTRIBUTING.md](./CONTRIBUTING.md#updating-msrv-lockfiles) for how to regenerate it when dependencies change.
 
 ## Just
 
 This project has a [`justfile`](/justfile) for easy command running. You must have [`just`](https://github.com/casey/just) installed.
+
+Before running Rust recipes, install the tooling with `./ci/install-rbmt.sh` and `cargo rbmt toolchains --force`.
 
 To see a list of available recipes: `just -l`
 
