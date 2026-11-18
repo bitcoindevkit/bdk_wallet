@@ -94,17 +94,15 @@ jobs:
     name: Check WASM
     runs-on: ubuntu-latest
     env:
-      CC: clang-14
-      CFLAGS: -I/usr/include
+      # `secp256k1-sys` compiles a bit of C (wasm/wasm.c) for wasm32, so we need a C compiler
+      # that can target wasm32. GCC can't, but clang can — and the ubuntu runner image already
+      # ships clang (>= 16), so no extra packages are needed.
+      CC: clang
     steps:
       - name: Checkout
         uses: actions/checkout@v7
         with:
           persist-credentials: false
-        # Install a recent version of clang that supports wasm32
-      - run: wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | sudo apt-key add - || exit 1
-      - run: sudo apt-get update || exit 1
-      - run: sudo apt-get install -y libclang-common-14-dev clang-14 libc6-dev-i386 || exit 1
       # This action automatically reads and applies rust-toolchain.toml
       - name: Install Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@v1
