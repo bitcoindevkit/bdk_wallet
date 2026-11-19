@@ -105,12 +105,21 @@ use crate::{KeychainKind, LocalOutput, Utxo, WeightedUtxo};
 /// This means it is usually best to call [`coin_selection`] on the return value of `build_tx`
 /// before assigning it.
 ///
+/// If [`coin_selection`] is not called, the builder returned by [`build_tx`] or
+/// [`build_fee_bump`] uses [`DefaultCoinSelectionAlgorithm`], which is
+/// [`BranchAndBoundCoinSelection`] with [`SingleRandomDraw`] as its fallback. Branch and bound
+/// searches for a set of inputs that avoids creating a change output; if it cannot find one,
+/// [`SingleRandomDraw`] selects UTXOs at random until the target is met.
+///
 /// For further examples see [this module](super::tx_builder)'s documentation;
 ///
 /// [`build_tx`]: Wallet::build_tx
 /// [`build_fee_bump`]: Wallet::build_fee_bump
 /// [`finish`]: Self::finish
 /// [`coin_selection`]: Self::coin_selection
+/// [`DefaultCoinSelectionAlgorithm`]: super::coin_selection::DefaultCoinSelectionAlgorithm
+/// [`BranchAndBoundCoinSelection`]: super::coin_selection::BranchAndBoundCoinSelection
+/// [`SingleRandomDraw`]: super::coin_selection::SingleRandomDraw
 #[derive(Debug)]
 pub struct TxBuilder<'a, Cs> {
     pub(crate) wallet: &'a mut Wallet,
@@ -718,10 +727,14 @@ impl<'a, Cs> TxBuilder<'a, Cs> {
 
     /// Choose the coin selection algorithm
     ///
-    /// Overrides the [`CoinSelectionAlgorithm`].
+    /// Overrides the [`CoinSelectionAlgorithm`]. If this method is not called, the builder uses
+    /// [`DefaultCoinSelectionAlgorithm`], which is branch and bound coin selection with a single
+    /// random draw fallback.
     ///
     /// Note that this function consumes the builder and returns it so it is usually best to put
     /// this as the first call on the builder.
+    ///
+    /// [`DefaultCoinSelectionAlgorithm`]: super::coin_selection::DefaultCoinSelectionAlgorithm
     pub fn coin_selection<P: CoinSelectionAlgorithm>(self, coin_selection: P) -> TxBuilder<'a, P> {
         TxBuilder {
             wallet: self.wallet,

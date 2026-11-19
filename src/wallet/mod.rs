@@ -3232,6 +3232,11 @@ impl Wallet {
     /// - Failure to complete coin selection
     /// - Failure to create or update the PSBT.
     ///
+    /// # Coin selection
+    ///
+    /// Unless overridden with [`PsbtParams::coin_selection`], coins are selected with
+    /// [`SelectionStrategy::SingleRandomDraw`].
+    ///
     /// # Change address
     ///
     /// When no [`ChangeScript`] is supplied via [`PsbtParams`], the wallet automatically selects
@@ -3472,6 +3477,12 @@ impl Wallet {
     /// - Failure to calculate the [fee](Wallet::calculate_fee) of an original transaction
     /// - Failure to complete coin selection
     /// - Failure to create or update the PSBT.
+    ///
+    /// # Coin selection
+    ///
+    /// As with [`Wallet::create_psbt`], coins are selected with
+    /// [`SelectionStrategy::SingleRandomDraw`] unless overridden with
+    /// [`PsbtParams::coin_selection`].
     ///
     /// # Change address
     ///
