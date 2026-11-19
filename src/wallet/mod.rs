@@ -40,11 +40,12 @@ use bitcoin::{
     constants::genesis_block,
     psbt,
     secp256k1::Secp256k1,
-    sighash::{EcdsaSighashType, TapSighashType},
+    sighash::{EcdsaSighashType, Prevouts, TapSighashType},
     transaction::{self, Version},
 };
 use miniscript::{
     descriptor::KeyMap,
+    interpreter::Interpreter,
     psbt::{PsbtExt, PsbtInputExt, PsbtInputSatisfier},
 };
 use rand_core::RngCore;
@@ -142,6 +143,15 @@ pub struct Wallet {
     network: Network,
     secp: SecpCtx,
     locked_outpoints: HashSet<OutPoint>,
+    /// Transactions rejected by `apply_*` calls because they spend wallet-owned outputs without
+    /// valid signatures.
+    ///
+    /// This is `Some` only while [`Wallet::events_helper`] runs: it collects every rejection made
+    /// by its closure (even across several `apply_*` calls) and turns them into
+    /// [`WalletEvent::TxRejected`] events. Outside of it rejections are not recorded, so nothing
+    /// accumulates for callers that don't use the events API. Nested `events_helper` calls are not
+    /// supported: the innermost call takes the collector, and resets it to `None`.
+    rejected_txs: Option<Vec<(Arc<Transaction>, TxRejectedReason)>>,
 }
 
 /// An update to [`Wallet`].
@@ -399,6 +409,7 @@ impl Wallet {
             stage,
             secp,
             locked_outpoints,
+            rejected_txs: None,
         })
     }
 
@@ -601,6 +612,7 @@ impl Wallet {
             network,
             secp,
             locked_outpoints,
+            rejected_txs: None,
         }))
     }
 
@@ -1723,6 +1735,23 @@ impl Wallet {
             .map_err(|_| BuildFeeBumpError::FeeRateUnavailable)?;
         let fee_rate = fee / tx.weight();
 
+        // Never replace a transaction that spends wallet-owned outputs without valid signatures.
+        //
+        // This protects against:
+        // - Malicious chain sources returning forged transactions that spend our outputs to their
+        //   own addresses, to trick us into signing a valid replacement.
+        // - Malicious chain sources creating unconfirmed forged transactions by embedding them in
+        //   fake blocks that are going to be reorged (BDK doesn't validate proof of work).
+        // - Wallets that synced with an older version may have persisted forged transactions.
+        //
+        // This runs after `calculate_fee`, which only succeeds if every prevout is in the graph:
+        // all prevouts are known, so taproot inputs are always verifiable here.
+        //
+        // DO NOT REMOVE THIS CHECK
+        if self.verify_owned_inputs(&tx, |_| None).is_err() {
+            return Err(BuildFeeBumpError::IrreplaceableTransaction(txid));
+        }
+
         // Remove the inputs from the tx and process them.
         let utxos: Vec<WeightedUtxo> = tx
             .input
@@ -2523,8 +2552,41 @@ impl Wallet {
     ///
     /// After applying updates you should persist the staged wallet changes. For an example of how
     /// to persist staged wallet changes see [`Wallet::reveal_next_address`].
+    ///
+    /// # Signature verification
+    ///
+    /// Unconfirmed transactions in the update that spend wallet-owned outputs must carry valid
+    /// signatures (or other satisfactions) for those inputs, otherwise they are dropped from the
+    /// update. Evictions of transactions that conflict with a dropped transaction are dropped too.
+    /// This protects against a malicious chain source forging a conflict of a transaction the
+    /// wallet broadcast. Use [`Wallet::apply_update_events`] to be notified of dropped
+    /// transactions with [`WalletEvent::TxRejected`]: these usually indicate a misbehaving chain
+    /// source.
+    ///
+    /// Taproot signatures commit to the prevouts of *all* the inputs of a transaction, unless they
+    /// use `SIGHASH_ANYONECANPAY`. A transaction spending a wallet-owned taproot output is
+    /// therefore only verified if the prevouts of all its inputs are known, from the wallet's
+    /// transaction graph or from the update (its transactions and [`TxUpdate::txouts`]), or if
+    /// that input is signed with `SIGHASH_ANYONECANPAY`. Otherwise (e.g. a payjoin or coinjoin
+    /// with foreign inputs whose prevouts the chain source didn't provide), the transaction isn't
+    /// verified and is dropped as well. It will be accepted once confirmed, or once applied again
+    /// together with the missing prevouts.
+    ///
+    /// Whether the prevouts are provided depends on the chain source:
+    ///
+    /// - **Electrum** (`bdk_electrum`): pass `fetch_prev_txouts = true` to
+    ///   `BdkElectrumClient::sync` and `BdkElectrumClient::full_scan`. The client then fetches the
+    ///   prevouts of every input of the update's transactions into [`TxUpdate::txouts`]. With
+    ///   `false`, taproot spends with foreign inputs are rejected until they confirm.
+    /// - **Esplora** (`bdk_esplora`): nothing to do, prevouts are always included in updates.
+    /// - **Bitcoin Core RPC** (`bdk_bitcoind_rpc`): mempool transactions are applied with
+    ///   [`Wallet::apply_unconfirmed_txs`], which doesn't receive prevouts. Insert the foreign
+    ///   prevouts with [`Wallet::insert_txout`] beforehand.
+    ///
+    /// Confirmed transactions (anchored to a block of the wallet's best chain after the update)
+    /// are not verified.
     pub fn apply_update(&mut self, update: impl Into<Update>) -> Result<(), CannotConnectError> {
-        let update = update.into();
+        let mut update = update.into();
         let mut changeset = match update.chain {
             Some(chain_update) => ChangeSet::from(self.chain.apply_update(chain_update)?),
             None => ChangeSet::default(),
@@ -2535,9 +2597,228 @@ impl Wallet {
             .index
             .reveal_to_target_multi(&update.last_active_indices);
         changeset.merge(index_changeset.into());
+        self.reject_unverified_txs(&mut update.tx_update);
         changeset.merge(self.tx_graph.apply_update(update.tx_update).into());
         self.stage.merge(changeset);
         Ok(())
+    }
+
+    /// Verifies the signatures of the wallet-owned inputs of `tx`.
+    ///
+    /// Prevouts are looked up in the wallet's transaction graph first, then with
+    /// `fallback_prevout`. Inputs whose prevout is unknown or not owned by the wallet are not
+    /// verified. Fails closed: an owned input that can't be verified is an error.
+    ///
+    /// Unconfirmed transactions come from untrusted sources (Electrum, Esplora, ...). A malicious
+    /// source can return a forged transaction that spends the wallet's own coins with invalid
+    /// signatures, so that it displaces a real transaction and tricks the user into fee-bumping it
+    /// (which would produce a *valid* transaction paying the attacker). Only the wallet's own
+    /// inputs need to be checked: their prevouts are known locally, and they are the only inputs
+    /// the wallet would ever sign for in a replacement.
+    ///
+    /// Verification only uses public data (the prevout script pubkey and the input's
+    /// `script_sig`/witness), so it works for watch-only wallets too.
+    ///
+    /// Taproot signatures (BIP-341) commit to the prevouts (amounts and script pubkeys) of *all*
+    /// the inputs of the transaction, not just the input being signed, unless they use
+    /// `SIGHASH_ANYONECANPAY`. A wallet-owned taproot input is therefore only verified when every
+    /// prevout of the transaction is known, which may not be the case for transactions with
+    /// foreign inputs (payjoins, coinjoins, ...), or when all its signatures use
+    /// `SIGHASH_ANYONECANPAY`. Otherwise it fails closed with
+    /// [`TxRejectedReason::MissingPrevouts`]: accepting it unverified would reopen the attack.
+    /// Legacy and segwit v0 sighashes only reference the other inputs by outpoint (never by
+    /// `TxOut`), whatever the sighash type, so they are always verifiable.
+    ///
+    /// Whether foreign prevouts are available depends on the chain source: Electrum
+    /// (`bdk_electrum`) provides them when syncing with `fetch_prev_txouts = true`, Esplora
+    /// (`bdk_esplora`) always does, and transactions applied with
+    /// [`Wallet::apply_unconfirmed_txs`] (e.g. from `bdk_bitcoind_rpc`'s mempool) need them
+    /// inserted beforehand with [`Wallet::insert_txout`]. See the "Signature verification"
+    /// section of [`Wallet::apply_update`] for the user-facing docs.
+    fn verify_owned_inputs(
+        &self,
+        tx: &Transaction,
+        fallback_prevout: impl Fn(&OutPoint) -> Option<TxOut>,
+    ) -> Result<(), TxRejectedReason> {
+        let graph = self.tx_graph.graph();
+        let prevouts: Vec<Option<TxOut>> = tx
+            .input
+            .iter()
+            .map(|txin| {
+                let op = &txin.previous_output;
+                graph
+                    .get_txout(*op)
+                    .cloned()
+                    .or_else(|| fallback_prevout(op))
+            })
+            .collect();
+        let all_prevouts: Option<Vec<TxOut>> = prevouts.iter().cloned().collect();
+
+        for (vin, (txin, prevout)) in tx.input.iter().zip(&prevouts).enumerate() {
+            let Some(prevout) = prevout else { continue };
+            if !self.is_mine(prevout.script_pubkey.clone()) {
+                continue;
+            }
+
+            let interpreter = Interpreter::from_txdata(
+                &prevout.script_pubkey,
+                &txin.script_sig,
+                &txin.witness,
+                txin.sequence,
+                tx.lock_time,
+            )
+            .map_err(|_| TxRejectedReason::InvalidInput { input_index: vin })?;
+
+            // Pass the prevouts we know and let the interpreter use what the sighash of each
+            // signature needs:
+            // - Legacy and segwit v0 sighashes only reference the other inputs by outpoint, never
+            //   by `TxOut`, whatever the sighash type: the input's own prevout is enough.
+            // - Taproot sighashes commit to the amounts and script pubkeys of all prevouts, except
+            //   with `SIGHASH_ANYONECANPAY`, which only commits to the input's own prevout. Other
+            //   taproot signatures fail to verify with `Prevouts::One` (fail closed): the caller
+            //   must provide the missing (foreign) prevouts for this input to be verifiable.
+            let prevouts = match &all_prevouts {
+                Some(all) => Prevouts::All(all),
+                None => Prevouts::One(vin, prevout.clone()),
+            };
+
+            // The interpreter yields an error if a signature fails to verify or if the script
+            // ends up dissatisfied, so the input is valid iff no item is an error.
+            if !interpreter
+                .iter(&self.secp, tx, vin, &prevouts)
+                .all(|r| r.is_ok())
+            {
+                // The distinction is informational: the input may be validly signed, but it
+                // can't be verified without the missing prevouts.
+                return Err(
+                    if all_prevouts.is_none() && prevout.script_pubkey.is_p2tr() {
+                        TxRejectedReason::MissingPrevouts { input_index: vin }
+                    } else {
+                        TxRejectedReason::InvalidInput { input_index: vin }
+                    },
+                );
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Removes from `tx_update` the unconfirmed transactions that spend wallet-owned outputs
+    /// without valid signatures, and the evictions of transactions conflicting with them.
+    ///
+    /// Rejected transactions are recorded with [`Self::record_rejected`]. Must be called after the
+    /// chain update and keychain reveals of the same update were applied.
+    fn reject_unverified_txs(&mut self, tx_update: &mut TxUpdate<ConfirmationBlockTime>) {
+        let graph = self.tx_graph.graph();
+        let chain = &self.chain;
+        let in_chain = |anchor: &ConfirmationBlockTime| {
+            chain
+                .get(anchor.block_id.height)
+                .is_some_and(|cp| cp.hash() == anchor.block_id.hash)
+        };
+        // Transactions confirmed in the wallet's best chain are not verified. This is NOT a
+        // security guarantee: BDK doesn't validate proof of work, so a malicious chain source can
+        // forge a block confirming a forged transaction, then reorg it away later, leaving the
+        // unverified transaction in the graph as unconfirmed. Skipping confirmed transactions
+        // avoids rejecting legitimate confirmed spends that can't be verified (e.g. taproot
+        // spends with unknown foreign prevouts). The checks in `build_fee_bump` and in the RBF
+        // path of `create_psbt` are what prevent signing a replacement of a forged transaction.
+        let confirmed_by_update: HashSet<Txid> = tx_update
+            .anchors
+            .iter()
+            .filter(|(anchor, _)| in_chain(anchor))
+            .map(|(_, txid)| *txid)
+            .collect();
+        let is_confirmed = |txid: &Txid| {
+            confirmed_by_update.contains(txid)
+                || graph
+                    .all_anchors()
+                    .get(txid)
+                    .is_some_and(|anchors| anchors.iter().any(in_chain))
+        };
+
+        let update_txs: HashMap<Txid, Arc<Transaction>> = tx_update
+            .txs
+            .iter()
+            .map(|tx| (tx.compute_txid(), tx.clone()))
+            .collect();
+        let fallback_prevout = |op: &OutPoint| {
+            update_txs
+                .get(&op.txid)
+                .and_then(|tx| tx.output.get(op.vout as usize).cloned())
+                .or_else(|| tx_update.txouts.get(op).cloned())
+        };
+
+        // Candidates are the update's txs, plus already known txs the update marks as seen.
+        //
+        // A txid doesn't commit to witnesses, so the graph may hold a copy of an update tx with
+        // different (e.g. missing or invalid) witnesses. Only the update's copy is verified: if it
+        // is valid it must be applied, so that the graph merges in its witnesses. Rejecting by
+        // txid because of the graph's copy would drop it too.
+        let candidates = update_txs
+            .iter()
+            .map(|(txid, tx)| (*txid, tx.clone()))
+            .chain(
+                tx_update
+                    .seen_ats
+                    .iter()
+                    .filter(|(txid, _)| !update_txs.contains_key(txid))
+                    .filter_map(|(txid, _)| graph.get_tx(*txid).map(|tx| (*txid, tx))),
+            );
+        let rejected: HashMap<Txid, (Arc<Transaction>, TxRejectedReason)> = candidates
+            .filter(|(txid, _)| !is_confirmed(txid))
+            .filter_map(|(txid, tx)| {
+                let reason = self.verify_owned_inputs(&tx, fallback_prevout).err()?;
+                Some((txid, (tx, reason)))
+            })
+            .collect();
+        if rejected.is_empty() {
+            return;
+        }
+
+        // Don't let a forged transaction evict the transactions it conflicts with.
+        let spent_by_rejected: HashSet<OutPoint> = rejected
+            .values()
+            .flat_map(|(tx, _)| tx.input.iter().map(|txin| txin.previous_output))
+            .collect();
+        let conflicts_with_rejected = |txid: &Txid| {
+            update_txs
+                .get(txid)
+                .cloned()
+                .or_else(|| graph.get_tx(*txid))
+                .is_some_and(|tx| {
+                    tx.input
+                        .iter()
+                        .any(|txin| spent_by_rejected.contains(&txin.previous_output))
+                })
+        };
+        let evicted_ats = core::mem::take(&mut tx_update.evicted_ats)
+            .into_iter()
+            .filter(|(txid, _)| !conflicts_with_rejected(txid))
+            .collect();
+
+        tx_update.evicted_ats = evicted_ats;
+        tx_update
+            .txs
+            .retain(|tx| !rejected.contains_key(&tx.compute_txid()));
+        tx_update
+            .seen_ats
+            .retain(|(txid, _)| !rejected.contains_key(txid));
+        tx_update
+            .anchors
+            .retain(|(_, txid)| !rejected.contains_key(txid));
+        self.record_rejected(rejected.into_values());
+    }
+
+    /// Records transactions rejected by signature verification, if [`Wallet::events_helper`] is
+    /// collecting them.
+    fn record_rejected(
+        &mut self,
+        txs: impl IntoIterator<Item = (Arc<Transaction>, TxRejectedReason)>,
+    ) {
+        if let Some(rejected_txs) = &mut self.rejected_txs {
+            rejected_txs.extend(txs);
+        }
     }
 
     /// Applies an update to the wallet, stages the changes, and returns events.
@@ -2810,6 +3091,15 @@ impl Wallet {
     /// when there are conflicting unconfirmed transactions in the mempool. The transaction with the
     /// later `last_seen` is prioritized.
     ///
+    /// Transactions that spend wallet-owned outputs without valid signatures (or other
+    /// satisfactions) for those inputs are dropped. See the "Signature verification" section of
+    /// [`Wallet::apply_update`].
+    ///
+    /// Prevouts are looked up in the wallet's transaction graph and in `unconfirmed_txs`. A
+    /// transaction spending a wallet-owned taproot output alongside foreign inputs can only be
+    /// verified if the foreign prevouts are known: insert them first with
+    /// [`Wallet::insert_txout`], otherwise the transaction is dropped until it confirms.
+    ///
     /// **WARNING**: You must persist the changes resulting from one or more calls to this method
     /// if you need the applied unconfirmed transactions to be reloaded after closing the wallet.
     /// See [`Wallet::reveal_next_address`].
@@ -2817,9 +3107,30 @@ impl Wallet {
         &mut self,
         unconfirmed_txs: impl IntoIterator<Item = (T, u64)>,
     ) {
-        let indexed_graph_changeset = self
-            .tx_graph
-            .batch_insert_relevant_unconfirmed(unconfirmed_txs);
+        let unconfirmed_txs: Vec<(Arc<Transaction>, u64)> = unconfirmed_txs
+            .into_iter()
+            .map(|(tx, seen_at)| (tx.into(), seen_at))
+            .collect();
+        let batch: HashMap<Txid, Arc<Transaction>> = unconfirmed_txs
+            .iter()
+            .map(|(tx, _)| (tx.compute_txid(), tx.clone()))
+            .collect();
+        let fallback_prevout = |op: &OutPoint| {
+            batch
+                .get(&op.txid)
+                .and_then(|tx| tx.output.get(op.vout as usize).cloned())
+        };
+        let mut accepted = Vec::with_capacity(unconfirmed_txs.len());
+        let mut rejected = Vec::new();
+        for (tx, seen_at) in unconfirmed_txs {
+            match self.verify_owned_inputs(&tx, fallback_prevout) {
+                Ok(()) => accepted.push((tx, seen_at)),
+                Err(reason) => rejected.push((tx, reason)),
+            }
+        }
+        self.record_rejected(rejected);
+
+        let indexed_graph_changeset = self.tx_graph.batch_insert_relevant_unconfirmed(accepted);
         self.stage.merge(indexed_graph_changeset.into());
     }
 
@@ -2936,6 +3247,14 @@ impl Wallet {
     /// - [`WalletEvent::TxUnconfirmed`]: A transaction was newly unconfirmed
     /// - [`WalletEvent::TxReplaced`]: An unconfirmed transaction was replaced (e.g., via RBF)
     /// - [`WalletEvent::TxDropped`]: An unconfirmed transaction was dropped from the mempool
+    /// - [`WalletEvent::TxRejected`]: An unconfirmed transaction was not applied because its
+    ///   signatures could not be verified
+    ///
+    /// [`WalletEvent::TxRejected`] events are not derived from the snapshots: they report the
+    /// transactions that the operation refused to apply, so they never show up in the "after"
+    /// snapshot. Only the innermost `events_helper` call reports them: if you rely on
+    /// [`WalletEvent::TxRejected`], don't call `events_helper` (or a `*_events` method such as
+    /// [`Wallet::apply_update_events`]) from within `f`.
     ///
     /// This is useful when you need to track specific changes to your wallet state, such
     /// as updating a UI to reflect transaction status changes, triggering notifications when
@@ -2968,20 +3287,28 @@ impl Wallet {
         let chain_tip1 = self.chain.tip().block_id();
         let wallet_txs1 = self.map_transactions();
 
-        // Call `f` on self
-        f(self)?;
+        // Call `f` on self, collecting the transactions it rejects. The collector is reset to
+        // `None` whether or not `f` succeeds.
+        self.rejected_txs = Some(Vec::new());
+        let res = f(self);
+        let rejected_txs = self.rejected_txs.take().unwrap_or_default();
+        res?;
 
         // Chain tip and transactions after
         let chain_tip2 = self.chain.tip().block_id();
         let wallet_txs2 = self.map_transactions();
 
-        Ok(wallet_events(
-            self,
-            chain_tip1,
-            chain_tip2,
-            wallet_txs1,
-            wallet_txs2,
-        ))
+        let mut events = wallet_events(self, chain_tip1, chain_tip2, wallet_txs1, wallet_txs2);
+        events.extend(
+            rejected_txs
+                .into_iter()
+                .map(|(tx, reason)| WalletEvent::TxRejected {
+                    txid: tx.compute_txid(),
+                    tx,
+                    reason,
+                }),
+        );
+        Ok(events)
     }
 
     /// Used internally to ensure that all methods requiring a [`KeychainKind`] will use a
@@ -3609,6 +3936,21 @@ impl Wallet {
                 .is_some_and(|chain_position| chain_position.is_confirmed())
             {
                 return Err(ReplaceByFeeError::TransactionConfirmed(txid));
+            }
+        }
+
+        // Never replace transactions that spend wallet-owned outputs without valid signatures
+        //
+        // This protects against malicious chain sources tricking us into signing a valid
+        // replacement of a forged transaction. Sync-time filtering doesn't catch every forged
+        // transaction (see the matching check in `build_fee_bump`).
+        //
+        // DO NOT REMOVE THIS CHECK
+        for &txid in txids_to_replace.iter() {
+            if let Some(tx) = self.tx_graph.graph().get_tx(txid) {
+                if self.verify_owned_inputs(&tx, |_| None).is_err() {
+                    return Err(ReplaceByFeeError::InvalidSignature(txid));
+                }
             }
         }
 

@@ -25,7 +25,7 @@ fn test_bump_fee_irreplaceable_tx() {
     builder.set_exact_sequence(Sequence(0xFFFFFFFE));
     let psbt = builder.finish().unwrap();
 
-    let tx = psbt.extract_tx().expect("failed to extract tx");
+    let tx = sign_and_extract(&wallet, psbt.clone());
     let txid = tx.compute_txid();
     insert_tx(&mut wallet, tx);
     wallet.build_fee_bump(txid).unwrap().finish().unwrap();
@@ -40,7 +40,7 @@ fn test_bump_fee_confirmed_tx() {
     builder.add_recipient(addr.script_pubkey(), Amount::from_sat(25_000));
     let psbt = builder.finish().unwrap();
 
-    let tx = psbt.extract_tx().expect("failed to extract tx");
+    let tx = sign_and_extract(&wallet, psbt.clone());
     let txid = tx.compute_txid();
 
     insert_tx(&mut wallet, tx);
@@ -62,9 +62,9 @@ fn test_bump_fee_low_fee_rate() {
     builder.add_recipient(addr.script_pubkey(), Amount::from_sat(25_000));
 
     let psbt = builder.finish().unwrap();
-    let feerate = psbt.fee_rate().unwrap();
 
-    let tx = psbt.extract_tx().expect("failed to extract tx");
+    let tx = sign_and_extract(&wallet, psbt.clone());
+    let feerate = wallet.calculate_fee_rate(&tx).unwrap();
     let txid = tx.compute_txid();
     insert_tx(&mut wallet, tx);
 
@@ -92,7 +92,7 @@ fn test_bump_fee_low_abs() {
     builder.add_recipient(addr.script_pubkey(), Amount::from_sat(25_000));
     let psbt = builder.finish().unwrap();
 
-    let tx = psbt.extract_tx().expect("failed to extract tx");
+    let tx = sign_and_extract(&wallet, psbt.clone());
     let txid = tx.compute_txid();
     insert_tx(&mut wallet, tx);
 
@@ -110,7 +110,7 @@ fn test_bump_fee_zero_abs() {
     builder.add_recipient(addr.script_pubkey(), Amount::from_sat(25_000));
     let psbt = builder.finish().unwrap();
 
-    let tx = psbt.extract_tx().expect("failed to extract tx");
+    let tx = sign_and_extract(&wallet, psbt.clone());
     let txid = tx.compute_txid();
     insert_tx(&mut wallet, tx);
 
@@ -132,7 +132,7 @@ fn test_bump_fee_reduce_change() {
         wallet.sent_and_received(&psbt.clone().extract_tx().expect("failed to extract tx"));
     let original_fee = check_fee!(wallet, psbt);
 
-    let tx = psbt.extract_tx().expect("failed to extract tx");
+    let tx = sign_and_extract(&wallet, psbt.clone());
     let txid = tx.compute_txid();
     insert_tx(&mut wallet, tx);
 
@@ -211,7 +211,7 @@ fn test_bump_fee_reduce_single_recipient() {
     let mut builder = wallet.build_tx();
     builder.drain_to(addr.script_pubkey()).drain_wallet();
     let psbt = builder.finish().unwrap();
-    let tx = psbt.clone().extract_tx().expect("failed to extract tx");
+    let tx = sign_and_extract(&wallet, psbt.clone());
     let original_sent_received = wallet.sent_and_received(&tx);
     let original_fee = check_fee!(wallet, psbt);
     let txid = tx.compute_txid();
@@ -252,7 +252,7 @@ fn test_bump_fee_absolute_reduce_single_recipient() {
     builder.drain_to(addr.script_pubkey()).drain_wallet();
     let psbt = builder.finish().unwrap();
     let original_fee = check_fee!(wallet, psbt);
-    let tx = psbt.extract_tx().expect("failed to extract tx");
+    let tx = sign_and_extract(&wallet, psbt.clone());
     let original_sent_received = wallet.sent_and_received(&tx);
     let txid = tx.compute_txid();
     insert_tx(&mut wallet, tx);
@@ -317,7 +317,7 @@ fn test_bump_fee_drain_wallet() {
         .unwrap()
         .manually_selected_only();
     let psbt = builder.finish().unwrap();
-    let tx = psbt.extract_tx().expect("failed to extract tx");
+    let tx = sign_and_extract(&wallet, psbt.clone());
     let original_sent_received = wallet.sent_and_received(&tx);
 
     let txid = tx.compute_txid();
@@ -382,7 +382,7 @@ fn test_bump_fee_remove_output_manually_selected_only() {
         .unwrap()
         .manually_selected_only();
     let psbt = builder.finish().unwrap();
-    let tx = psbt.extract_tx().expect("failed to extract tx");
+    let tx = sign_and_extract(&wallet, psbt.clone());
     let original_sent_received = wallet.sent_and_received(&tx);
     let txid = tx.compute_txid();
     insert_tx(&mut wallet, tx);
@@ -424,7 +424,7 @@ fn test_bump_fee_add_input() {
     let mut builder = wallet.build_tx().coin_selection(LargestFirstCoinSelection);
     builder.add_recipient(addr.script_pubkey(), Amount::from_sat(45_000));
     let psbt = builder.finish().unwrap();
-    let tx = psbt.extract_tx().expect("failed to extract tx");
+    let tx = sign_and_extract(&wallet, psbt.clone());
     let original_details = wallet.sent_and_received(&tx);
     let txid = tx.compute_txid();
     insert_tx(&mut wallet, tx);
@@ -471,7 +471,7 @@ fn test_bump_fee_absolute_add_input() {
     let mut builder = wallet.build_tx().coin_selection(LargestFirstCoinSelection);
     builder.add_recipient(addr.script_pubkey(), Amount::from_sat(45_000));
     let psbt = builder.finish().unwrap();
-    let tx = psbt.extract_tx().expect("failed to extract tx");
+    let tx = sign_and_extract(&wallet, psbt.clone());
     let original_sent_received = wallet.sent_and_received(&tx);
     let txid = tx.compute_txid();
     insert_tx(&mut wallet, tx);
@@ -529,7 +529,7 @@ fn test_bump_fee_no_change_add_input_and_change() {
         wallet.sent_and_received(&psbt.clone().extract_tx().expect("failed to extract tx"));
     let original_fee = check_fee!(wallet, psbt);
 
-    let tx = psbt.extract_tx().expect("failed to extract tx");
+    let tx = sign_and_extract(&wallet, psbt.clone());
     let txid = tx.compute_txid();
     insert_tx(&mut wallet, tx);
 
@@ -583,13 +583,9 @@ fn test_bump_fee_force_add_input() {
     let mut builder = wallet.build_tx().coin_selection(LargestFirstCoinSelection);
     builder.add_recipient(addr.script_pubkey(), Amount::from_sat(45_000));
     let psbt = builder.finish().unwrap();
-    let mut tx = psbt.extract_tx().expect("failed to extract tx");
+    let tx = sign_and_extract(&wallet, psbt.clone());
     let original_sent_received = wallet.sent_and_received(&tx);
     let txid = tx.compute_txid();
-    for txin in &mut tx.input {
-        txin.witness.push([0x00; P2WPKH_FAKE_SIG_SIZE]); // sig (72)
-        txin.witness.push([0x00; P2WPKH_FAKE_PK_SIZE]); // pk (33)
-    }
     insert_tx(&mut wallet, tx.clone());
     // the new fee_rate is low enough that just reducing the change would be fine, but we force
     // the addition of an extra input with `add_utxo()`
@@ -640,14 +636,10 @@ fn test_bump_fee_absolute_force_add_input() {
     let mut builder = wallet.build_tx().coin_selection(LargestFirstCoinSelection);
     builder.add_recipient(addr.script_pubkey(), Amount::from_sat(45_000));
     let psbt = builder.finish().unwrap();
-    let mut tx = psbt.extract_tx().expect("failed to extract tx");
+    let tx = sign_and_extract(&wallet, psbt.clone());
     let original_sent_received = wallet.sent_and_received(&tx);
     let txid = tx.compute_txid();
     // skip saving the new utxos, we know they can't be used anyways
-    for txin in &mut tx.input {
-        txin.witness.push([0x00; P2WPKH_FAKE_SIG_SIZE]); // sig (72)
-        txin.witness.push([0x00; P2WPKH_FAKE_PK_SIZE]); // pk (33)
-    }
     insert_tx(&mut wallet, tx.clone());
 
     // the new fee_rate is low enough that just reducing the change would be fine, but we force
@@ -707,12 +699,8 @@ fn test_bump_fee_unconfirmed_inputs_only() {
     // Now we receive one transaction with 0 confirmations. We won't be able to use that for
     // fee bumping, as it's still unconfirmed!
     receive_output(&mut wallet, Amount::from_sat(25_000), ReceiveTo::Mempool(0));
-    let mut tx = psbt.extract_tx().expect("failed to extract tx");
+    let tx = sign_and_extract(&wallet, psbt.clone());
     let txid = tx.compute_txid();
-    for txin in &mut tx.input {
-        txin.witness.push([0x00; P2WPKH_FAKE_SIG_SIZE]); // sig (72)
-        txin.witness.push([0x00; P2WPKH_FAKE_PK_SIZE]); // pk (33)
-    }
     insert_tx(&mut wallet, tx);
     let mut builder = wallet.build_fee_bump(txid).unwrap();
     builder.fee_rate(FeeRate::from_sat_per_vb_u32(25));
@@ -736,12 +724,8 @@ fn test_bump_fee_unconfirmed_input() {
     let mut builder = wallet.build_tx();
     builder.drain_wallet().drain_to(addr.script_pubkey());
     let psbt = builder.finish().unwrap();
-    let mut tx = psbt.extract_tx().expect("failed to extract tx");
+    let tx = sign_and_extract(&wallet, psbt.clone());
     let txid = tx.compute_txid();
-    for txin in &mut tx.input {
-        txin.witness.push([0x00; P2WPKH_FAKE_SIG_SIZE]); // sig (72)
-        txin.witness.push([0x00; P2WPKH_FAKE_PK_SIZE]); // pk (33)
-    }
     insert_tx(&mut wallet, tx);
 
     let mut builder = wallet.build_fee_bump(txid).unwrap();
@@ -765,7 +749,7 @@ fn test_legacy_bump_fee_zero_abs() {
     builder.add_recipient(addr.script_pubkey(), Amount::from_sat(25_000));
     let psbt = builder.finish().unwrap();
 
-    let tx = psbt.extract_tx().expect("failed to extract tx");
+    let tx = sign_and_extract(&wallet, psbt.clone());
     let txid = tx.compute_txid();
     insert_tx(&mut wallet, tx);
 
@@ -811,7 +795,7 @@ fn test_legacy_bump_fee_drain_wallet() {
         .unwrap()
         .manually_selected_only();
     let psbt = builder.finish().unwrap();
-    let tx = psbt.extract_tx().expect("failed to extract tx");
+    let tx = sign_and_extract(&wallet, psbt.clone());
     let original_sent_received = wallet.sent_and_received(&tx);
 
     let txid = tx.compute_txid();
@@ -860,7 +844,7 @@ fn test_legacy_bump_fee_add_input() {
     let mut builder = wallet.build_tx().coin_selection(LargestFirstCoinSelection);
     builder.add_recipient(addr.script_pubkey(), Amount::from_sat(45_000));
     let psbt = builder.finish().unwrap();
-    let tx = psbt.extract_tx().expect("failed to extract tx");
+    let tx = sign_and_extract(&wallet, psbt.clone());
     let original_details = wallet.sent_and_received(&tx);
     let txid = tx.compute_txid();
     insert_tx(&mut wallet, tx);
@@ -907,7 +891,7 @@ fn test_legacy_bump_fee_absolute_add_input() {
     let mut builder = wallet.build_tx().coin_selection(LargestFirstCoinSelection);
     builder.add_recipient(addr.script_pubkey(), Amount::from_sat(45_000));
     let psbt = builder.finish().unwrap();
-    let tx = psbt.extract_tx().expect("failed to extract tx");
+    let tx = sign_and_extract(&wallet, psbt.clone());
     let (original_sent, _original_received) = wallet.sent_and_received(&tx);
     let txid = tx.compute_txid();
     insert_tx(&mut wallet, tx);
@@ -975,7 +959,8 @@ fn test_bump_fee_legacy_foreign_utxo_requires_parent_tx() {
             satisfaction_weight,
         )
         .unwrap();
-    let tx = builder.finish().unwrap().extract_tx().unwrap();
+    let psbt = builder.finish().unwrap();
+    let tx = sign_and_extract(&wallet, psbt);
     let txid = tx.compute_txid();
     insert_tx(&mut wallet, tx);
 
@@ -1034,7 +1019,7 @@ fn test_bump_fee_pay_to_anchor_foreign_utxo() {
         .fee_rate(FeeRate::from_sat_per_vb_u32(2))
         .drain_to(drain_spk.clone());
     let psbt = tx_builder.finish().unwrap();
-    let tx = psbt.unsigned_tx.clone();
+    let tx = sign_and_extract(&wallet, psbt.clone());
     assert!(tx.input.iter().any(|txin| txin.previous_output == outpoint));
     let txid1 = tx.compute_txid();
     wallet.apply_unconfirmed_txs([(tx, 123456)]);

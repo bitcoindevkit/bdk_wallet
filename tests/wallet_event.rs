@@ -8,6 +8,9 @@ use bitcoin::{Address, Amount, Block, BlockHash, FeeRate, Transaction, TxMerkleN
 use core::str::FromStr;
 use std::sync::Arc;
 
+mod common;
+use common::sign_and_extract;
+
 /// apply_update_events tests.
 #[test]
 fn test_empty_update_should_return_no_events() {
@@ -94,7 +97,7 @@ fn test_tx_replaced_event() {
         Amount::from_sat(10_000),
     );
     let psbt = builder.finish().unwrap();
-    let orig_tx = Arc::new(psbt.extract_tx().unwrap());
+    let orig_tx = Arc::new(sign_and_extract(&wallet, psbt));
     let orig_txid = orig_tx.compute_txid();
 
     // update wallet with original tx
@@ -111,7 +114,7 @@ fn test_tx_replaced_event() {
     let mut builder = wallet.build_fee_bump(orig_txid).unwrap();
     builder.fee_rate(FeeRate::from_sat_per_vb(10).unwrap());
     let psbt = builder.finish().unwrap();
-    let rbf_tx = Arc::new(psbt.extract_tx().unwrap());
+    let rbf_tx = Arc::new(sign_and_extract(&wallet, psbt));
     let rbf_txid = rbf_tx.compute_txid();
 
     // update wallet with rbf tx
@@ -145,7 +148,7 @@ fn test_tx_confirmed_event() {
         Amount::from_sat(10_000),
     );
     let psbt = builder.finish().unwrap();
-    let new_tx = Arc::new(psbt.extract_tx().unwrap());
+    let new_tx = Arc::new(sign_and_extract(&wallet, psbt));
     let new_txid = new_tx.compute_txid();
 
     // update wallet with original tx
@@ -201,7 +204,7 @@ fn test_tx_confirmed_new_block_event() {
         Amount::from_sat(10_000),
     );
     let psbt = builder.finish().unwrap();
-    let new_tx = Arc::new(psbt.extract_tx().unwrap());
+    let new_tx = Arc::new(sign_and_extract(&wallet, psbt));
     let new_txid = new_tx.compute_txid();
 
     // update wallet with original tx
@@ -284,7 +287,7 @@ fn test_tx_dropped_event() {
         Amount::from_sat(10_000),
     );
     let psbt = builder.finish().unwrap();
-    let new_tx = Arc::new(psbt.extract_tx().unwrap());
+    let new_tx = Arc::new(sign_and_extract(&wallet, psbt));
     let new_txid = new_tx.compute_txid();
 
     // update wallet with original tx

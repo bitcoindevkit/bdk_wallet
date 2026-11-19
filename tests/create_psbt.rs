@@ -14,6 +14,9 @@ use bitcoin::{
 };
 use miniscript::plan::Assets;
 
+mod common;
+use common::insert_signed_tx;
+
 // Test that `create_psbt` results in the expected PSBT.
 #[test]
 fn test_create_psbt() {
@@ -579,7 +582,7 @@ fn test_replace_by_fee_replaces_descendant_fees() {
     };
     let a_txid = tx_a.compute_txid();
     let fee_a = wallet.calculate_fee(&tx_a).unwrap();
-    insert_tx(&mut wallet, tx_a.clone());
+    insert_signed_tx(&mut wallet, tx_a.clone());
 
     // Tx B (unconfirmed): spends A's first change output.
     //   fee_b = 450_000 - 430_000 = 20_000 sats
@@ -595,7 +598,7 @@ fn test_replace_by_fee_replaces_descendant_fees() {
         ..new_tx(0)
     };
     let fee_b = wallet.calculate_fee(&tx_b).unwrap();
-    insert_tx(&mut wallet, tx_b);
+    insert_signed_tx(&mut wallet, tx_b);
 
     // Tx C (unconfirmed): spends A's second change output.
     //   fee_c = 450_000 - 430_000 = 20_000 sats
@@ -611,7 +614,7 @@ fn test_replace_by_fee_replaces_descendant_fees() {
         ..new_tx(0)
     };
     let fee_c = wallet.calculate_fee(&tx_c).unwrap();
-    insert_tx(&mut wallet, tx_c.clone());
+    insert_signed_tx(&mut wallet, tx_c.clone());
 
     // The replacement must pay at least the combined fee of all three transactions
     // (Bitcoin Core RBF Rule 3).
@@ -677,7 +680,7 @@ fn test_replace_by_fee_confirmed_tx_error() {
         .add_utxos(&[funding_op])
         .add_recipients([(recip.clone(), Amount::from_sat(100_000))]);
     let unconfirmed_tx = wallet.create_psbt(params).unwrap().0.unsigned_tx;
-    insert_tx(&mut wallet, unconfirmed_tx.clone());
+    insert_signed_tx(&mut wallet, unconfirmed_tx.clone());
 
     // Now confirm that tx.
     let confirmed_txid = unconfirmed_tx.compute_txid();
@@ -728,7 +731,7 @@ fn test_replace_by_fee_no_inputs_from_original() {
         ..new_tx(0)
     };
     let funding_op = OutPoint::new(funding_tx.compute_txid(), 0);
-    insert_tx(&mut wallet, funding_tx);
+    insert_signed_tx(&mut wallet, funding_tx);
 
     // Create an unconfirmed tx spending the funded UTXO.
     let recip =
@@ -740,7 +743,7 @@ fn test_replace_by_fee_no_inputs_from_original() {
         .add_recipients([(recip.clone(), Amount::from_sat(100_000))]);
     let unconfirmed_tx = wallet.create_psbt(params).unwrap().0.unsigned_tx;
     let unconfirmed_txid = unconfirmed_tx.compute_txid();
-    insert_tx(&mut wallet, unconfirmed_tx.clone());
+    insert_signed_tx(&mut wallet, unconfirmed_tx.clone());
 
     // Build replacement params with a recipient but remove the original inputs.
     let mut params = PsbtParams::default().replace_txs([unconfirmed_tx]);
@@ -752,6 +755,42 @@ fn test_replace_by_fee_no_inputs_from_original() {
     assert!(
         matches!(result, Err(ReplaceByFeeError::NoInputsFromOriginal(txid)) if txid == unconfirmed_txid),
         "expected NoInputsFromOriginal error, got: {result:?}",
+    );
+}
+
+// Test that `replace_by_fee` refuses to replace a tx spending wallet outputs without valid
+// signatures (e.g. a forged tx persisted by a wallet that synced from a malicious server).
+#[test]
+fn test_replace_by_fee_forged_tx_error() {
+    use bdk_wallet::error::ReplaceByFeeError;
+    use std::sync::Arc;
+
+    let (desc, change_desc) = get_test_wpkh_and_change_desc();
+    let (mut wallet, _) = get_funded_wallet(desc, change_desc);
+    let recip =
+        ScriptBuf::from_hex("5120e8f5c4dc2f5d6a7595e7b108cb063da9c7550312da1e22875d78b9db62b59cd5")
+            .unwrap();
+    let mut params = PsbtParams::default();
+    params.add_recipients([(recip.clone(), Amount::from_sat(10_000))]);
+    // Unsigned, so its wallet-owned inputs don't verify.
+    let forged_tx = wallet.create_psbt(params).unwrap().0.unsigned_tx;
+    let forged_txid = forged_tx.compute_txid();
+
+    // Bypass ingest-time verification by loading the forged tx from a changeset.
+    let mut changeset = wallet.staged().unwrap().clone();
+    changeset.tx_graph.txs.insert(Arc::new(forged_tx.clone()));
+    changeset.tx_graph.last_seen.insert(forged_txid, 200);
+    let mut wallet = Wallet::load()
+        .load_wallet_no_persist(changeset)
+        .unwrap()
+        .unwrap();
+
+    let mut params = PsbtParams::default().replace_txs([forged_tx]);
+    params.add_recipients([(recip, Amount::from_sat(10_000))]);
+    let result = wallet.replace_by_fee(params);
+    assert!(
+        matches!(result, Err(ReplaceByFeeError::InvalidSignature(txid)) if txid == forged_txid),
+        "expected InvalidSignature error, got: {result:?}",
     );
 }
 
@@ -805,7 +844,7 @@ fn test_replace_by_fee_conflicting_input_descendant() {
         ..new_tx(0)
     };
     let funding_op = OutPoint::new(funding_tx.compute_txid(), 0);
-    insert_tx(&mut wallet, funding_tx);
+    insert_signed_tx(&mut wallet, funding_tx);
 
     let recip =
         ScriptBuf::from_hex("5120e8f5c4dc2f5d6a7595e7b108cb063da9c7550312da1e22875d78b9db62b59cd5")
@@ -818,7 +857,7 @@ fn test_replace_by_fee_conflicting_input_descendant() {
         .add_recipients([(recip.clone(), Amount::from_sat(100_000))]);
     let tx_parent = wallet.create_psbt(params).unwrap().0.unsigned_tx;
     let txid_parent = tx_parent.compute_txid();
-    insert_tx(&mut wallet, tx_parent.clone());
+    insert_signed_tx(&mut wallet, tx_parent.clone());
 
     // tx_child: spends one of tx_parent's outputs (a descendant of the tx being replaced).
     let child_output = TxOut {
@@ -837,7 +876,7 @@ fn test_replace_by_fee_conflicting_input_descendant() {
         ..new_tx(1)
     };
     let txid_child = tx_child.compute_txid();
-    insert_tx(&mut wallet, tx_child.clone());
+    insert_signed_tx(&mut wallet, tx_child.clone());
 
     // A planned input that spends an output of tx_child (a descendant of the replaced tx).
     // This is the indirect conflict that params-level stripping cannot catch.
@@ -1047,7 +1086,7 @@ fn test_replace_by_fee_drain_wallet_change_below_dust_error() {
                 .script_pubkey(),
         }],
     };
-    insert_tx(&mut wallet, original_tx.clone());
+    insert_signed_tx(&mut wallet, original_tx.clone());
 
     // RBF with `drain_wallet`, no recipients, default fee rate (1 sat/vb).
     // The only possible output (change) falls below dust.
@@ -1092,7 +1131,7 @@ fn test_replace_tx_with_planned_input() {
         ..new_tx(0)
     };
     let funding_op = OutPoint::new(funding_tx.compute_txid(), 0);
-    insert_tx(&mut wallet, funding_tx);
+    insert_signed_tx(&mut wallet, funding_tx);
 
     // Create an unconfirmed tx spending the funded UTXO.
     let recip =
@@ -1125,7 +1164,7 @@ fn test_replace_tx_with_planned_input() {
         .add_planned_input(planned_input.clone())
         .add_recipients([(recip.clone(), Amount::from_sat(100_000))]);
     let unconfirmed_tx = wallet.create_psbt(params).unwrap().0.unsigned_tx;
-    insert_tx(&mut wallet, unconfirmed_tx.clone());
+    insert_signed_tx(&mut wallet, unconfirmed_tx.clone());
 
     // Add the planned input *before* calling replace_txs. The replace() method
     // should respect pre-registered planned inputs in the unique set.

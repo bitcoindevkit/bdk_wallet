@@ -333,7 +333,14 @@ pub enum BuildFeeBumpError {
     TransactionNotFound(Txid),
     /// Happens when trying to bump a transaction that is already confirmed
     TransactionConfirmed(Txid),
-    /// Trying to replace a tx that has a sequence >= `0xFFFFFFFE`
+    /// Trying to replace a tx that can't be replaced.
+    ///
+    /// This happens if every input of the tx has a sequence >= `0xFFFFFFFE`, or if the tx spends
+    /// wallet-owned outputs without valid signatures (or other satisfactions). The latter means
+    /// that the tx was not created by this wallet and was likely forged by a malicious chain
+    /// source: replacing it would pay the forger. A tx spending a wallet-owned taproot output
+    /// alongside foreign inputs whose prevouts are unknown can't be verified (unless signed with
+    /// `SIGHASH_ANYONECANPAY`), and is refused as well.
     IrreplaceableTransaction(Txid),
     /// Node doesn't have data to estimate a fee rate
     FeeRateUnavailable,
@@ -448,6 +455,9 @@ pub enum ReplaceByFeeError {
     /// (either a direct conflict or one of its descendants); including it would produce
     /// an invalid transaction.
     ConflictingInput(OutPoint),
+    /// An original transaction spends wallet-owned outputs without valid signatures (or other
+    /// satisfactions). It was likely forged by a malicious chain source and must not be replaced.
+    InvalidSignature(Txid),
 }
 
 #[cfg(all(bdk_wallet_unstable, feature = "bdk-tx"))]
@@ -471,6 +481,12 @@ impl fmt::Display for ReplaceByFeeError {
                 write!(
                     f,
                     "manually-selected input {outpoint} conflicts with the replacement set"
+                )
+            }
+            Self::InvalidSignature(txid) => {
+                write!(
+                    f,
+                    "original transaction {txid} spends wallet outputs without valid signatures"
                 )
             }
         }

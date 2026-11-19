@@ -1373,7 +1373,22 @@ mod test {
         let mut builder = wallet.build_tx();
         builder.add_recipient(recip.clone(), Amount::from_sat(15_000));
         builder.fee_absolute(Amount::from_sat(1_000));
-        let psbt = builder.finish().unwrap();
+        let mut psbt = builder.finish().unwrap();
+
+        // sign tx1, unsigned txs spending wallet outputs are rejected
+        let (_, keymap) = crate::descriptor::IntoWalletDescriptor::into_wallet_descriptor(
+            get_test_tr_single_sig(),
+            wallet.secp_ctx(),
+            Network::Regtest.into(),
+        )
+        .unwrap();
+        let signer = miniscript::descriptor::KeyMapWrapper::from(keymap);
+        psbt.sign(&signer, wallet.secp_ctx()).unwrap();
+        assert!(
+            wallet
+                .finalize_psbt(&mut psbt, crate::SignOptions::default())
+                .unwrap()
+        );
 
         let tx = psbt.extract_tx().unwrap();
         let txid = tx.compute_txid();

@@ -7,6 +7,7 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use bitcoin::{Transaction, Txid};
 use chain::{BlockId, ChainPosition, ConfirmationBlockTime};
+use core::fmt;
 
 /// Events representing changes to wallet transactions.
 ///
@@ -69,6 +70,31 @@ pub enum WalletEvent {
         /// Conflicting transaction ids.
         conflicts: Vec<(usize, Txid)>,
     },
+    /// An unconfirmed transaction was rejected and not applied to the wallet.
+    ///
+    /// The transaction spends outputs owned by the wallet, but the signatures (or other
+    /// satisfactions) for those inputs are missing or invalid. Such a transaction can't be valid,
+    /// so the chain source that returned it is likely malicious: it may be trying to make the
+    /// wallet replace a real transaction with one that pays an attacker.
+    ///
+    /// A legitimate transaction can also be rejected if it spends a wallet-owned taproot output
+    /// together with foreign inputs whose prevouts are unknown to the wallet (e.g. a payjoin or
+    /// coinjoin): taproot signatures commit to all the prevouts, so it can't be verified. It is
+    /// accepted once confirmed, or once applied again with the missing prevouts. Electrum users
+    /// avoid this by syncing with `fetch_prev_txouts = true`; see
+    /// [`Wallet::apply_update`](crate::Wallet::apply_update) for other chain sources. Use
+    /// `reason` to tell the two cases apart.
+    ///
+    /// Rejections are not persisted: a chain source that keeps returning the transaction causes
+    /// it to be rejected, and reported, on every sync.
+    TxRejected {
+        /// Transaction id.
+        txid: Txid,
+        /// Transaction.
+        tx: Arc<Transaction>,
+        /// Why the transaction was rejected.
+        reason: TxRejectedReason,
+    },
     /// Unconfirmed transaction dropped.
     ///
     /// The transaction was dropped from the local mempool. This is generally due to the fee rate
@@ -80,6 +106,48 @@ pub enum WalletEvent {
         /// Transaction.
         tx: Arc<Transaction>,
     },
+}
+
+/// Why an unconfirmed transaction was rejected, see [`WalletEvent::TxRejected`].
+///
+/// Only the first wallet-owned input that failed verification is reported.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum TxRejectedReason {
+    /// A wallet-owned input does not validly satisfy its prevout script: its signatures (or other
+    /// satisfactions) are missing or invalid.
+    ///
+    /// The transaction can't be valid. The chain source that returned it is likely malicious.
+    InvalidInput {
+        /// Index of the offending input.
+        input_index: usize,
+    },
+    /// A wallet-owned taproot input fails to verify, and the prevouts of some other inputs are
+    /// unknown to the wallet.
+    ///
+    /// Taproot signatures (other than `SIGHASH_ANYONECANPAY` ones) commit to the prevouts of all
+    /// the inputs, so the input may be validly signed but can't be verified. This is expected for
+    /// legitimate payjoins or coinjoins synced without their foreign prevouts (e.g. Electrum with
+    /// `fetch_prev_txouts = false`), but a forged transaction is reported the same way.
+    MissingPrevouts {
+        /// Index of the input that could not be verified.
+        input_index: usize,
+    },
+}
+
+impl fmt::Display for TxRejectedReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidInput { input_index } => write!(
+                f,
+                "input {input_index} spends a wallet output without a valid satisfaction"
+            ),
+            Self::MissingPrevouts { input_index } => write!(
+                f,
+                "input {input_index} spends a wallet taproot output and can't be verified without the missing prevouts"
+            ),
+        }
+    }
 }
 
 /// Generate `WalletEvent`s by comparing the chain tip and wallet transactions before and after
