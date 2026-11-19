@@ -23,6 +23,7 @@ fn test_bump_fee_irreplaceable_tx() {
     let mut builder = wallet.build_tx();
     builder.add_recipient(addr.script_pubkey(), Amount::from_sat(25_000));
     builder.set_exact_sequence(Sequence(0xFFFFFFFE));
+    builder.allow_self_payment();
     let psbt = builder.finish().unwrap();
 
     let tx = psbt.extract_tx().expect("failed to extract tx");
@@ -38,6 +39,7 @@ fn test_bump_fee_confirmed_tx() {
     let addr = wallet.next_unused_address(KeychainKind::External);
     let mut builder = wallet.build_tx();
     builder.add_recipient(addr.script_pubkey(), Amount::from_sat(25_000));
+    builder.allow_self_payment();
     let psbt = builder.finish().unwrap();
 
     let tx = psbt.extract_tx().expect("failed to extract tx");
@@ -60,6 +62,7 @@ fn test_bump_fee_low_fee_rate() {
     let addr = wallet.next_unused_address(KeychainKind::External);
     let mut builder = wallet.build_tx();
     builder.add_recipient(addr.script_pubkey(), Amount::from_sat(25_000));
+    builder.allow_self_payment();
 
     let psbt = builder.finish().unwrap();
     let feerate = psbt.fee_rate().unwrap();
@@ -90,6 +93,7 @@ fn test_bump_fee_low_abs() {
     let addr = wallet.next_unused_address(KeychainKind::External);
     let mut builder = wallet.build_tx();
     builder.add_recipient(addr.script_pubkey(), Amount::from_sat(25_000));
+    builder.allow_self_payment();
     let psbt = builder.finish().unwrap();
 
     let tx = psbt.extract_tx().expect("failed to extract tx");
@@ -108,6 +112,7 @@ fn test_bump_fee_zero_abs() {
     let addr = wallet.next_unused_address(KeychainKind::External);
     let mut builder = wallet.build_tx();
     builder.add_recipient(addr.script_pubkey(), Amount::from_sat(25_000));
+    builder.allow_self_payment();
     let psbt = builder.finish().unwrap();
 
     let tx = psbt.extract_tx().expect("failed to extract tx");
@@ -763,6 +768,7 @@ fn test_legacy_bump_fee_zero_abs() {
     let addr = wallet.next_unused_address(KeychainKind::External);
     let mut builder = wallet.build_tx();
     builder.add_recipient(addr.script_pubkey(), Amount::from_sat(25_000));
+    builder.allow_self_payment();
     let psbt = builder.finish().unwrap();
 
     let tx = psbt.extract_tx().expect("failed to extract tx");
