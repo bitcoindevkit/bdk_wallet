@@ -39,8 +39,8 @@ std = ["bitcoin/std", "bitcoin/rand-std", "miniscript/std", "bdk_chain/std", "bd
 compiler = ["miniscript/compiler"]
 all-keys = ["keys-bip39"]
 keys-bip39 = ["bip39"]
-rusqlite = ["bdk_chain/rusqlite"]
-file_store = ["bdk_file_store"]
+rusqlite = ["std", "bdk_chain/rusqlite"]
+file_store = ["std", "bdk_file_store"]
 bdk-tx = ["dep:bdk_tx"]
 test-utils = ["std"]
 
