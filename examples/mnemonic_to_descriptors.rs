@@ -15,7 +15,7 @@ use bdk_wallet::descriptor::IntoWalletDescriptor;
 use bdk_wallet::keys::bip39::{Language, Mnemonic, WordCount};
 use bdk_wallet::keys::{GeneratableKey, GeneratedKey};
 use bdk_wallet::miniscript::Tap;
-use std::str::FromStr;
+use core::str::FromStr;
 
 /// This example demonstrates how to generate a mnemonic phrase
 /// using BDK and use that mnemonic phrase to generate a descriptor string.

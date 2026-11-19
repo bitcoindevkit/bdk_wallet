@@ -15,7 +15,7 @@ extern crate miniscript;
 extern crate serde_json;
 
 use core::error::Error;
-use std::str::FromStr;
+use core::str::FromStr;
 
 use bitcoin::Network;
 use miniscript::Descriptor;

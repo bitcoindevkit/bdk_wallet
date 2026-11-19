@@ -1,7 +1,7 @@
 #![allow(clippy::print_stdout)]
 
+use core::str::FromStr;
 use std::collections::HashMap;
-use std::str::FromStr;
 
 use bdk_chain::BlockId;
 use bdk_chain::ConfirmationBlockTime;

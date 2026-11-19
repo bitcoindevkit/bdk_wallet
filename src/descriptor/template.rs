@@ -221,7 +221,7 @@ impl<K: IntoDescriptorKey<Tap>> DescriptorTemplate for P2TR<K> {
 /// ## Example
 ///
 /// ```rust
-/// # use std::str::FromStr;
+/// # use core::str::FromStr;
 /// # use bdk_wallet::bitcoin::{PrivateKey, Network};
 /// # use bdk_wallet::{Wallet, KeychainKind};
 /// use bdk_wallet::template::Bip44;
@@ -263,7 +263,7 @@ impl<K: DerivableKey<Legacy>> DescriptorTemplate for Bip44<K> {
 /// ## Example
 ///
 /// ```
-/// # use std::str::FromStr;
+/// # use core::str::FromStr;
 /// # use bdk_wallet::bitcoin::{PrivateKey, Network};
 /// # use bdk_wallet::{KeychainKind, Wallet};
 /// use bdk_wallet::template::Bip44Public;
@@ -307,7 +307,7 @@ impl<K: DerivableKey<Legacy>> DescriptorTemplate for Bip44Public<K> {
 /// ## Example
 ///
 /// ```
-/// # use std::str::FromStr;
+/// # use core::str::FromStr;
 /// # use bdk_wallet::bitcoin::{PrivateKey, Network};
 /// # use bdk_wallet::{Wallet, KeychainKind};
 /// use bdk_wallet::template::Bip49;
@@ -352,7 +352,7 @@ impl<K: DerivableKey<Segwitv0>> DescriptorTemplate for Bip49<K> {
 /// ## Example
 ///
 /// ```
-/// # use std::str::FromStr;
+/// # use core::str::FromStr;
 /// # use bdk_wallet::bitcoin::{PrivateKey, Network};
 /// # use bdk_wallet::{Wallet, KeychainKind};
 /// use bdk_wallet::template::Bip49Public;
@@ -396,7 +396,7 @@ impl<K: DerivableKey<Segwitv0>> DescriptorTemplate for Bip49Public<K> {
 /// ## Example
 ///
 /// ```
-/// # use std::str::FromStr;
+/// # use core::str::FromStr;
 /// # use bdk_wallet::bitcoin::{PrivateKey, Network};
 /// # use bdk_wallet::{Wallet, KeychainKind};
 /// use bdk_wallet::template::Bip84;
@@ -441,7 +441,7 @@ impl<K: DerivableKey<Segwitv0>> DescriptorTemplate for Bip84<K> {
 /// ## Example
 ///
 /// ```
-/// # use std::str::FromStr;
+/// # use core::str::FromStr;
 /// # use bdk_wallet::bitcoin::{PrivateKey, Network};
 /// # use bdk_wallet::{Wallet, KeychainKind};
 /// use bdk_wallet::template::Bip84Public;
@@ -485,7 +485,7 @@ impl<K: DerivableKey<Segwitv0>> DescriptorTemplate for Bip84Public<K> {
 /// ## Example
 ///
 /// ```
-/// # use std::str::FromStr;
+/// # use core::str::FromStr;
 /// # use bdk_wallet::bitcoin::{PrivateKey, Network};
 /// # use bdk_wallet::{Wallet, KeychainKind};
 /// use bdk_wallet::template::Bip86;
@@ -530,7 +530,7 @@ impl<K: DerivableKey<Tap>> DescriptorTemplate for Bip86<K> {
 /// ## Example
 ///
 /// ```
-/// # use std::str::FromStr;
+/// # use core::str::FromStr;
 /// # use bdk_wallet::bitcoin::{PrivateKey, Network};
 /// # use bdk_wallet::{Wallet, KeychainKind};
 /// use bdk_wallet::template::Bip86Public;
