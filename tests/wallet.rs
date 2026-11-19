@@ -1566,6 +1566,36 @@ fn test_sign_single_xprv_with_master_fingerprint_and_path() {
 }
 
 #[test]
+fn test_sign_with_signers_sharing_root_fingerprint() {
+    let tprv = "tprv8ZgxMBicQKsPd3EupYiPRhaMooHKUHJxNsTfYuScep13go8QFfHdtkG9nRkFGb7busX4isf6X9dURGCoKgitaApQ6MupRhZMcELAxTBRJgS";
+    for (descriptor, witness_len) in [
+        (format!("wsh(multi(2,{tprv}/0/*,{tprv}/1/*))"), 4),
+        (format!("tr({tprv}/0/*,pk({tprv}/1/*))"), 1),
+    ] {
+        let (mut wallet, _) = get_funded_wallet_single(&descriptor);
+        let addr = wallet.next_unused_address(KeychainKind::External);
+        let mut builder = wallet.build_tx();
+        builder.drain_to(addr.script_pubkey()).drain_wallet();
+        let mut psbt = builder.finish().unwrap();
+
+        let signers = signers_from_descriptor(&wallet, &descriptor);
+        let finalized = wallet
+            .sign_with_signers(&mut psbt, &[&signers], Default::default())
+            .unwrap();
+        assert!(finalized, "{descriptor}");
+
+        let extracted = psbt.extract_tx().expect("failed to extract tx");
+        assert!(
+            extracted
+                .input
+                .iter()
+                .all(|input| input.witness.len() == witness_len),
+            "{descriptor}"
+        );
+    }
+}
+
+#[test]
 fn test_sign_single_xprv_bip44_path() {
     let descriptor = "wpkh(tprv8ZgxMBicQKsPd3EupYiPRhaMooHKUHJxNsTfYuScep13go8QFfHdtkG9nRkFGb7busX4isf6X9dURGCoKgitaApQ6MupRhZMcELAxTBRJgS/44'/0'/0'/0/*)";
     let (mut wallet, _) = get_funded_wallet_single(descriptor);
