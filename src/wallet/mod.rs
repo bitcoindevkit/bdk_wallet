@@ -490,6 +490,7 @@ impl Wallet {
             if let Some(make_desc) = expected {
                 let (exp_desc, keymap) =
                     make_desc(&secp, network_kind).map_err(LoadError::Descriptor)?;
+                check_wallet_descriptor(&exp_desc).map_err(LoadError::Descriptor)?;
                 if descriptor.descriptor_id() != exp_desc.descriptor_id() {
                     return Err(LoadError::Mismatch(LoadMismatch::Descriptor {
                         keychain: KeychainKind::External,
@@ -547,6 +548,7 @@ impl Wallet {
                     check_wallet_descriptor(&desc).map_err(LoadError::Descriptor)?;
                     let (exp_desc, keymap) =
                         make_desc(&secp, network_kind).map_err(LoadError::Descriptor)?;
+                    check_wallet_descriptor(&exp_desc).map_err(LoadError::Descriptor)?;
                     if desc.descriptor_id() != exp_desc.descriptor_id() {
                         return Err(LoadError::Mismatch(LoadMismatch::Descriptor {
                             keychain: KeychainKind::Internal,
