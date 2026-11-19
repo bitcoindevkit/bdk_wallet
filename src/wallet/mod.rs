@@ -1959,11 +1959,13 @@ impl Wallet {
         }
     }
 
-    /// Check this input's amount against its parent transaction.
+    /// Verify this input's amount against its parent transaction.
     ///
-    /// Validate `non_witness_utxo` if supplied. Otherwise, Taproot inputs may use the full parent
-    /// transaction stored in the wallet. Any supplied `witness_utxo` must match the parent's output.
-    /// Non-Taproot inputs require `non_witness_utxo`.
+    /// If `non_witness_utxo` is provided, validate it against `outpoint` and require any
+    /// `witness_utxo` to match the referenced output.
+    ///
+    /// Without `non_witness_utxo`, only Taproot inputs are accepted: the wallet must store the
+    /// full parent transaction, and `witness_utxo` must be present and match the referenced output.
     fn check_input_amount(
         &self,
         input: &psbt::Input,
@@ -1992,7 +1994,8 @@ impl Wallet {
             {
                 return match input.witness_utxo.as_ref() {
                     Some(witness) if witness != prevout => Err(SignerError::InvalidNonWitnessUtxo),
-                    _ => Ok(()),
+                    Some(_) => Ok(()),
+                    None => Err(SignerError::MissingWitnessUtxo),
                 };
             }
         }
