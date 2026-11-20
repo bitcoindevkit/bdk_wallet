@@ -28,7 +28,7 @@ jobs:
       # The 'toolchain' argument on this action overrides the Rust compiler version set in rust-toolchain.toml
       # in order to test our MSRV.
       - name: Install Rust toolchain
-        uses: actions-rust-lang/setup-rust-toolchain@v2
+        uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2.0.1
         with:
           toolchain: 1.85 # MSRV
           cache: true
@@ -61,7 +61,7 @@ jobs:
       # This action will honor the Rust compiler version set in rust-toolchain.toml. We aim to keep it in sync with
       # Rust stable.
       - name: Install Rust toolchain
-        uses: actions-rust-lang/setup-rust-toolchain@v2
+        uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2.0.1
         with:
           cache: true
           rustflags: "-D warnings"
@@ -85,7 +85,7 @@ jobs:
           persist-credentials: false
       # This action automatically reads and applies rust-toolchain.toml
       - name: Install Rust toolchain
-        uses: actions-rust-lang/setup-rust-toolchain@v2
+        uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2.0.1
         with:
           cache: true
           rustflags: "-D warnings"
@@ -108,7 +108,7 @@ jobs:
           persist-credentials: false
       # This action automatically reads and applies rust-toolchain.toml
       - name: Install Rust toolchain
-        uses: actions-rust-lang/setup-rust-toolchain@v2
+        uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2.0.1
         with:
           cache: true
           target: wasm32-unknown-unknown
@@ -129,7 +129,7 @@ jobs:
       # The 'toolchain' argument on this action overrides the Rust compiler version set in rust-toolchain.toml
       # Pinned nightly for formatting; keep in sync with NIGHTLY in the justfile
       - name: Install Rust toolchain
-        uses: actions-rust-lang/setup-rust-toolchain@v2
+        uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2.0.1
         with:
           toolchain: nightly-2026-10-27
           components: rustfmt
@@ -149,7 +149,7 @@ jobs:
           persist-credentials: false
       # This action automatically reads and applies rust-toolchain.toml
       - name: Install Rust toolchain
-        uses: actions-rust-lang/setup-rust-toolchain@v2
+        uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2.0.1
         with:
           cache: true
           rustflags: "-D warnings"
@@ -168,7 +168,7 @@ jobs:
           persist-credentials: false
       # This action automatically reads and applies rust-toolchain.toml
       - name: Install Rust toolchain
-        uses: actions-rust-lang/setup-rust-toolchain@v2
+        uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2.0.1
         with:
           cache: true
           rustflags: "-D warnings"
