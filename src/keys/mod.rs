@@ -864,7 +864,10 @@ pub fn make_pkh<Pk: IntoDescriptorKey<Ctx>, Ctx: ScriptContext>(
 pub fn make_multi<
     Pk: IntoDescriptorKey<Ctx>,
     Ctx: ScriptContext,
-    V: Fn(usize, Vec<DescriptorPublicKey>) -> Terminal<DescriptorPublicKey, Ctx>,
+    V: Fn(
+        usize,
+        Vec<DescriptorPublicKey>,
+    ) -> Result<Terminal<DescriptorPublicKey, Ctx>, DescriptorError>,
 >(
     thresh: usize,
     variant: V,
@@ -879,7 +882,7 @@ pub fn make_multi<
     DescriptorError,
 > {
     let (pks, key_map, valid_network_kinds) = expand_multi_keys(pks, secp)?;
-    let minisc = Miniscript::from_ast(variant(thresh, pks))?;
+    let minisc = Miniscript::from_ast(variant(thresh, pks)?)?;
 
     minisc.check_miniscript()?;
 
