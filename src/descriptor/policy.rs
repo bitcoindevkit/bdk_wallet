@@ -926,6 +926,24 @@ impl<Ctx: ScriptContext + 'static> ExtractPolicy for Miniscript<DescriptorPublic
         build_sat: BuildSatisfaction,
         secp: &SecpCtx,
     ) -> Result<Option<Policy>, Error> {
+        // Reject raw key hashes in combinators to avoid silently dropping spending conditions.
+        if matches!(
+            self.node,
+            Terminal::AndV(..)
+                | Terminal::AndB(..)
+                | Terminal::AndOr(..)
+                | Terminal::OrB(..)
+                | Terminal::OrD(..)
+                | Terminal::OrC(..)
+                | Terminal::OrI(..)
+                | Terminal::Thresh(..)
+        ) && self.contains_raw_pkh()
+        {
+            return Err(Error::Miniscript(miniscript::Error::Unexpected(
+                String::from("expr_raw_pkh inside a combinator can't be represented as a policy"),
+            )));
+        }
+
         Ok(match &self.node {
             // Leaves
             Terminal::True | Terminal::False => None,
@@ -1774,6 +1792,56 @@ mod test {
 
         let policy = wallet_desc.extract_policy(&signers_container, BuildSatisfaction::None, &secp);
         assert!(policy.is_ok());
+    }
+
+    const RAW_PKH_PK_A: &str = "02c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5";
+    const RAW_PKH_PK_B: &str = "02e493dbf1c10d80f3581e4904930b1404cc6c13900ee0758474fa94abe8c4cd13";
+    const RAW_PKH_H1: &str = "7dd65592d0ab2fe0d0257d571abf032cd9db93dc";
+    const RAW_PKH_H2: &str = "0011223344556677889900112233445566778899";
+
+    fn extract_policy_from_str(desc: &str) -> Result<Option<Policy>, descriptor::DescriptorError> {
+        let secp = Secp256k1::new();
+        let (wallet_desc, _) = desc
+            .into_wallet_descriptor(&secp, NetworkKind::Test)
+            .unwrap();
+        wallet_desc.extract_policy(&SignersContainer::default(), BuildSatisfaction::None, &secp)
+    }
+
+    #[test]
+    fn test_extract_policy_raw_pkh_whole_script_has_no_policy() {
+        for desc in [
+            format!("sh(c:expr_raw_pkh({RAW_PKH_H1}))"),
+            format!("wsh(c:expr_raw_pkh({RAW_PKH_H1}))"),
+        ] {
+            assert_matches!(extract_policy_from_str(&desc), Ok(None), "{desc}");
+        }
+    }
+
+    #[test]
+    fn test_extract_policy_raw_pkh_inside_combinator_is_an_error() {
+        let (a, b, h1, h2) = (RAW_PKH_PK_A, RAW_PKH_PK_B, RAW_PKH_H1, RAW_PKH_H2);
+        for desc in [
+            format!("wsh(and_v(v:pkh({a}),c:expr_raw_pkh({h1})))"),
+            format!("wsh(and_b(pk({a}),ac:expr_raw_pkh({h1})))"),
+            format!("wsh(or_i(pk({a}),c:expr_raw_pkh({h1})))"),
+            format!("wsh(or_b(pk({a}),ac:expr_raw_pkh({h1})))"),
+            format!("wsh(or_d(pk({a}),c:expr_raw_pkh({h1})))"),
+            format!("wsh(t:or_c(pk({a}),vc:expr_raw_pkh({h1})))"),
+            format!("wsh(andor(c:expr_raw_pkh({h1}),pk({a}),pk({b})))"),
+            format!("wsh(andor(pk({a}),c:expr_raw_pkh({h1}),pk({b})))"),
+            format!("wsh(andor(pk({a}),pk({b}),c:expr_raw_pkh({h1})))"),
+            format!("wsh(thresh(1,c:pk_k({a}),ac:expr_raw_pkh({h1})))"),
+            // nested deeper than the top-level combinator
+            format!("wsh(and_v(v:pk({a}),or_i(pk({b}),c:expr_raw_pkh({h1}))))"),
+            // every child is a raw hash
+            format!("wsh(or_i(c:expr_raw_pkh({h1}),c:expr_raw_pkh({h2})))"),
+        ] {
+            assert_matches!(
+                extract_policy_from_str(&desc),
+                Err(descriptor::DescriptorError::Miniscript(_)),
+                "{desc}"
+            );
+        }
     }
 
     #[test]
