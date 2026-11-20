@@ -33,7 +33,7 @@ _check-unstable:
 
 # Check formatting, compilation, linting, and commit signature
 check: _check _check-unstable
-   @[ "$(git log --pretty='format:%G?' -1 HEAD)" = "N" ] && \
+   @[ "$(git -c gpg.ssh.allowedSignersFile=/dev/null log --pretty='format:%G?' -1 HEAD)" = "N" ] && \
        echo "\n⚠️  Unsigned commit: BDK requires that commits be signed." || \
        true
 

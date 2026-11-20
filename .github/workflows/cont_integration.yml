@@ -180,5 +180,5 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: Verify all commits are GPG signed
+      - name: Verify all commits are signed
         run: ./ci/check-signed-commits.sh "${{ github.event.pull_request.base.sha }}" "${{ github.event.pull_request.head.sha }}"
