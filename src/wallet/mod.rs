@@ -1490,10 +1490,15 @@ impl Wallet {
 
             tx.output.push(new_out);
 
-            outgoing += value;
+            outgoing = outgoing
+                .checked_add(value)
+                .ok_or(CreateTxError::AmountOverflow)?;
         }
 
-        fee_amount += fee_rate * tx.weight();
+        fee_amount = fee_rate
+            .checked_mul_by_weight(tx.weight())
+            .and_then(|fee| fee_amount.checked_add(fee))
+            .ok_or(CreateTxError::AmountOverflow)?;
 
         let (required_utxos, optional_utxos) = {
             // NOTE: manual selection overrides unspendable
@@ -1541,7 +1546,10 @@ impl Wallet {
                 required_utxos,
                 optional_utxos,
                 fee_rate,
-                outgoing + fee_amount,
+                outgoing
+                    .checked_add(fee_amount)
+                    .filter(|target| *target <= Amount::MAX_MONEY)
+                    .ok_or(CreateTxError::AmountOverflow)?,
                 &drain_script,
                 rng,
             )

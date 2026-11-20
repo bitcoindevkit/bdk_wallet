@@ -157,6 +157,7 @@ impl fmt::Display for MiniscriptPsbtError {
 impl core::error::Error for MiniscriptPsbtError {}
 
 #[derive(Debug)]
+#[non_exhaustive]
 /// Error returned from [`TxBuilder::finish`]
 ///
 /// [`TxBuilder::finish`]: crate::wallet::tx_builder::TxBuilder::finish
@@ -199,6 +200,9 @@ pub enum CreateTxError {
     NoUtxosSelected,
     /// Output created is under the dust limit, 546 satoshis
     OutputBelowDustLimit(usize),
+    /// Arithmetic overflow while calculating recipient amounts or fees, or their
+    /// combined amount exceeds `Amount::MAX_MONEY`.
+    AmountOverflow,
     /// There was an error with coin selection
     CoinSelection(coin_selection::InsufficientFunds),
     /// Cannot build a tx without recipients
@@ -268,6 +272,12 @@ impl fmt::Display for CreateTxError {
             }
             CreateTxError::OutputBelowDustLimit(limit) => {
                 write!(f, "Output below the dust limit: {limit}")
+            }
+            CreateTxError::AmountOverflow => {
+                write!(
+                    f,
+                    "Recipient amount or fee calculation exceeds the supported range"
+                )
             }
             CreateTxError::CoinSelection(e) => e.fmt(f),
             CreateTxError::NoRecipients => {

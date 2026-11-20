@@ -184,6 +184,157 @@ macro_rules! from_str {
 }
 
 #[test]
+fn test_create_tx_recipient_amount_overflow() {
+    let (mut wallet, _) = get_funded_wallet_wpkh();
+    let recipient = wallet
+        .peek_address(KeychainKind::External, 0)
+        .script_pubkey();
+    let mut builder = wallet.build_tx();
+    builder
+        .add_recipient(recipient.clone(), Amount::MAX)
+        .add_recipient(recipient, Amount::from_sat(1_000));
+
+    let err = builder.finish().unwrap_err();
+    assert_matches!(&err, CreateTxError::AmountOverflow);
+    assert_eq!(
+        err.to_string(),
+        "Recipient amount or fee calculation exceeds the supported range"
+    );
+}
+
+#[test]
+fn test_create_tx_single_recipient_and_fee_overflow() {
+    let (mut wallet, _) = get_funded_wallet_wpkh();
+    let recipient = wallet
+        .peek_address(KeychainKind::External, 0)
+        .script_pubkey();
+    let mut builder = wallet.build_tx();
+    builder.add_recipient(recipient, Amount::MAX);
+
+    assert_matches!(builder.finish(), Err(CreateTxError::AmountOverflow));
+}
+
+#[test]
+fn test_create_tx_absolute_fee_overflow() {
+    let (mut wallet, _) = get_funded_wallet_wpkh();
+    let recipient = wallet
+        .peek_address(KeychainKind::External, 0)
+        .script_pubkey();
+    let mut builder = wallet.build_tx();
+    builder
+        .add_recipient(recipient, Amount::from_sat(1_000))
+        .fee_absolute(Amount::MAX);
+
+    assert_matches!(builder.finish(), Err(CreateTxError::AmountOverflow));
+}
+
+#[test]
+fn test_create_tx_fee_rate_overflow() {
+    let (mut wallet, _) = get_funded_wallet_wpkh();
+    let recipient = wallet
+        .peek_address(KeychainKind::External, 0)
+        .script_pubkey();
+    let mut builder = wallet.build_tx();
+    builder
+        .add_recipient(recipient, Amount::from_sat(1_000))
+        .fee_rate(FeeRate::MAX);
+
+    assert_matches!(builder.finish(), Err(CreateTxError::AmountOverflow));
+}
+
+#[test]
+fn test_create_tx_fee_rounding_overflow() {
+    let (mut wallet, _) = get_funded_wallet_wpkh();
+    let recipient = wallet
+        .peek_address(KeychainKind::External, 0)
+        .script_pubkey();
+    let amount = Amount::from_sat(1_000);
+    let tx = Transaction {
+        version: transaction::Version::TWO,
+        lock_time: absolute::LockTime::ZERO,
+        input: vec![],
+        output: vec![TxOut {
+            value: amount,
+            script_pubkey: recipient.clone(),
+        }],
+    };
+    // The product fits in u64, but rounding the fee up adds 999 and overflows.
+    let weight = tx.weight().to_wu();
+    let rate = u64::MAX / weight;
+    assert!(rate.checked_mul(weight).unwrap().checked_add(999).is_none());
+    let mut builder = wallet.build_tx();
+    builder
+        .add_recipient(recipient, amount)
+        .fee_rate(FeeRate::from_sat_per_kwu(rate));
+
+    assert_matches!(builder.finish(), Err(CreateTxError::AmountOverflow));
+}
+
+#[test]
+fn test_create_tx_near_max_recipient() {
+    let (mut wallet, _) = get_funded_wallet_wpkh();
+    let recipient = wallet
+        .peek_address(KeychainKind::External, 0)
+        .script_pubkey();
+    let mut builder = wallet.build_tx();
+    builder
+        .add_recipient(recipient, Amount::MAX - Amount::from_sat(100))
+        .fee_rate(FeeRate::from_sat_per_vb(1).unwrap());
+
+    assert_matches!(builder.finish(), Err(CreateTxError::AmountOverflow));
+}
+
+#[test]
+fn test_create_tx_excessive_fee_rate() {
+    let (mut wallet, _) = get_funded_wallet_wpkh();
+    let recipient = wallet
+        .peek_address(KeychainKind::External, 0)
+        .script_pubkey();
+    let mut builder = wallet.build_tx();
+    builder
+        .add_recipient(recipient, Amount::from_sat(1_000))
+        .fee_rate(FeeRate::from_sat_per_kwu(u64::MAX / 200));
+
+    assert_matches!(builder.finish(), Err(CreateTxError::AmountOverflow));
+}
+
+#[test]
+fn test_create_tx_target_above_max_money() {
+    for (amount, fee) in [
+        (Amount::MAX_MONEY + Amount::ONE_SAT, Amount::ZERO),
+        (Amount::MAX_MONEY, Amount::ONE_SAT),
+    ] {
+        let (mut wallet, _) = get_funded_wallet_wpkh();
+        let recipient = wallet
+            .peek_address(KeychainKind::External, 0)
+            .script_pubkey();
+        let mut builder = wallet.build_tx();
+        builder.add_recipient(recipient, amount).fee_absolute(fee);
+
+        assert_matches!(builder.finish(), Err(CreateTxError::AmountOverflow));
+    }
+}
+
+#[test]
+fn test_create_tx_recipient_and_absolute_fee_max_money() {
+    let (mut wallet, _) = get_funded_wallet_wpkh();
+    let recipient = wallet
+        .peek_address(KeychainKind::External, 0)
+        .script_pubkey();
+    let amount = Amount::from_sat(1_000);
+    let mut builder = wallet.build_tx();
+    builder
+        .add_recipient(recipient, amount)
+        .fee_absolute(Amount::MAX_MONEY - amount);
+
+    assert_matches!(
+        builder.finish(),
+        Err(CreateTxError::CoinSelection(InsufficientFunds { needed, available }))
+            if needed == Amount::MAX_MONEY && available == Amount::from_sat(50_000)
+    );
+}
+
+#[test]
 #[should_panic(expected = "NoRecipients")]
 fn test_create_tx_empty_recipients() {
     let (mut wallet, _) = get_funded_wallet_wpkh();
