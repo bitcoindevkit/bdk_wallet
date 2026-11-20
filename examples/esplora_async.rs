@@ -1,6 +1,6 @@
 use bdk_esplora::{EsploraAsyncExt, esplora_client};
 use bdk_wallet::{
-    KeychainKind, SignOptions, Wallet,
+    KeychainKind, Wallet,
     bitcoin::{Amount, FeeRate, Network, secp256k1::Secp256k1},
     descriptor::IntoWalletDescriptor,
     miniscript::descriptor::KeyMapWrapper,
@@ -93,7 +93,7 @@ async fn main() -> Result<(), anyhow::Error> {
     let mut psbt = tx_builder.finish()?;
     psbt.sign(&signer, wallet.secp_ctx())
         .map_err(|(_, e)| anyhow::anyhow!("{e:?}"))?;
-    let finalized = wallet.finalize_psbt(&mut psbt, SignOptions::default())?;
+    let finalized = wallet.finalize_psbt(&mut psbt)?;
     assert!(finalized);
     let original_fee = psbt.fee_amount().unwrap();
     let tx_feerate = psbt.fee_rate().unwrap();
@@ -130,7 +130,7 @@ async fn main() -> Result<(), anyhow::Error> {
     bumped_psbt
         .sign(&signer, wallet.secp_ctx())
         .map_err(|(_, e)| anyhow::anyhow!("{e:?}"))?;
-    let finalize_btx = wallet.finalize_psbt(&mut bumped_psbt, SignOptions::default())?;
+    let finalize_btx = wallet.finalize_psbt(&mut bumped_psbt)?;
     assert!(finalize_btx);
     let new_fee = bumped_psbt.fee_amount().unwrap();
     let bumped_tx = bumped_psbt.extract_tx()?;
