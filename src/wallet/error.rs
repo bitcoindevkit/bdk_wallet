@@ -384,9 +384,14 @@ pub enum CreatePsbtError {
     /// [`SelectionStrategy::All`]: crate::SelectionStrategy::All
     /// [`change_script`]: crate::PsbtParams::change_script
     NoRecipients,
-    /// After coin selection, all outputs fell below the dust threshold and were
-    /// dropped to fees.
+    /// No recipients were set (a sweep), and the change output fell below the dust threshold, so
+    /// it was dropped to fees and no outputs were left.
     AllOutputsBelowDust,
+    /// The recipient at this index has an amount below the dust limit of its script. To skip
+    /// this check, see [`allow_dust`].
+    ///
+    /// [`allow_dust`]: crate::psbt::PsbtParams::allow_dust
+    OutputBelowDustLimit(usize),
     /// Non-sufficient funds.
     InsufficientFunds(bdk_coin_select::InsufficientFunds),
     /// In order to use the [`add_global_xpubs`] option, every extended key in the descriptor must
@@ -414,6 +419,9 @@ impl fmt::Display for CreatePsbtError {
             Self::InsufficientFunds(e) => write!(f, "{e}"),
             Self::NoRecipients => write!(f, "no output destinations were configured"),
             Self::AllOutputsBelowDust => write!(f, "all outputs are below the dust threshold",),
+            Self::OutputBelowDustLimit(index) => {
+                write!(f, "recipient {index} is below the dust limit")
+            }
             Self::MissingKeyOrigin(e) => write!(f, "missing key origin: {e}"),
             Self::Plan(op) => write!(f, "failed to create a plan for txout with outpoint {op}"),
             Self::Psbt(e) => write!(f, "{e}"),
