@@ -54,6 +54,34 @@ pub trait WalletPersister {
     ///
     /// [`initialize`]: WalletPersister::initialize
     fn persist(persister: &mut Self, changeset: &ChangeSet) -> Result<(), Self::Error>;
+
+    /// Persist the given `changeset` only if the `persister` contains no data.
+    ///
+    /// This is called by [`PersistedWallet::create`] to write the initial changeset of a new
+    /// wallet. Returns `Ok(None)` if the `changeset` was persisted, or `Ok(Some(existing))` with
+    /// the data already in the `persister` if it was not empty, in which case nothing is written.
+    ///
+    /// # Implementation Details
+    ///
+    /// The default implementation calls [`initialize`] and then [`persist`] as two separate
+    /// operations, so it is not atomic: if the same underlying store is shared between multiple
+    /// `persister` instances, two concurrent calls can both observe an empty store and both
+    /// write. Implementations backed by a store that can be shared (e.g. a database) should
+    /// override this method so that the emptiness check and the write happen atomically.
+    ///
+    /// [`initialize`]: WalletPersister::initialize
+    /// [`persist`]: WalletPersister::persist
+    fn persist_if_empty(
+        persister: &mut Self,
+        changeset: &ChangeSet,
+    ) -> Result<Option<ChangeSet>, Self::Error> {
+        let existing = Self::initialize(persister)?;
+        if !existing.is_empty() {
+            return Ok(Some(existing));
+        }
+        Self::persist(persister, changeset)?;
+        Ok(None)
+    }
 }
 
 #[cfg(feature = "std")]
@@ -161,7 +189,15 @@ impl<P: WalletPersister> PersistedWallet<P> {
         let mut inner =
             Wallet::create_with_params(params).map_err(CreateWithPersistError::Descriptor)?;
         if let Some(changeset) = inner.take_staged() {
-            P::persist(persister, &changeset).map_err(CreateWithPersistError::Persist)?;
+            // The store may have been written to since the check above, so the initial write
+            // must only happen if the store is still empty.
+            if let Some(existing) = P::persist_if_empty(persister, &changeset)
+                .map_err(CreateWithPersistError::Persist)?
+            {
+                return Err(CreateWithPersistError::DataAlreadyExists(Box::new(
+                    existing,
+                )));
+            }
         }
         Ok(Self {
             inner,
@@ -295,6 +331,24 @@ impl WalletPersister for bdk_chain::rusqlite::Connection {
         let mut db_tx = persister.transaction()?;
         <bdk_chain::rusqlite::Transaction<'_> as WalletPersister>::persist(&mut db_tx, changeset)?;
         db_tx.commit()
+    }
+
+    fn persist_if_empty(
+        persister: &mut Self,
+        changeset: &ChangeSet,
+    ) -> Result<Option<ChangeSet>, Self::Error> {
+        // An `IMMEDIATE` transaction takes the write lock before reading, so no other connection
+        // can write between the emptiness check and the write below.
+        let mut db_tx = persister
+            .transaction_with_behavior(bdk_chain::rusqlite::TransactionBehavior::Immediate)?;
+        let existing =
+            <bdk_chain::rusqlite::Transaction<'_> as WalletPersister>::initialize(&mut db_tx)?;
+        if !existing.is_empty() {
+            return Ok(Some(existing));
+        }
+        <bdk_chain::rusqlite::Transaction<'_> as WalletPersister>::persist(&mut db_tx, changeset)?;
+        db_tx.commit()?;
+        Ok(None)
     }
 }
 
