@@ -2,7 +2,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use assert_matches::assert_matches;
-use bdk_chain::{BlockId, CanonicalizationParams, ConfirmationBlockTime};
+use bdk_chain::{BlockId, CanonicalizationParams, ConfirmationBlockTime, local_chain};
 use bdk_wallet::KeychainKind;
 use bdk_wallet::coin_selection;
 use bdk_wallet::coin_selection::InsufficientFunds;
@@ -14,8 +14,8 @@ use bdk_wallet::psbt::PsbtUtils;
 use bdk_wallet::signer::{SignOptions, SignerError, SignersContainer};
 use bdk_wallet::test_utils::*;
 use bdk_wallet::{
-    AddressInfo, Balance, FinalizeInputOutcome, IndexOutOfBoundsError, PersistedWallet, Update,
-    Wallet, WalletTx,
+    AddressInfo, Balance, ChangeSet, FinalizeInputOutcome, IndexOutOfBoundsError, LoadError,
+    LoadParams, PersistedWallet, Update, Wallet, WalletTx,
 };
 use bitcoin::constants::COINBASE_MATURITY;
 use bitcoin::hashes::Hash;
@@ -54,6 +54,55 @@ fn test_error_external_and_internal_are_the_same() {
     assert!(
         matches!(err, Err(DescriptorError::ExternalAndInternalAreTheSame)),
         "expected same descriptors error, got {err:?}",
+    );
+}
+
+#[test]
+fn test_error_create_mainnet_network_with_non_mainnet_genesis_hash() {
+    let external_desc = "tr(8aee2b8120a5f157f1223f72b5e62b825831a27a9fdf427db7cc697494d4a642)";
+    let internal_desc = "tr(b511bd5771e47ee27558b1765e87b541668304ec567721c7b880edc0a010da55)";
+    let testnet_genesis_hash = bitcoin::constants::genesis_block(Network::Testnet).block_hash();
+
+    let err = Wallet::create(external_desc, internal_desc)
+        .network(Network::Bitcoin)
+        .genesis_hash(testnet_genesis_hash)
+        .create_wallet_no_persist();
+
+    assert!(
+        matches!(
+            err,
+            Err(DescriptorError::GenesisHashMismatch {
+                network: Network::Bitcoin,
+                genesis_hash,
+            }) if genesis_hash == testnet_genesis_hash
+        ),
+        "expected wallet creation to reject a mismatched mainnet network and genesis hash, got {err:?}",
+    );
+}
+
+#[test]
+fn test_error_load_mainnet_network_with_non_mainnet_genesis_hash() {
+    let testnet_genesis_hash = bitcoin::constants::genesis_block(Network::Testnet).block_hash();
+
+    let changeset = ChangeSet {
+        network: Some(Network::Bitcoin),
+        local_chain: local_chain::ChangeSet {
+            blocks: [(0, Some(testnet_genesis_hash))].into(),
+        },
+        ..Default::default()
+    };
+
+    let err = Wallet::load_with_params(changeset, LoadParams::default());
+
+    assert!(
+        matches!(
+            err,
+            Err(LoadError::GenesisNetworkMismatch {
+                network: Network::Bitcoin,
+                genesis_hash,
+            }) if genesis_hash == testnet_genesis_hash
+        ),
+        "expected wallet loading to reject a mismatched mainnet network and genesis hash, got {err:?}"
     );
 }
 
