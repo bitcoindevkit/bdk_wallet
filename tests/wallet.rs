@@ -553,6 +553,26 @@ fn test_create_tx_custom_fee_rate() {
 }
 
 #[test]
+fn test_create_tx_change_output_crossing_compact_size_boundary() {
+    // With 252 recipients, adding the change output brings the output count to 253, which
+    // takes 3 bytes instead of 1 to encode. The fee must account for these 2 extra bytes.
+    let (mut wallet, _) = get_funded_wallet_wpkh();
+    receive_output_in_latest_block(&mut wallet, Amount::from_sat(1_000_000));
+    let addr = wallet.next_unused_address(KeychainKind::External);
+    let fee_rate = FeeRate::from_sat_per_vb_u32(10);
+    let mut builder = wallet.build_tx();
+    for _ in 0..252 {
+        builder.add_recipient(addr.script_pubkey(), Amount::from_sat(1_000));
+    }
+    builder.fee_rate(fee_rate);
+    let psbt = builder.finish().unwrap();
+    assert_eq!(psbt.unsigned_tx.output.len(), 253);
+    let fee = check_fee!(wallet, psbt);
+
+    assert_fee_rate!(psbt, fee, fee_rate, @add_signature);
+}
+
+#[test]
 fn test_legacy_create_tx_custom_fee_rate() {
     let (mut wallet, _) = get_funded_wallet_single(get_test_pkh());
     let addr = wallet.next_unused_address(KeychainKind::External);
