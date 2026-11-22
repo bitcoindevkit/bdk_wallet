@@ -1,4 +1,4 @@
-use std::str::FromStr;
+use core::str::FromStr;
 
 use assert_matches::assert_matches;
 use bdk_chain::{ChainPosition, ConfirmationBlockTime};
