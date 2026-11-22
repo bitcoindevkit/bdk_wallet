@@ -6,6 +6,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::locked_outpoints;
 
+use alloc::collections::{BTreeMap, BTreeSet};
+use bitcoin::Txid;
+
 type IndexedTxGraphChangeSet =
     indexed_tx_graph::ChangeSet<ConfirmationBlockTime, keychain_txout::ChangeSet>;
 
@@ -150,6 +153,14 @@ pub struct ChangeSet {
     /// Changes to locked outpoints.
     #[serde(default)]
     pub locked_outpoints: locked_outpoints::ChangeSet,
+    /// Outputs that were intentionally added as recipients (not auto-generated
+    /// change) when sending to the wallet's own addresses. Used by
+    /// `build_fee_bump` to distinguish self-payment recipients from change.
+    ///
+    /// `Some(indices)` = add these output indices as self-payment recipients.
+    /// `None` = remove this txid's tracking entirely (on confirmation/eviction).
+    #[serde(default)]
+    pub self_payment_recipients: BTreeMap<Txid, Option<BTreeSet<u32>>>,
 }
 
 impl Merge for ChangeSet {
@@ -184,6 +195,22 @@ impl Merge for ChangeSet {
         // merge locked outpoints
         self.locked_outpoints.merge(other.locked_outpoints);
 
+        // merge self-payment recipients
+        for (txid, change) in other.self_payment_recipients {
+            match change {
+                Some(indices) => {
+                    self.self_payment_recipients
+                        .entry(txid)
+                        .or_default()
+                        .get_or_insert_with(BTreeSet::new)
+                        .extend(indices);
+                }
+                None => {
+                    self.self_payment_recipients.remove(&txid);
+                }
+            }
+        }
+
         Merge::merge(&mut self.local_chain, other.local_chain);
         Merge::merge(&mut self.tx_graph, other.tx_graph);
         Merge::merge(&mut self.indexer, other.indexer);
@@ -197,6 +224,7 @@ impl Merge for ChangeSet {
             && self.tx_graph.is_empty()
             && self.indexer.is_empty()
             && self.locked_outpoints.is_empty()
+            && self.self_payment_recipients.is_empty()
     }
 }
 
