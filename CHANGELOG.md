@@ -7,39 +7,25 @@ This file is updated automatically by [release-plz](https://release-plz.dev) fro
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [3.2.1](https://github.com/bitcoindevkit/bdk_wallet/compare/wallet-3.2.0...wallet-3.2.1) - 2026-11-23
+## [3.2.1](https://github.com/bitcoindevkit/bdk_wallet/compare/wallet-3.2.0...wallet-3.2.1)
+
+### Added
+
+- Add `WalletEvent::TxRejected` and `TxRejectedReason` to report unconfirmed transactions that were not applied because their wallet-owned inputs failed signature verification [#660](https://github.com/bitcoindevkit/bdk_wallet/pull/660)
+
+### Changed
+
+- Raise the `miniscript` dependency to `12.3.8`, fixing `KeyMapWrapper` signing with account-level xprvs [#620](https://github.com/bitcoindevkit/bdk_wallet/pull/620)
 
 ### Fixed
 
-- re-order wallet event::TxDropped preserving original order
-- verify signatures of unconfirmed txs spending wallet outputs
-- *(wallet)* reject missing taproot witness utxo before signing
-- *(wallet)* map keychain in mark_used and unmark_used
-- *(wallet)* sign mixed taproot and non-taproot inputs
-- *(wallet)* correct foreign prevout handling
-- *(signer)* validate wildcard derivation paths
-- *(ci)* remove yoke-derive pin for MSRV
-
-### Other
-
-- pin action and restrict app token permissions
-- fix CHANGELOG to match updated release tags
-- update release process for release-plz
-- bump setup-rust-toolchain action to v2
-- add release-plz workflow
-- configure release-plz for the bdk_wallet crate
-- *(wallet)* cover missing taproot witness utxo with anyonecanpay
-- *(wasm)* use the runner's clang for the wasm32 check
-- Merge bitcoindevkit/bdk_wallet#643: release/3.x: sign mixed taproot and non-taproot inputs (backport #641)
-- Merge bitcoindevkit/bdk_wallet#648: release/3.x: map keychain in mark_used and unmark_used (backport #507)
-- Merge bitcoindevkit/bdk_wallet#636: release/3.x: correct foreign prevout handling (backport #423)
-- *(wallet)* sign mixed taproot and non-taproot inputs
-- Merge bitcoindevkit/bdk_wallet#629: Backport #569 - fix(signer): validate wildcard derivation paths
-- *(wallet)* check foreign prevout handling
-- *(signer)* cover wildcard hardness validation
-- *(psbt)* sign with account-level xprv via `KeyMapWrapper`
-- bump miniscript to 12.3.8
-- update CODEOWNERS
+- Verify the signatures of wallet-owned inputs before accepting unconfirmed transactions in `Wallet::apply_update` and `Wallet::apply_unconfirmed_txs`, dropping invalid ones, and refuse to bump or replace them in `Wallet::build_fee_bump` and `Wallet::replace_by_fee` with `BuildFeeBumpError::IrreplaceableTransaction` or `ReplaceByFeeError::InvalidSignature`. This protects against forged transactions from a malicious chain source. Taproot spends with foreign inputs require those prevouts to be verifiable unless signed with `SIGHASH_ANYONECANPAY`; Electrum users should sync with `fetch_prev_txouts = true` [#660](https://github.com/bitcoindevkit/bdk_wallet/pull/660)
+- Fix `Wallet::mark_used` and `Wallet::unmark_used` doing nothing on single-descriptor wallets when passed `KeychainKind::Internal` [#648](https://github.com/bitcoindevkit/bdk_wallet/pull/648)
+- Fix signing PSBTs that mix taproot and non-taproot inputs: taproot amounts are verified against the parent transaction stored in the wallet, and input amounts are verified when `SIGHASH_ANYONECANPAY` is used [#643](https://github.com/bitcoindevkit/bdk_wallet/pull/643)
+- Fix `Wallet::build_fee_bump` panicking when a legacy foreign input's parent transaction is unknown; it now returns `BuildFeeBumpError::TransactionNotFound` [#636](https://github.com/bitcoindevkit/bdk_wallet/pull/636)
+- Fix `TxBuilder::add_foreign_utxo` to overwrite `witness_utxo` with the prevout from `non_witness_utxo`, and fail signing with `SignerError::InvalidNonWitnessUtxo` when the two disagree [#636](https://github.com/bitcoindevkit/bdk_wallet/pull/636)
+- Validate the hardenedness of wildcard derivation steps when signing with an xprv signer [#629](https://github.com/bitcoindevkit/bdk_wallet/pull/629)
+- Reject a missing taproot `witness_utxo` before signing, instead of returning an error after earlier inputs were already signed [#651](https://github.com/bitcoindevkit/bdk_wallet/pull/651)
 
 ## [wallet-3.2.0]
 
@@ -1403,7 +1389,7 @@ final transaction is created by calling `finish` on the builder.
 #### Security
 - Use dirs-next instead of dirs since the latter is unmaintained
 
-## [0.1.0-beta.1] - 2020-09-08
+## [0.1.0-beta.1]
 
 ### Blockchain
 #### Added
