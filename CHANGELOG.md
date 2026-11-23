@@ -7,6 +7,39 @@ This file is updated automatically by [release-plz](https://release-plz.dev) fro
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.0.0](https://github.com/bitcoindevkit/bdk_wallet/compare/wallet-3.2.0...wallet-4.0.0) - 2026-11-23
+
+### Fixed
+
+- verify signatures of unconfirmed txs spending wallet outputs
+- *(wallet)* reject missing taproot witness utxo before signing
+- *(wallet)* map keychain in mark_used and unmark_used
+- *(wallet)* sign mixed taproot and non-taproot inputs
+- *(wallet)* correct foreign prevout handling
+- *(signer)* validate wildcard derivation paths
+- *(ci)* remove yoke-derive pin for MSRV
+
+### Other
+
+- pin action and restrict app token permissions
+- fix CHANGELOG to match updated release tags
+- update release process for release-plz
+- bump setup-rust-toolchain action to v2
+- add release-plz workflow
+- configure release-plz for the bdk_wallet crate
+- *(wallet)* cover missing taproot witness utxo with anyonecanpay
+- *(wasm)* use the runner's clang for the wasm32 check
+- Merge bitcoindevkit/bdk_wallet#643: release/3.x: sign mixed taproot and non-taproot inputs (backport #641)
+- Merge bitcoindevkit/bdk_wallet#648: release/3.x: map keychain in mark_used and unmark_used (backport #507)
+- Merge bitcoindevkit/bdk_wallet#636: release/3.x: correct foreign prevout handling (backport #423)
+- *(wallet)* sign mixed taproot and non-taproot inputs
+- Merge bitcoindevkit/bdk_wallet#629: Backport #569 - fix(signer): validate wildcard derivation paths
+- *(wallet)* check foreign prevout handling
+- *(signer)* cover wildcard hardness validation
+- *(psbt)* sign with account-level xprv via `KeyMapWrapper`
+- bump miniscript to 12.3.8
+- update CODEOWNERS
+
 ## [wallet-3.2.0]
 
 ### Added
