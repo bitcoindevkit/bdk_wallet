@@ -70,6 +70,17 @@ pub enum WalletEvent {
         /// Conflicting transaction ids.
         conflicts: Vec<(usize, Txid)>,
     },
+    /// Unconfirmed transaction dropped.
+    ///
+    /// The transaction was dropped from the local mempool. This is generally due to the fee rate
+    /// being too low. The transaction can still reappear in the mempool in the future resulting in
+    /// a [`WalletEvent::TxUnconfirmed`] event.
+    TxDropped {
+        /// Transaction id.
+        txid: Txid,
+        /// Transaction.
+        tx: Arc<Transaction>,
+    },
     /// An unconfirmed transaction was rejected and not applied to the wallet.
     ///
     /// The transaction spends outputs owned by the wallet, but the signatures (or other
@@ -94,17 +105,6 @@ pub enum WalletEvent {
         tx: Arc<Transaction>,
         /// Why the transaction was rejected.
         reason: TxRejectedReason,
-    },
-    /// Unconfirmed transaction dropped.
-    ///
-    /// The transaction was dropped from the local mempool. This is generally due to the fee rate
-    /// being too low. The transaction can still reappear in the mempool in the future resulting in
-    /// a [`WalletEvent::TxUnconfirmed`] event.
-    TxDropped {
-        /// Transaction id.
-        txid: Txid,
-        /// Transaction.
-        tx: Arc<Transaction>,
     },
 }
 
