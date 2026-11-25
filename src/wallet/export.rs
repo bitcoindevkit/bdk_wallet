@@ -425,7 +425,8 @@ pub enum CaravanAddressType {
 pub enum CaravanNetwork {
     /// mainnet
     Mainnet,
-    /// Any test network (testnet, signet or regtest)
+    /// Any test network (testnet, signet or regtest). The original network isn't kept, so it
+    /// serializes as `testnet`.
     #[serde(alias = "regtest", alias = "signet")]
     Testnet,
 }
