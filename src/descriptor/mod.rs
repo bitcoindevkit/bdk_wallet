@@ -27,29 +27,26 @@ use bitcoin::{
     psbt, secp256k1, taproot,
 };
 use miniscript::descriptor::{
-    DefiniteDescriptorKey, DescriptorMultiXKey, DescriptorSecretKey, DescriptorType,
-    DescriptorXKey, InnerXKey, KeyMap, SinglePubKey, Wildcard,
+    DefiniteDescriptorKey, DescriptorSecretKey, DescriptorType, DescriptorXKey, InnerXKey, KeyMap,
+    SinglePubKey, Wildcard,
 };
 pub use miniscript::{
     Descriptor, DescriptorPublicKey, Legacy, Miniscript, ScriptContext, Segwitv0,
 };
 use miniscript::{ForEachKey, MiniscriptKey, TranslatePk};
 
-use crate::descriptor::policy::BuildSatisfaction;
-
 pub mod checksum;
 #[doc(hidden)]
 pub mod dsl;
 pub mod error;
-pub mod policy;
 pub mod template;
 
 pub use self::checksum::calc_checksum;
 pub use self::error::Error as DescriptorError;
-pub use self::policy::{Condition, Policy};
 use self::template::DescriptorTemplateOut;
 use crate::keys::{IntoDescriptorKey, KeyError};
-use crate::wallet::{signer::SignersContainer, utils::SecpCtx};
+pub use crate::wallet::tx_builder::Condition;
+use crate::wallet::utils::SecpCtx;
 
 /// Alias for a [`Descriptor`] that can contain extended keys using [`DescriptorPublicKey`]
 pub type ExtendedDescriptor = Descriptor<DescriptorPublicKey>;
@@ -358,31 +355,8 @@ impl<Ctx: miniscript::ScriptContext, Pk: miniscript::MiniscriptKey> CheckMiniscr
     }
 }
 
-/// Trait implemented on [`Descriptor`]s to add a method to extract the spending [`policy`].
-pub trait ExtractPolicy {
-    /// Extract the spending [`policy`]
-    fn extract_policy(
-        &self,
-        signers: &SignersContainer,
-        psbt: BuildSatisfaction,
-        secp: &SecpCtx,
-    ) -> Result<Option<Policy>, DescriptorError>;
-}
-
 pub(crate) trait XKeyUtils {
     fn root_fingerprint(&self, secp: &SecpCtx) -> Fingerprint;
-}
-
-impl<T> XKeyUtils for DescriptorMultiXKey<T>
-where
-    T: InnerXKey,
-{
-    fn root_fingerprint(&self, secp: &SecpCtx) -> Fingerprint {
-        match self.origin {
-            Some((fingerprint, _)) => fingerprint,
-            None => self.xkey.xkey_fingerprint(secp),
-        }
-    }
 }
 
 impl<T> XKeyUtils for DescriptorXKey<T>
