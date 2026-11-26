@@ -1493,6 +1493,7 @@ mod test {
         let locktime_threshold = 500000000; // if less than this means block number, else block time in seconds
         let locktime_blocks = 100;
         let locktime_seconds = locktime_blocks + locktime_threshold;
+        #[rustfmt::skip]
         let desc = descriptor!(sh(and_v(
             v: pk(prvkey0),
             and_v(v: after(locktime_seconds), after(locktime_blocks))
@@ -1520,6 +1521,7 @@ mod test {
         let (prvkey0, _pubkey0, _fingerprint0) = setup_keys(TPRV0_STR, PATH, &secp);
         let locktime_blocks_100 = 100;
         let locktime_blocks_200 = 200;
+        #[rustfmt::skip]
         let desc = descriptor!(sh(and_v(
             v: pk(prvkey0),
             and_v(v: after(locktime_blocks_100), after(locktime_blocks_200))
@@ -1546,6 +1548,7 @@ mod test {
         let locktime_seconds_offset = 500000000;
         let locktime_seconds_100 = locktime_seconds_offset + 100;
         let locktime_seconds_200 = locktime_seconds_offset + 200;
+        #[rustfmt::skip]
         let desc = descriptor!(sh(and_v(
             v: pk(prvkey1),
             and_v(v: after(locktime_seconds_100), after(locktime_seconds_200))
@@ -1794,6 +1797,7 @@ mod test {
         let (prvkey_bob, _, _) = setup_keys(BOB_TPRV_STR, ALICE_BOB_PATH, &secp);
         let (prvkey_carol, _, _) = setup_keys(CAROL_TPRV_STR, ALICE_BOB_PATH, &secp);
 
+        #[rustfmt::skip]
         let desc = descriptor!(wsh(c: andor(
             pk(prvkey_alice),
             pk_k(prvkey_bob),
