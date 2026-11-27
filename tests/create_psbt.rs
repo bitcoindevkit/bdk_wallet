@@ -464,7 +464,6 @@ fn test_create_psbt_csv_time_uses_parent_mtp() {
         let mut params = PsbtParams::default();
         params
             .add_utxos(&[outpoint])
-            .add_assets(Assets::new().older(locktime))
             .add_recipients([(recipient.script_pubkey(), Amount::from_sat(50_000))])
             .relative_time_lock_mtp(
                 mtp_tip,
@@ -482,6 +481,15 @@ fn test_create_psbt_csv_time_uses_parent_mtp() {
             );
         }
     }
+
+    // An explicit time-based asset can be used without chain-derived MTP.
+    let mut params = PsbtParams::default();
+    params
+        .add_utxos(&[outpoint])
+        .add_assets(Assets::new().older(locktime))
+        .add_recipients([(recipient.script_pubkey(), Amount::from_sat(50_000))]);
+    let (psbt, _) = wallet.create_psbt(params).unwrap();
+    assert_eq!(psbt.unsigned_tx.input[0].sequence, csv);
 
     // Coin selection also considers the time-locked UTXO once its lock matures.
     let mut params = PsbtParams::default();

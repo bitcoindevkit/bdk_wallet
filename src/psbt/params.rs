@@ -473,9 +473,10 @@ impl<C> PsbtParams<C> {
     /// directly confirming block, the MTP of that block's parent. Obtain both from
     /// the same chain view. Each call replaces the previous values.
     ///
-    /// A wallet-managed input cannot use a time-based relative-lock path if the tip
-    /// does not match the wallet's current checkpoint or the input's confirmation
-    /// is indirect or lacks parent MTP. Other spending paths remain available.
+    /// When inferring relative locks for wallet-managed inputs, a time-based path
+    /// requires a matching tip and a direct confirmation with parent MTP. Other
+    /// spending paths remain available. An explicit relative lock supplied via
+    /// [`Self::add_assets`] overrides the inferred lock, whether height-based or time-based.
     pub fn relative_time_lock_mtp(
         &mut self,
         tip: BlockId,

@@ -3771,28 +3771,8 @@ impl Wallet {
             .absolute_timelock
             .unwrap_or(absolute::LockTime::from_consensus(tip.height));
         let tx_status = status_from_position(txo.chain_position, &params.confirmation_prev_mtp);
-        let time_locktime = tx_status.and_then(|status| {
-            let (_, tip_mtp) = params.tip_mtp.filter(|(block, _)| *block == tip)?;
-            let elapsed = tip_mtp
-                .to_consensus_u32()
-                .checked_sub(status.prev_mtp?.to_consensus_u32())?;
-            // BIP 68 encodes time-based relative locks in units of 512 seconds.
-            let intervals = (elapsed / 512).try_into().unwrap_or(u16::MAX);
-            Some(relative::LockTime::from_512_second_intervals(intervals))
-        });
-
-        let (block_locktime, time_locktime) = match spend_assets.relative_timelock {
-            Some(locktime @ relative::LockTime::Blocks(_)) => (Some(locktime), None),
-            Some(locktime @ relative::LockTime::Time(_)) => {
-                let bounded_time = time_locktime.map(|available| {
-                    if locktime.is_implied_by(available) {
-                        locktime
-                    } else {
-                        available
-                    }
-                });
-                (None, bounded_time)
-            }
+        let (relative_locktime, alternate_locktime) = match spend_assets.relative_timelock {
+            Some(locktime) => (locktime, None),
             None => {
                 let age = txo
                     .chain_position
@@ -3800,19 +3780,27 @@ impl Wallet {
                     .map(|height| tip.height.saturating_add(1).saturating_sub(height))
                     .unwrap_or_default();
                 let blocks = relative::LockTime::from_height(age.try_into().unwrap_or(u16::MAX));
-                (Some(blocks), time_locktime)
+                let time = tx_status.and_then(|status| {
+                    let (_, tip_mtp) = params.tip_mtp.filter(|(block, _)| *block == tip)?;
+                    let elapsed = tip_mtp
+                        .to_consensus_u32()
+                        .checked_sub(status.prev_mtp?.to_consensus_u32())?;
+                    // BIP 68 encodes time-based relative locks in units of 512 seconds.
+                    let intervals = (elapsed / 512).try_into().unwrap_or(u16::MAX);
+                    Some(relative::LockTime::from_512_second_intervals(intervals))
+                });
+                (blocks, time)
             }
         };
 
         // Miniscript assets hold only one relative-lock unit. Compare the plans
         // separately when both units are available.
-        let plan = core::iter::once(block_locktime)
-            .chain(time_locktime.map(Some))
+        let plan = core::iter::once(relative_locktime)
+            .chain(alternate_locktime)
             .filter_map(|locktime| {
                 let mut assets = Assets::new();
                 assets.extend(spend_assets);
-                assets.relative_timelock = locktime;
-                self.try_plan(op, &assets.after(abs_locktime))
+                self.try_plan(op, &assets.after(abs_locktime).older(locktime))
             })
             .min_by_key(Plan::satisfaction_weight)?;
         let tx = self.tx_graph.graph().get_tx(txid)?;
