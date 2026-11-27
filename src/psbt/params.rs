@@ -47,6 +47,10 @@ pub struct PsbtParams<C> {
     pub(crate) utxo_filter: UtxoFilter,
     /// Optional height for evaluating coinbase maturity.
     pub(crate) maturity_height: Option<u32>,
+    /// Median time past of the chain tip used for time-based relative locks.
+    pub(crate) tip_mtp: Option<(BlockId, absolute::Time)>,
+    /// Parent median time past, keyed by the direct confirmation block.
+    pub(crate) confirmation_prev_mtp: HashMap<BlockId, absolute::Time>,
     /// Only allow spending UTXOs which are selected manually.
     pub(crate) manually_selected_only: bool,
     /// Optional transaction [`Version`].
@@ -90,6 +94,8 @@ impl Default for PsbtParams<CreateTx> {
             canonical_params: Default::default(),
             utxo_filter: Default::default(),
             maturity_height: Default::default(),
+            tip_mtp: Default::default(),
+            confirmation_prev_mtp: Default::default(),
             manually_selected_only: Default::default(),
             version: Default::default(),
             min_locktime: Default::default(),
@@ -233,6 +239,8 @@ impl PsbtParams<CreateTx> {
             canonical_params: self.canonical_params,
             utxo_filter: self.utxo_filter,
             maturity_height: self.maturity_height,
+            tip_mtp: self.tip_mtp,
+            confirmation_prev_mtp: self.confirmation_prev_mtp,
             manually_selected_only: self.manually_selected_only,
             version: self.version,
             min_locktime: self.min_locktime,
@@ -456,6 +464,27 @@ impl<C> PsbtParams<C> {
     /// [`anti_fee_sniping`]: bdk_tx::PsbtParams::anti_fee_sniping
     pub fn anti_fee_sniping_height(&mut self, tip_height: absolute::Height) -> &mut Self {
         self.anti_fee_sniping = Some(tip_height);
+        self
+    }
+
+    /// Set the chain data for evaluating BIP 68 time-based relative locks.
+    ///
+    /// Provide the median time past (MTP) of the wallet's current tip and, for each
+    /// directly confirming block, the MTP of that block's parent. Obtain both from
+    /// the same chain view. Each call replaces the previous values.
+    ///
+    /// When inferring relative locks for wallet-managed inputs, a time-based path
+    /// requires a matching tip and a direct confirmation with parent MTP. Other
+    /// spending paths remain available. An explicit relative lock supplied via
+    /// [`Self::add_assets`] overrides the inferred lock, whether height-based or time-based.
+    pub fn relative_time_lock_mtp(
+        &mut self,
+        tip: BlockId,
+        tip_mtp: absolute::Time,
+        confirmation_prev_mtp: impl IntoIterator<Item = (BlockId, absolute::Time)>,
+    ) -> &mut Self {
+        self.tip_mtp = Some((tip, tip_mtp));
+        self.confirmation_prev_mtp = confirmation_prev_mtp.into_iter().collect();
         self
     }
 

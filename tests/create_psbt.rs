@@ -1,7 +1,7 @@
 //! Integration tests for the unstable `create_psbt` and `replace_by_fee` APIs.
 #![cfg(all(bdk_wallet_unstable, feature = "bdk-tx"))]
 
-use bdk_chain::{BlockId, ConfirmationBlockTime};
+use bdk_chain::{BlockId, ChainPosition, ConfirmationBlockTime};
 use bdk_tx::{ChangeScript, bdk_coin_select};
 use bdk_wallet::bitcoin;
 use bdk_wallet::test_utils::*;
@@ -384,6 +384,255 @@ fn test_create_psbt_csv() {
         let (psbt, _) = wallet.create_psbt(params).unwrap();
         assert_eq!(psbt.unsigned_tx.input[0].sequence, Sequence(6));
     }
+}
+
+#[test]
+fn test_create_psbt_csv_time_uses_parent_mtp() {
+    let locktime = bitcoin::relative::LockTime::from_512_second_intervals(1);
+    let csv = locktime.to_sequence();
+    let desc = format!(
+        "wsh(and_v(v:pk(cVpPVruEDdmutPzisEsYvtST1usBR3ntr8pXSyt6D2YYqXRyPcFW),older({})))",
+        csv.to_consensus_u32(),
+    );
+    let mut wallet = Wallet::create_single(desc)
+        .network(Network::Regtest)
+        .create_wallet_no_persist()
+        .unwrap();
+
+    let parent_mtp = 1_234_567_000;
+    let confirmation_block = BlockId {
+        height: 100,
+        hash: Hash::hash(b"confirmation"),
+    };
+    insert_checkpoint(&mut wallet, confirmation_block);
+    let outpoint = receive_output(
+        &mut wallet,
+        Amount::ONE_BTC,
+        ReceiveTo::Block(ConfirmationBlockTime {
+            block_id: confirmation_block,
+            confirmation_time: u64::from(parent_mtp + 300),
+        }),
+    );
+    let tip = BlockId {
+        height: 101,
+        hash: Hash::hash(b"tip"),
+    };
+    insert_checkpoint(&mut wallet, tip);
+    let recipient = wallet.reveal_next_address(KeychainKind::External);
+    let parent_mtp_value = absolute::Time::from_consensus(parent_mtp).unwrap();
+    let wrong_tip = BlockId {
+        hash: Hash::hash(b"orphaned tip"),
+        ..tip
+    };
+    let wrong_confirmation_block = BlockId {
+        hash: Hash::hash(b"orphaned confirmation"),
+        ..confirmation_block
+    };
+    let cases = [
+        (
+            "one second early",
+            tip,
+            parent_mtp + 511,
+            Some(confirmation_block),
+            false,
+        ),
+        (
+            "at maturity",
+            tip,
+            parent_mtp + 512,
+            Some(confirmation_block),
+            true,
+        ),
+        ("missing parent MTP", tip, parent_mtp + 512, None, false),
+        (
+            "wrong confirmation hash",
+            tip,
+            parent_mtp + 512,
+            Some(wrong_confirmation_block),
+            false,
+        ),
+        (
+            "wrong tip hash",
+            wrong_tip,
+            parent_mtp + 512,
+            Some(confirmation_block),
+            false,
+        ),
+    ];
+
+    for (case, mtp_tip, tip_mtp, mtp_block, spendable) in cases {
+        let mut params = PsbtParams::default();
+        params
+            .add_utxos(&[outpoint])
+            .add_recipients([(recipient.script_pubkey(), Amount::from_sat(50_000))])
+            .relative_time_lock_mtp(
+                mtp_tip,
+                absolute::Time::from_consensus(tip_mtp).unwrap(),
+                mtp_block.map(|block| (block, parent_mtp_value)),
+            );
+        let result = wallet.create_psbt(params);
+        if spendable {
+            let psbt = result.expect(case).0;
+            assert_eq!(psbt.unsigned_tx.input[0].sequence, csv);
+        } else {
+            assert!(
+                matches!(result, Err(CreatePsbtError::Plan(op)) if op == outpoint),
+                "{case}: {result:?}",
+            );
+        }
+    }
+
+    // An explicit time-based asset can be used without chain-derived MTP.
+    let mut params = PsbtParams::default();
+    params
+        .add_utxos(&[outpoint])
+        .add_assets(Assets::new().older(locktime))
+        .add_recipients([(recipient.script_pubkey(), Amount::from_sat(50_000))]);
+    let (psbt, _) = wallet.create_psbt(params).unwrap();
+    assert_eq!(psbt.unsigned_tx.input[0].sequence, csv);
+
+    // Coin selection also considers the time-locked UTXO once its lock matures.
+    let mut params = PsbtParams::default();
+    params
+        .add_recipients([(recipient.script_pubkey(), Amount::from_sat(50_000))])
+        .relative_time_lock_mtp(
+            tip,
+            absolute::Time::from_consensus(parent_mtp + 512).unwrap(),
+            [(confirmation_block, parent_mtp_value)],
+        );
+    let (psbt, _) = wallet.create_psbt(params).unwrap();
+    assert_eq!(psbt.unsigned_tx.input[0].previous_output, outpoint);
+    assert_eq!(psbt.unsigned_tx.input[0].sequence, csv);
+}
+
+#[test]
+fn test_create_psbt_csv_time_rejects_transitive_confirmation() {
+    let locktime = bitcoin::relative::LockTime::from_512_second_intervals(1);
+    let desc = format!(
+        "wsh(and_v(v:pk(cVpPVruEDdmutPzisEsYvtST1usBR3ntr8pXSyt6D2YYqXRyPcFW),older({})))",
+        locktime.to_sequence().to_consensus_u32(),
+    );
+    let mut wallet = Wallet::create_single(desc)
+        .network(Network::Regtest)
+        .create_wallet_no_persist()
+        .unwrap();
+    let recipient = wallet.reveal_next_address(KeychainKind::External);
+    let funding = Transaction {
+        input: vec![TxIn {
+            previous_output: OutPoint::new(Hash::hash(b"funding parent"), 0),
+            ..Default::default()
+        }],
+        output: vec![
+            TxOut {
+                value: Amount::ONE_BTC,
+                script_pubkey: recipient.script_pubkey(),
+            };
+            2
+        ],
+        ..new_tx(0)
+    };
+    let outpoint = OutPoint::new(funding.compute_txid(), 0);
+    insert_tx(&mut wallet, funding);
+
+    // Confirm a descendant that spends the sibling output, leaving this input unspent.
+    let descendant = Transaction {
+        input: vec![TxIn {
+            previous_output: OutPoint::new(outpoint.txid, 1),
+            ..Default::default()
+        }],
+        output: vec![TxOut {
+            value: Amount::from_sat(50_000),
+            script_pubkey: ScriptBuf::new_p2wpkh(&bitcoin::WPubkeyHash::all_zeros()),
+        }],
+        ..new_tx(0)
+    };
+    let descendant_txid = descendant.compute_txid();
+    let descendant_block = BlockId {
+        height: 100,
+        hash: Hash::hash(b"descendant confirmation"),
+    };
+    insert_tx_anchor(&mut wallet, descendant, descendant_block);
+    assert!(matches!(
+        wallet.get_tx(outpoint.txid).unwrap().chain_position,
+        ChainPosition::Confirmed {
+            anchor,
+            transitively: Some(txid),
+        } if anchor.block_id == descendant_block && txid == descendant_txid
+    ));
+
+    let tip = BlockId {
+        height: 101,
+        hash: Hash::hash(b"tip"),
+    };
+    insert_checkpoint(&mut wallet, tip);
+    let descendant_parent_mtp = 1_234_567_000;
+    let mut params = PsbtParams::default();
+    params
+        .add_utxos(&[outpoint])
+        .add_recipients([(recipient.script_pubkey(), Amount::from_sat(50_000))])
+        .relative_time_lock_mtp(
+            tip,
+            absolute::Time::from_consensus(descendant_parent_mtp + 512).unwrap(),
+            [(
+                descendant_block,
+                absolute::Time::from_consensus(descendant_parent_mtp).unwrap(),
+            )],
+        );
+
+    let result = wallet.create_psbt(params);
+    assert!(matches!(result, Err(CreatePsbtError::Plan(op)) if op == outpoint));
+}
+
+#[test]
+fn test_create_psbt_csv_prefers_lighter_time_path() {
+    let time_sequence = bitcoin::relative::LockTime::from_512_second_intervals(1).to_sequence();
+    let block_sequence = Sequence::from_height(1);
+    let block_key = "cVpPVruEDdmutPzisEsYvtST1usBR3ntr8pXSyt6D2YYqXRyPcFW";
+    let time_key = "cRjo6jqfVNP33HhSS76UhXETZsGTZYx8FMFvR9kpbtCSV1PmdZdu";
+    // The height path needs a public key in its witness in addition to the signature.
+    let desc = format!(
+        "wsh(or_i(and_v(v:pkh({block_key}),older({})),and_v(v:pk({time_key}),older({}))))",
+        block_sequence.to_consensus_u32(),
+        time_sequence.to_consensus_u32(),
+    );
+    let mut wallet = Wallet::create_single(desc)
+        .network(Network::Regtest)
+        .create_wallet_no_persist()
+        .unwrap();
+    let confirmation_block = BlockId {
+        height: 100,
+        hash: Hash::hash(b"confirmation"),
+    };
+    insert_checkpoint(&mut wallet, confirmation_block);
+    let outpoint = receive_output_in_latest_block(&mut wallet, Amount::ONE_BTC);
+    let tip = BlockId {
+        height: 101,
+        hash: Hash::hash(b"tip"),
+    };
+    insert_checkpoint(&mut wallet, tip);
+    let recipient = wallet.reveal_next_address(KeychainKind::External);
+    let create_params = || {
+        let mut params = PsbtParams::default();
+        params
+            .add_utxos(&[outpoint])
+            .add_recipients([(recipient.script_pubkey(), Amount::from_sat(50_000))]);
+        params
+    };
+    let (psbt, _) = wallet.create_psbt(create_params()).unwrap();
+    assert_eq!(psbt.unsigned_tx.input[0].sequence, block_sequence);
+
+    let parent_mtp = 1_234_567_000;
+    let mut params = create_params();
+    params.relative_time_lock_mtp(
+        tip,
+        absolute::Time::from_consensus(parent_mtp + 512).unwrap(),
+        [(
+            confirmation_block,
+            absolute::Time::from_consensus(parent_mtp).unwrap(),
+        )],
+    );
+    let (psbt, _) = wallet.create_psbt(params).unwrap();
+    assert_eq!(psbt.unsigned_tx.input[0].sequence, time_sequence);
 }
 
 /// Fallback sequence is applied to a coin-selected input that has no CSV

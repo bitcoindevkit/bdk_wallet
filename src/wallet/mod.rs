@@ -3031,29 +3031,27 @@ impl Wallet {
     }
 }
 
-/// Maps a chain position to tx confirmation status, if `pos` is the confirmed
-/// variant.
-///
-/// - Returns None if the confirmation height or time is not a valid absolute [`Height`] or
-///   [`Time`].
-///
-/// [`Height`]: bitcoin::absolute::Height
-/// [`Time`]: bitcoin::absolute::Time
+/// Maps a confirmed chain position to its height and, when known, parent MTP.
 #[cfg(all(bdk_wallet_unstable, feature = "bdk-tx"))]
-fn status_from_position(pos: ChainPosition<ConfirmationBlockTime>) -> Option<ConfirmationStatus> {
-    if let ChainPosition::Confirmed { anchor, .. } = pos {
-        let conf_height = anchor.confirmation_height_upper_bound();
-        let height = absolute::Height::from_consensus(conf_height).ok()?;
-        // TODO: Currently BDK has no notion of MTP, we can use the confirmation block time for now.
-        let time =
-            absolute::Time::from_consensus(anchor.confirmation_time.try_into().ok()?).ok()?;
-        Some(ConfirmationStatus {
-            height,
-            prev_mtp: Some(time),
-        })
+fn status_from_position(
+    pos: ChainPosition<ConfirmationBlockTime>,
+    confirmation_prev_mtp: &HashMap<BlockId, absolute::Time>,
+) -> Option<ConfirmationStatus> {
+    let ChainPosition::Confirmed {
+        anchor,
+        transitively,
+    } = pos
+    else {
+        return None;
+    };
+    let height = absolute::Height::from_consensus(anchor.confirmation_height_upper_bound()).ok()?;
+    // A transitive anchor is for a descendant, so it does not identify the confirming block.
+    let prev_mtp = if transitively.is_none() {
+        confirmation_prev_mtp.get(&anchor.block_id).copied()
     } else {
         None
-    }
+    };
+    Some(ConfirmationStatus { height, prev_mtp })
 }
 
 #[cfg(all(bdk_wallet_unstable, feature = "bdk-tx"))]
@@ -3304,7 +3302,7 @@ impl Wallet {
             self.filter_spendable(txouts.into_values(), &params, |txo| {
                 (params.utxo_filter.0)(txo)
             })
-            .flat_map(|txo| self.plan_input(&txo, &assets))
+            .flat_map(|txo| self.plan_input(&txo, &assets, &params))
             .collect()
         };
 
@@ -3630,7 +3628,7 @@ impl Wallet {
                     && txo.chain_position.is_confirmed()
                     && (params.utxo_filter.0)(txo)
             })
-            .flat_map(|txo| self.plan_input(&txo, &assets))
+            .flat_map(|txo| self.plan_input(&txo, &assets, &params))
             .collect()
         };
 
@@ -3741,7 +3739,7 @@ impl Wallet {
                         .get(outpoint)
                         .ok_or(CreatePsbtError::UnknownUtxo(*outpoint))?;
                     let mut input = self
-                        .plan_input(txo, assets)
+                        .plan_input(txo, assets, params)
                         .ok_or(CreatePsbtError::Plan(*outpoint))?;
                     if let Some(&seq) = params.sequence_overrides.get(outpoint) {
                         input.set_sequence(seq).map_err(CreatePsbtError::Sequence)?;
@@ -3759,41 +3757,53 @@ impl Wallet {
 
     /// Plan the output with the available assets and return a new [`Input`] if possible. See also
     /// [`Self::try_plan`].
-    fn plan_input(
+    fn plan_input<C>(
         &self,
         txo: &FullTxOut<ConfirmationBlockTime>,
         spend_assets: &Assets,
+        params: &PsbtParams<C>,
     ) -> Option<Input> {
         let op = txo.outpoint;
         let txid = op.txid;
 
-        // We want to afford the output with as many assets as we can. The plan
-        // will use only the ones needed to produce the minimum satisfaction.
-        let cur_height = self.latest_checkpoint().height();
+        let tip = self.latest_checkpoint().block_id();
         let abs_locktime = spend_assets
             .absolute_timelock
-            .unwrap_or(absolute::LockTime::from_consensus(cur_height));
+            .unwrap_or(absolute::LockTime::from_consensus(tip.height));
+        let tx_status = status_from_position(txo.chain_position, &params.confirmation_prev_mtp);
+        let (relative_locktime, alternate_locktime) = match spend_assets.relative_timelock {
+            Some(locktime) => (locktime, None),
+            None => {
+                let age = txo
+                    .chain_position
+                    .confirmation_height_upper_bound()
+                    .map(|height| tip.height.saturating_add(1).saturating_sub(height))
+                    .unwrap_or_default();
+                let blocks = relative::LockTime::from_height(age.try_into().unwrap_or(u16::MAX));
+                let time = tx_status.and_then(|status| {
+                    let (_, tip_mtp) = params.tip_mtp.filter(|(block, _)| *block == tip)?;
+                    let elapsed = tip_mtp
+                        .to_consensus_u32()
+                        .checked_sub(status.prev_mtp?.to_consensus_u32())?;
+                    // BIP 68 encodes time-based relative locks in units of 512 seconds.
+                    let intervals = (elapsed / 512).try_into().unwrap_or(u16::MAX);
+                    Some(relative::LockTime::from_512_second_intervals(intervals))
+                });
+                (blocks, time)
+            }
+        };
 
-        let rel_locktime = spend_assets.relative_timelock.unwrap_or_else(|| {
-            let age = match txo.chain_position.confirmation_height_upper_bound() {
-                Some(conf_height) => cur_height
-                    .saturating_add(1)
-                    .saturating_sub(conf_height)
-                    .try_into()
-                    .unwrap_or(u16::MAX),
-                None => 0,
-            };
-            relative::LockTime::from_height(age)
-        });
-
-        let mut assets = Assets::new();
-        assets.extend(spend_assets);
-        assets = assets.after(abs_locktime);
-        assets = assets.older(rel_locktime);
-
-        let plan = self.try_plan(op, &assets)?;
+        // Miniscript assets hold only one relative-lock unit. Compare the plans
+        // separately when both units are available.
+        let plan = core::iter::once(relative_locktime)
+            .chain(alternate_locktime)
+            .filter_map(|locktime| {
+                let mut assets = Assets::new();
+                assets.extend(spend_assets);
+                self.try_plan(op, &assets.after(abs_locktime).older(locktime))
+            })
+            .min_by_key(Plan::satisfaction_weight)?;
         let tx = self.tx_graph.graph().get_tx(txid)?;
-        let tx_status = status_from_position(txo.chain_position);
 
         Input::from_prev_tx(plan, tx, op.vout as usize, tx_status).ok()
     }
